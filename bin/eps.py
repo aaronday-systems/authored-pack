@@ -231,6 +231,65 @@ def _load_wordlist_from_text_file(path: Path, *, max_bytes: int = 5_000_000) -> 
     return out
 
 
+def _resolve_godel_source(path_s: str) -> Optional[Path]:
+    """
+    Accept either a file path or a directory.
+    - If a file: use it.
+    - If a dir: find a likely text/markdown file with 'godel'/'gödel' in the name.
+    """
+    if not path_s:
+        return None
+    p = Path(path_s).expanduser()
+    if not p.exists():
+        return None
+    if p.is_file():
+        return p
+    if not p.is_dir():
+        return None
+
+    exts = {".txt", ".md", ".markdown"}
+    candidates: List[Path] = []
+    # Keep it bounded; this is used at app start.
+    for fp in p.rglob("*"):
+        try:
+            if not fp.is_file():
+                continue
+        except OSError:
+            continue
+        if fp.suffix.lower() not in exts:
+            continue
+        name_l = fp.name.lower()
+        if "godel" not in name_l and "gödel" not in name_l:
+            continue
+        candidates.append(fp)
+        if len(candidates) >= 50:
+            break
+
+    if not candidates:
+        return None
+
+    def score(fp: Path) -> int:
+        s = 0
+        name_l = fp.name.lower()
+        if fp.suffix.lower() == ".txt":
+            s += 10
+        if "set" in name_l or "sets" in name_l or "theory" in name_l:
+            s += 5
+        try:
+            size = int(fp.stat().st_size)
+        except OSError:
+            size = 0
+        # Prefer something non-trivial but not huge.
+        if size >= 10_000:
+            s += 3
+        if size >= 100_000:
+            s += 1
+        return s
+
+    candidates.sort(key=score, reverse=True)
+    return candidates[0]
+
+
 def _update_godel_phrase(state: AppState, *, min_interval_ticks: int = 6) -> None:
     if not state.godel_words:
         return
@@ -723,12 +782,19 @@ def run_tui(stdscr, *, insane: bool = False, godel_source: Optional[str] = None)
     pal = init_insane_palette() if insane else None
     state = AppState(theme=theme, insane=bool(insane), palette=pal, tick=0)
     if insane:
-        src = (godel_source or "").strip()
-        if src:
-            words = _load_wordlist_from_text_file(Path(src).expanduser(), max_bytes=5_000_000)
-            state.godel_words = words
-            if words:
-                _update_godel_phrase(state, min_interval_ticks=0)
+        src_s = (godel_source or "").strip()
+        if src_s:
+            src = _resolve_godel_source(src_s)
+            if src is None:
+                # Make misconfiguration visible; don't silently fall back.
+                state.godel_phrase = "NO GODEL SOURCE"
+            else:
+                words = _load_wordlist_from_text_file(src, max_bytes=5_000_000)
+                state.godel_words = words
+                if words:
+                    _update_godel_phrase(state, min_interval_ticks=0)
+                else:
+                    state.godel_phrase = "EMPTY GODEL TEXT"
 
     stdscr.keypad(True)
     stdscr.nodelay(False)
