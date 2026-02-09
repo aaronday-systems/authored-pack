@@ -1,0 +1,11 @@
+[project]
+name = "entropy-pack-stamper"
+version = "0.1.0"
+description = "Stamp and verify deterministic EntropyPacks (manifest + root hash + optional seed derivation)."
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Aaron Day" }]
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+addopts = "-q"

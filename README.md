@@ -1,0 +1,63 @@
+# Entropy Pack Stamper (EPS)
+
+EPS stamps and verifies **EntropyPacks**: a directory (or `.zip`) containing:
+- `manifest.json` (canonical, deterministic JSON)
+- payload artifacts (bytes)
+
+It produces:
+- `entropy_root_sha256` (hex): `sha256(canonical_manifest_json)`
+- optional `seed_master` (32 bytes) derived via HKDF from the root
+
+Design goals:
+- **Deterministic root**: `entropy_root_sha256` is deterministic; operational metadata (e.g. `receipt.json:stamped_at_utc`) does not affect the root.
+- **No external deps**: stdlib-only Python.
+- **Operator TUI**: follows the Control Plane TUI baseline (`ssot/ui/*`).
+
+## Install
+
+No install required. Run with system Python 3.11+:
+
+- TUI: `python3 -B bin/eps.py`
+- CLI: `python3 -m eps --help`
+
+## Commands
+
+### Stamp a pack from a directory
+
+```bash
+python3 -m eps stamp \
+  --input /path/to/artifacts_dir \
+  --out /path/to/out_dir \
+  --pack-id my_pack \
+  --zip \
+  --derive-seed
+```
+
+Outputs are written under `--out`:
+- `<pack_id-or-root>/manifest.json`
+- `<pack_id-or-root>/entropy_root_sha256.txt`
+- `<pack_id-or-root>/receipt.json`
+- optional `<pack_id-or-root>/entropy_pack.zip`
+
+### Verify a pack (dir or zip)
+
+```bash
+python3 -m eps verify --pack /path/to/entropy_pack.zip
+python3 -m eps verify --pack /path/to/pack_dir
+```
+
+## Trust Boundary Notes
+
+For untrusted/third-party agents, do not hand over the full pack. Prefer:
+- root-only (`entropy_root_sha256`), and/or
+- seed-only (`seed_master`, injected per-run and discarded)
+
+## TUI Contract
+
+Pinned references (copied from Control Plane):
+- `ssot/ui/TUI_STANDARD_v0.1.0.md`
+- `ssot/ui/TUI_CONTRACT_v0.0.4.md`
+
+## License
+
+See `LICENSE`.

@@ -1,0 +1,500 @@
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+import os
+import shutil
+import stat
+import zipfile
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Dict, List, Optional, Sequence, Tuple
+
+from . import __version__ as EPS_VERSION
+from .hkdf import hkdf_sha256
+from .manifest import (
+    DEFAULT_DERIVATION_VERSION,
+    MANIFEST_SCHEMA_VERSION,
+    VerificationResult,
+    build_manifest,
+    collect_artifacts,
+    file_sha256_hex,
+    manifest_root_sha256,
+    sha256_hex,
+)
+
+
+RECEIPT_SCHEMA_VERSION = "eps.receipt.v1"
+PACK_LAYOUT_VERSION = "eps.pack_layout.v1"
+
+RESERVED_TOPLEVEL = {
+    "manifest.json",
+    "entropy_root_sha256.txt",
+    "receipt.json",
+    "entropy_pack.zip",
+    "seed_master.hex",
+    "seed_master.b64",
+}
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+def _looks_like_windows_drive(path: str) -> bool:
+    # "C:foo" and "C:\foo" patterns are ambiguous across platforms.
+    return len(path) >= 2 and path[1] == ":" and path[0].isalpha()
+
+
+def _validate_artifact_relpath(value: object) -> Optional[Path]:
+    if not isinstance(value, str):
+        return None
+    rel = value.strip()
+    if not rel:
+        return None
+    if "\x00" in rel:
+        return None
+    # Manifest paths are POSIX-style; backslashes tend to be accidental or hostile.
+    if "\\" in rel:
+        return None
+    if rel.startswith("/"):
+        return None
+    if _looks_like_windows_drive(rel):
+        return None
+    p = Path(rel)
+    if p.is_absolute():
+        return None
+    if any(part == ".." for part in p.parts):
+        return None
+    # Current pack layout requires artifacts under payload/.
+    if not p.parts or p.parts[0] != "payload":
+        return None
+    return p
+
+
+def _sha256_hex_stream(handle, *, max_bytes: Optional[int] = None) -> Tuple[str, int]:
+    h = hashlib.sha256()
+    n = 0
+    while True:
+        chunk = handle.read(1024 * 1024)
+        if not chunk:
+            break
+        n += len(chunk)
+        if max_bytes is not None and n > max_bytes:
+            raise ValueError(f"stream exceeded max_bytes ({n} > {max_bytes})")
+        h.update(chunk)
+    return h.hexdigest(), n
+
+
+def _ensure_parent(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+
+def _safe_write_text(path: Path, content: str) -> None:
+    _ensure_parent(path)
+    path.write_text(content, encoding="utf-8")
+
+
+def _safe_write_json(path: Path, obj: Dict[str, object]) -> None:
+    _ensure_parent(path)
+    path.write_text(json.dumps(obj, ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+
+
+def _copy_payload_files(
+    *,
+    input_dir: Path,
+    pack_dir: Path,
+    artifacts: Sequence[Dict[str, object]],
+) -> List[Dict[str, object]]:
+    payload_dir = pack_dir / "payload"
+    out: List[Dict[str, object]] = []
+    for a in artifacts:
+        src_rel = str(a.get("source_relpath", "") or "")
+        if not src_rel:
+            raise ValueError("artifact missing source_relpath")
+        src = input_dir / Path(src_rel)
+        if not src.is_file():
+            raise ValueError(f"artifact source missing: {src}")
+
+        dst_rel = Path("payload") / Path(src_rel)
+        # Top-level reserved collisions are not allowed.
+        if len(dst_rel.parts) == 1 and dst_rel.name in RESERVED_TOPLEVEL:
+            raise ValueError(f"reserved artifact name collision: {dst_rel.name}")
+
+        dst = pack_dir / dst_rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+
+        out.append(
+            {
+                "path": dst_rel.as_posix(),
+                "sha256": str(a.get("sha256", "")),
+                "size_bytes": int(a.get("size_bytes", 0)),
+            }
+        )
+    out.sort(key=lambda d: str(d.get("path", "")))
+    return out
+
+
+def derive_seed_master(*, root_sha256_hex: str, derivation_version: str = DEFAULT_DERIVATION_VERSION) -> bytes:
+    root_bytes = bytes.fromhex(root_sha256_hex)
+    info = derivation_version.encode("utf-8")
+    salt = b"EPS-SALT-v1"
+    return hkdf_sha256(ikm=root_bytes, length=32, salt=salt, info=info)
+
+
+def seed_fingerprint_sha256(seed_master: bytes) -> str:
+    return sha256_hex(bytes(seed_master))
+
+
+def _chmod_600(path: Path) -> None:
+    try:
+        path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    except OSError:
+        # Best-effort; some filesystems may not support chmod.
+        pass
+
+
+def _pack_dir_for_root(out_dir: Path, root_sha256: str) -> Path:
+    return out_dir / root_sha256
+
+
+@dataclass(frozen=True)
+class StampResult:
+    pack_dir: Path
+    root_sha256: str
+    receipt: Dict[str, object]
+    seed_master: Optional[bytes] = None
+
+
+def stamp_pack(
+    *,
+    input_dir: Path,
+    out_dir: Path,
+    pack_id: Optional[str] = None,
+    notes: Optional[str] = None,
+    created_at_utc: Optional[str] = None,
+    dice: Optional[Sequence[Tuple[str, int]]] = None,
+    include_hidden: bool = False,
+    zip_pack: bool = False,
+    derive_seed: bool = False,
+    write_seed_files: bool = False,
+    print_seed: bool = False,
+) -> StampResult:
+    input_dir = Path(input_dir).resolve()
+    out_dir = Path(out_dir).resolve()
+    if not input_dir.is_dir():
+        raise ValueError(f"--input must be a directory: {input_dir}")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    raw_artifacts = collect_artifacts(input_dir, include_hidden=include_hidden)
+    if not raw_artifacts:
+        raise ValueError("input directory contains no artifacts")
+
+    # Create a temp pack dir to avoid partially-written packs.
+    tmp_dir = out_dir / f".eps_tmp_{os.getpid()}_{int(datetime.now().timestamp())}"
+    if tmp_dir.exists():
+        shutil.rmtree(tmp_dir)
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        artifact_entries = _copy_payload_files(input_dir=input_dir, pack_dir=tmp_dir, artifacts=raw_artifacts)
+        manifest = build_manifest(
+            pack_id=pack_id,
+            artifacts=artifact_entries,
+            notes=notes,
+            created_at_utc=created_at_utc,
+            dice=dice,
+        )
+        root_sha = manifest_root_sha256(manifest)
+
+        pack_dir = _pack_dir_for_root(out_dir, root_sha)
+        if pack_dir.exists():
+            # Idempotent behavior: if the existing pack matches the manifest root, reuse it.
+            existing_manifest = pack_dir / "manifest.json"
+            if existing_manifest.is_file():
+                try:
+                    existing = json.loads(existing_manifest.read_text(encoding="utf-8"))
+                    if isinstance(existing, dict) and manifest_root_sha256(existing) == root_sha:
+                        seed_master: Optional[bytes] = None
+                        if derive_seed:
+                            seed_master = derive_seed_master(root_sha256_hex=root_sha)
+                        receipt = _build_receipt(
+                            root_sha256=root_sha,
+                            pack_id=pack_id,
+                            artifact_entries=artifact_entries,
+                            zip_path=Path("entropy_pack.zip") if zip_pack else None,
+                            derivation_version=DEFAULT_DERIVATION_VERSION if derive_seed else None,
+                            seed_master=seed_master,
+                        )
+                        # Ensure receipt exists for older packs; do not overwrite an existing receipt.
+                        receipt_path = pack_dir / "receipt.json"
+                        if not receipt_path.is_file():
+                            _safe_write_json(receipt_path, receipt)
+                        # Best-effort: ensure requested derived outputs exist when reusing a pack.
+                        if zip_pack and not (pack_dir / "entropy_pack.zip").is_file():
+                            _write_zip(pack_dir, pack_dir / "entropy_pack.zip")
+                        if derive_seed and write_seed_files and seed_master is not None:
+                            seed_hex = seed_master.hex()
+                            seed_b64 = base64.b64encode(seed_master).decode("ascii")
+                            _safe_write_text(pack_dir / "seed_master.hex", seed_hex + "\n")
+                            _safe_write_text(pack_dir / "seed_master.b64", seed_b64 + "\n")
+                            _chmod_600(pack_dir / "seed_master.hex")
+                            _chmod_600(pack_dir / "seed_master.b64")
+                        if print_seed and seed_master is not None:
+                            _print_seed_material(seed_master)
+                        try:
+                            shutil.rmtree(tmp_dir)
+                        except Exception:
+                            pass
+                        return StampResult(pack_dir=pack_dir, root_sha256=root_sha, receipt=receipt, seed_master=seed_master)
+                except Exception:
+                    pass
+            raise FileExistsError(f"pack already exists with different contents: {pack_dir}")
+
+        # Write pack contents into temp dir first.
+        _safe_write_json(tmp_dir / "manifest.json", manifest)
+        _safe_write_text(tmp_dir / "entropy_root_sha256.txt", root_sha + "\n")
+
+        seed_master: Optional[bytes] = None
+        if derive_seed:
+            seed_master = derive_seed_master(root_sha256_hex=root_sha)
+            if write_seed_files:
+                seed_hex = seed_master.hex()
+                seed_b64 = base64.b64encode(seed_master).decode("ascii")
+                _safe_write_text(tmp_dir / "seed_master.hex", seed_hex + "\n")
+                _safe_write_text(tmp_dir / "seed_master.b64", seed_b64 + "\n")
+                _chmod_600(tmp_dir / "seed_master.hex")
+                _chmod_600(tmp_dir / "seed_master.b64")
+
+        receipt = _build_receipt(
+            root_sha256=root_sha,
+            pack_id=pack_id,
+            artifact_entries=artifact_entries,
+            zip_path=Path("entropy_pack.zip") if zip_pack else None,
+            derivation_version=DEFAULT_DERIVATION_VERSION if derive_seed else None,
+            seed_master=seed_master,
+        )
+        _safe_write_json(tmp_dir / "receipt.json", receipt)
+
+        if zip_pack:
+            _write_zip(tmp_dir, tmp_dir / "entropy_pack.zip")
+
+        # Atomic-ish move: rename tmp dir into content-addressed target.
+        tmp_dir.replace(pack_dir)
+
+        if print_seed and seed_master is not None:
+            _print_seed_material(seed_master)
+
+        return StampResult(pack_dir=pack_dir, root_sha256=root_sha, receipt=receipt, seed_master=seed_master)
+    except Exception:
+        try:
+            shutil.rmtree(tmp_dir)
+        except Exception:
+            pass
+        raise
+
+
+def _build_receipt(
+    *,
+    root_sha256: str,
+    pack_id: Optional[str],
+    artifact_entries: Sequence[Dict[str, object]],
+    zip_path: Optional[Path],
+    derivation_version: Optional[str],
+    seed_master: Optional[bytes],
+) -> Dict[str, object]:
+    total_bytes = sum(int(a.get("size_bytes", 0) or 0) for a in artifact_entries)
+    receipt: Dict[str, object] = {
+        "schema_version": RECEIPT_SCHEMA_VERSION,
+        "tool": "eps",
+        "tool_version": str(EPS_VERSION),
+        "pack_layout": PACK_LAYOUT_VERSION,
+        "entropy_schema_version": MANIFEST_SCHEMA_VERSION,
+        "entropy_root_sha256": root_sha256,
+        "artifact_count": int(len(artifact_entries)),
+        "artifact_bytes": int(total_bytes),
+        "stamped_at_utc": _utc_now_iso(),
+    }
+    if pack_id:
+        receipt["pack_id"] = str(pack_id)
+    if zip_path is not None:
+        receipt["zip_path"] = str(zip_path)
+    if derivation_version:
+        receipt["derivation_version"] = derivation_version
+    if seed_master is not None:
+        receipt["seed_fingerprint_sha256"] = seed_fingerprint_sha256(seed_master)
+    return receipt
+
+
+def _print_seed_material(seed_master: bytes) -> None:
+    seed_hex = seed_master.hex()
+    seed_b64 = base64.b64encode(seed_master).decode("ascii")
+    print("seed_master.hex:", seed_hex)
+    print("seed_master.b64:", seed_b64)
+
+
+def _write_zip(pack_dir: Path, zip_path: Path) -> None:
+    # Avoid including seed files by default. They are sensitive and should be injected per-run.
+    exclude = {"seed_master.hex", "seed_master.b64", zip_path.name}
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for path in sorted(pack_dir.rglob("*")):
+            if path.is_dir():
+                continue
+            rel = path.relative_to(pack_dir).as_posix()
+            if rel in exclude:
+                continue
+            zf.write(path, arcname=rel)
+
+
+def verify_pack(pack_path: Path) -> VerificationResult:
+    pack_path = Path(pack_path).resolve()
+    errors: List[str] = []
+    file_count = 0
+    total_bytes = 0
+
+    if pack_path.is_dir():
+        manifest_path = pack_path / "manifest.json"
+        if not manifest_path.is_file():
+            return VerificationResult(ok=False, root_sha256="", file_count=0, total_bytes=0, errors=["missing manifest.json"])
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            return VerificationResult(ok=False, root_sha256="", file_count=0, total_bytes=0, errors=[f"invalid manifest.json: {exc}"])
+        if not isinstance(manifest, dict):
+            return VerificationResult(ok=False, root_sha256="", file_count=0, total_bytes=0, errors=["manifest.json must be an object"])
+        root_sha = manifest_root_sha256(manifest)
+
+        expected_path = pack_path / "entropy_root_sha256.txt"
+        if expected_path.is_file():
+            expected = expected_path.read_text(encoding="utf-8").strip()
+            if expected and expected != root_sha:
+                errors.append("entropy_root_sha256.txt does not match manifest root")
+
+        artifacts = manifest.get("artifacts")
+        if not isinstance(artifacts, list) or not artifacts:
+            errors.append("manifest.artifacts missing or empty")
+            return VerificationResult(ok=False, root_sha256=root_sha, file_count=0, total_bytes=0, errors=errors)
+
+        for i, a in enumerate(artifacts):
+            if not isinstance(a, dict):
+                errors.append(f"artifact[{i}] not an object")
+                continue
+            rel_path = _validate_artifact_relpath(a.get("path"))
+            sha = a.get("sha256")
+            size = a.get("size_bytes")
+            if rel_path is None:
+                errors.append(f"artifact[{i}].path invalid")
+                continue
+            if not isinstance(sha, str) or len(sha) != 64:
+                errors.append(f"artifact[{i}].sha256 invalid")
+                continue
+            if not isinstance(size, int) or size < 0:
+                errors.append(f"artifact[{i}].size_bytes invalid")
+                continue
+            target = pack_path / rel_path
+            # Guard against path traversal and symlink escapes.
+            try:
+                resolved = target.resolve()
+            except Exception:
+                resolved = target
+            if not resolved.is_relative_to(pack_path):
+                errors.append(f"artifact[{i}] path escapes pack dir: {rel_path.as_posix()}")
+                continue
+            if target.is_symlink():
+                errors.append(f"artifact[{i}] is a symlink (refusing): {rel_path.as_posix()}")
+                continue
+            if not target.is_file():
+                errors.append(f"missing artifact file: {rel_path.as_posix()}")
+                continue
+            actual_size = target.stat().st_size
+            if actual_size != size:
+                errors.append(f"size mismatch: {rel_path.as_posix()} expected={size} actual={actual_size}")
+                continue
+            actual_sha = file_sha256_hex(target)
+            if actual_sha != sha:
+                errors.append(f"sha256 mismatch: {rel_path.as_posix()}")
+                continue
+            file_count += 1
+            total_bytes += int(actual_size)
+
+        return VerificationResult(ok=not errors, root_sha256=root_sha, file_count=file_count, total_bytes=total_bytes, errors=errors)
+
+    if pack_path.is_file() and pack_path.suffix.lower() == ".zip":
+        try:
+            with zipfile.ZipFile(pack_path, "r") as zf:
+                try:
+                    raw = zf.read("manifest.json")
+                except KeyError:
+                    return VerificationResult(ok=False, root_sha256="", file_count=0, total_bytes=0, errors=["missing manifest.json in zip"])
+                try:
+                    manifest = json.loads(raw.decode("utf-8"))
+                except Exception as exc:
+                    return VerificationResult(ok=False, root_sha256="", file_count=0, total_bytes=0, errors=[f"invalid manifest.json in zip: {exc}"])
+                if not isinstance(manifest, dict):
+                    return VerificationResult(ok=False, root_sha256="", file_count=0, total_bytes=0, errors=["manifest.json must be an object"])
+
+                root_sha = manifest_root_sha256(manifest)
+                try:
+                    expected = zf.read("entropy_root_sha256.txt").decode("utf-8").strip()
+                    if expected and expected != root_sha:
+                        errors.append("entropy_root_sha256.txt does not match manifest root")
+                except KeyError:
+                    # Optional
+                    pass
+
+                artifacts = manifest.get("artifacts")
+                if not isinstance(artifacts, list) or not artifacts:
+                    errors.append("manifest.artifacts missing or empty")
+                    return VerificationResult(ok=False, root_sha256=root_sha, file_count=0, total_bytes=0, errors=errors)
+
+                for i, a in enumerate(artifacts):
+                    if not isinstance(a, dict):
+                        errors.append(f"artifact[{i}] not an object")
+                        continue
+                    rel_path = _validate_artifact_relpath(a.get("path"))
+                    sha = a.get("sha256")
+                    size = a.get("size_bytes")
+                    if rel_path is None:
+                        errors.append(f"artifact[{i}].path invalid")
+                        continue
+                    if not isinstance(sha, str) or len(sha) != 64:
+                        errors.append(f"artifact[{i}].sha256 invalid")
+                        continue
+                    if not isinstance(size, int) or size < 0:
+                        errors.append(f"artifact[{i}].size_bytes invalid")
+                        continue
+                    rel_s = rel_path.as_posix()
+                    try:
+                        info = zf.getinfo(rel_s)
+                    except KeyError:
+                        errors.append(f"missing artifact file in zip: {rel_s}")
+                        continue
+                    if info.is_dir():
+                        errors.append(f"artifact[{i}] is a directory in zip: {rel_s}")
+                        continue
+                    zip_size = int(getattr(info, "file_size", -1))
+                    if zip_size != size:
+                        errors.append(f"size mismatch: {rel_s} expected={size} actual={zip_size}")
+                        continue
+                    try:
+                        with zf.open(info, "r") as handle:
+                            actual_sha, n = _sha256_hex_stream(handle, max_bytes=size)
+                    except Exception as exc:
+                        errors.append(f"failed to read artifact in zip: {rel_s}: {exc}")
+                        continue
+                    if n != size:
+                        errors.append(f"size mismatch: {rel_s} expected={size} actual={n}")
+                        continue
+                    if actual_sha != sha:
+                        errors.append(f"sha256 mismatch: {rel_s}")
+                        continue
+                    file_count += 1
+                    total_bytes += int(size)
+
+                return VerificationResult(ok=not errors, root_sha256=root_sha, file_count=file_count, total_bytes=total_bytes, errors=errors)
+        except zipfile.BadZipFile as exc:
+            return VerificationResult(ok=False, root_sha256="", file_count=0, total_bytes=0, errors=[f"invalid zip: {exc}"])
+
+    return VerificationResult(ok=False, root_sha256="", file_count=0, total_bytes=0, errors=[f"unsupported pack path: {pack_path}"])
