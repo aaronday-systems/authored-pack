@@ -8,14 +8,32 @@ Baseline: copy the Control Plane interaction posture:
 - action execution runs outside curses (prompt -> run -> return)
 
 ASCII-first: no box-drawing or emoji. Color is optional.
+
+To intentionally break the baseline TUI rules (loud palette, unicode dividers),
+run: `python3 -B bin/eps.py --insane`
 """
 
 from __future__ import annotations
 
+import argparse
 import curses
+import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Sequence
+
+# When running as `python3 bin/eps.py`, Python prepends `bin/` to sys.path,
+# which would cause `import eps` to resolve to this file (bin/eps.py).
+# Force repo-root precedence so `eps/` package imports work.
+_BIN_DIR = Path(__file__).resolve().parent
+_REPO_ROOT = _BIN_DIR.parent
+try:
+    sys.path.remove(str(_BIN_DIR))
+except ValueError:
+    pass
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 from eps import __version__
 from eps.pack import stamp_pack, verify_pack
@@ -42,6 +60,27 @@ class Theme:
     header: int
 
 
+@dataclass
+class InsanePalette:
+    # These are *attributes* (e.g. curses.color_pair(n)), not raw color IDs.
+    bg: List[int]
+    header: List[int]
+    menu_hot: List[int]
+    menu_dim: int
+    divider: int
+    text: int
+    ok: int
+    warn: int
+    info: int
+
+
+def _init_pair_safe(pair_id: int, fg: int, bg: int) -> None:
+    try:
+        curses.init_pair(pair_id, fg, bg)
+    except curses.error:
+        pass
+
+
 def init_theme() -> Theme:
     normal = curses.A_NORMAL
     reverse = curses.A_REVERSE
@@ -64,6 +103,68 @@ def init_theme() -> Theme:
     return Theme(normal=normal, reverse=reverse, header=header)
 
 
+def init_insane_palette() -> InsanePalette:
+    # Electric palette tuned for 256-color terminals, with a fallback for 16-color.
+    if not curses.has_colors():
+        return InsanePalette(
+            bg=[curses.A_NORMAL],
+            header=[curses.A_REVERSE],
+            menu_hot=[curses.A_REVERSE],
+            menu_dim=curses.A_NORMAL,
+            divider=curses.A_NORMAL,
+            text=curses.A_NORMAL,
+            ok=curses.A_NORMAL,
+            warn=curses.A_NORMAL,
+            info=curses.A_NORMAL,
+        )
+
+    curses.start_color()
+    try:
+        curses.use_default_colors()
+    except curses.error:
+        pass
+
+    is_256 = getattr(curses, "COLORS", 0) >= 256
+    pink = 201 if is_256 else curses.COLOR_MAGENTA
+    cyan = 51 if is_256 else curses.COLOR_CYAN
+    green = 46 if is_256 else curses.COLOR_GREEN
+    yellow = 226 if is_256 else curses.COLOR_YELLOW
+    purple = 93 if is_256 else curses.COLOR_BLUE
+    white = 231 if is_256 else curses.COLOR_WHITE
+    black = 0 if is_256 else curses.COLOR_BLACK
+
+    bg0 = 17 if is_256 else black
+    bg1 = 18 if is_256 else black
+    bg2 = 52 if is_256 else black
+    bg3 = 53 if is_256 else black
+
+    # Reserve a block of pair IDs for the insane skin.
+    _init_pair_safe(11, pink, bg0)
+    _init_pair_safe(12, cyan, bg1)
+    _init_pair_safe(13, green, bg2)
+    _init_pair_safe(14, yellow, bg3)
+    _init_pair_safe(15, purple, bg0)
+    _init_pair_safe(16, black, pink)
+    _init_pair_safe(17, black, cyan)
+    _init_pair_safe(18, black, green)
+    _init_pair_safe(19, black, yellow)
+    _init_pair_safe(20, black, purple)
+    _init_pair_safe(21, white, bg0)
+    _init_pair_safe(22, cyan, purple)
+
+    bg = [curses.color_pair(11), curses.color_pair(12), curses.color_pair(13), curses.color_pair(14), curses.color_pair(15)]
+    header = [curses.color_pair(16) | curses.A_BOLD, curses.color_pair(17) | curses.A_BOLD, curses.color_pair(20) | curses.A_BOLD]
+    menu_hot = [curses.color_pair(19) | curses.A_BOLD, curses.color_pair(18) | curses.A_BOLD, curses.color_pair(17) | curses.A_BOLD]
+    menu_dim = curses.color_pair(21)
+    divider = curses.color_pair(22) | curses.A_BOLD
+    text = curses.color_pair(21)
+    ok = curses.color_pair(18) | curses.A_BOLD
+    warn = curses.color_pair(19) | curses.A_BOLD
+    info = curses.color_pair(17) | curses.A_BOLD
+
+    return InsanePalette(bg=bg, header=header, menu_hot=menu_hot, menu_dim=menu_dim, divider=divider, text=text, ok=ok, warn=warn, info=info)
+
+
 @dataclass
 class ViewerState:
     title: str
@@ -74,6 +175,9 @@ class ViewerState:
 @dataclass
 class AppState:
     theme: Theme
+    insane: bool = False
+    palette: Optional[InsanePalette] = None
+    tick: int = 0
     menu: List[str] = field(
         default_factory=lambda: [
             "Stamp Pack",
@@ -92,6 +196,13 @@ class AppState:
 
 def _divider_for_width(cols: int) -> str:
     return DIVIDER_WIDE if cols >= 80 else DIVIDER_NARROW
+
+
+def _cycle(items: Sequence[int], tick: int, *, speed: int = 2, default: int = 0) -> int:
+    if not items:
+        return default
+    idx = (int(tick) // max(1, int(speed))) % len(items)
+    return int(items[idx])
 
 
 def _read_text_lines(path: Path, limit: int = 2000) -> List[str]:
@@ -130,6 +241,127 @@ def _draw_header(stdscr, state: AppState, cols: int) -> None:
 
     divider = _divider_for_width(cols)
     safe_addstr(stdscr, 2, 0, divider[:cols].ljust(cols), state.theme.normal)
+
+
+def _draw_insane_background(stdscr, state: AppState, rows: int, cols: int) -> None:
+    if state.palette is None:
+        return
+    for y in range(rows):
+        attr = _cycle(state.palette.bg, state.tick + y, speed=1, default=state.palette.text)
+        safe_addstr(stdscr, y, 0, (" " * cols), attr)
+
+
+def _draw_insane_header(stdscr, state: AppState, cols: int) -> None:
+    if state.palette is None:
+        return
+
+    head_attr = _cycle(state.palette.header, state.tick, speed=1, default=state.palette.text)
+    safe_addstr(stdscr, 0, 0, (" " * cols), head_attr)
+
+    phase = int(time.monotonic() * 8) % 4
+    tag = ["NEON", "RAVE", "GLITCH", "HOT"][phase]
+    title = f" {tag} // {APP_NAME} {APP_VERSION} "
+    safe_addstr(stdscr, 0, 0, title[:cols].ljust(cols), head_attr)
+
+    s = (state.status or "").strip()
+    s_l = s.lower()
+    if "fail" in s_l:
+        risk_attr = state.palette.warn
+        risk = "WARN"
+    elif "done" in s_l:
+        risk_attr = state.palette.ok
+        risk = "OK"
+    else:
+        risk_attr = state.palette.info
+        risk = "INFO"
+    meta = f" MODE=OFFLINE  RISK={risk}  TICK={state.tick}  STATUS={s or 'Ready'} "
+    safe_addstr(stdscr, 1, 0, meta[:cols].ljust(cols), risk_attr)
+
+    div = ("═" * max(0, cols - 2)) if cols >= 2 else ""
+    safe_addstr(stdscr, 2, 0, ("╬" + div + "╬")[:cols].ljust(cols), state.palette.divider)
+
+
+def _draw_insane_menu(stdscr, state: AppState, top: int, left_w: int, height: int) -> None:
+    if state.palette is None:
+        return
+    for i in range(height):
+        idx = i
+        y = top + i
+        if idx >= len(state.menu):
+            safe_addstr(stdscr, y, 0, " " * left_w, state.palette.menu_dim)
+            continue
+        label = state.menu[idx]
+        selected = idx == state.selected
+        attr = _cycle(state.palette.menu_hot, state.tick + idx, speed=2, default=state.palette.menu_dim) if selected else state.palette.menu_dim
+        prefix = ">> " if selected else "   "
+        text = (prefix + label)[:left_w].ljust(left_w)
+        safe_addstr(stdscr, y, 0, text, attr)
+
+
+def _draw_insane_viewer(stdscr, state: AppState, top: int, cols: int, rows: int) -> None:
+    if state.viewer is None or state.palette is None:
+        return
+    v = state.viewer
+    body_h = rows - top - 1
+    title_attr = _cycle(state.palette.header, state.tick, speed=2, default=state.palette.text)
+    safe_addstr(stdscr, top, 0, (f"[VIEW] {v.title}")[:cols].ljust(cols), title_attr)
+    for i in range(body_h - 1):
+        src_idx = v.top + i
+        y = top + 1 + i
+        if src_idx >= len(v.lines):
+            safe_addstr(stdscr, y, 0, " " * cols, state.palette.text)
+            continue
+        safe_addstr(stdscr, y, 0, v.lines[src_idx][:cols].ljust(cols), state.palette.text)
+
+
+def _draw_insane_right_pane(stdscr, state: AppState, top: int, left_w: int, cols: int, rows: int) -> None:
+    if state.palette is None:
+        return
+    body_h = rows - top - 1
+    right_x = left_w + 1
+    right_w = max(0, cols - right_x)
+
+    label = state.menu[state.selected] if 0 <= state.selected < len(state.menu) else ""
+    preview: List[str] = []
+    if label == "Stamp Pack":
+        preview = [
+            "STAMP // directory -> content-addressed pack",
+            "",
+            "Outputs:",
+            "  manifest.json",
+            "  entropy_root_sha256.txt",
+            "  receipt.json (operational)",
+            "  payload/...",
+            "  entropy_pack.zip (optional)",
+            "",
+            "Seed (optional): HKDF(root) -> seed_master",
+        ]
+    elif label == "Verify Pack":
+        preview = [
+            "VERIFY // root + payload integrity",
+            "",
+            "Hardening:",
+            "  caps (manifest/artifact/total)",
+            "  traversal + symlink defense",
+            "  zip duplicate member defense",
+        ]
+    elif label.startswith("View "):
+        preview = ["Open a read-only viewer."]
+    elif label == "Quit":
+        preview = ["Exit."]
+
+    if state.log_lines:
+        preview = state.log_lines[-(body_h - 1) :]
+
+    for i in range(body_h):
+        y = top + i
+        safe_addstr(stdscr, y, left_w, "║", state.palette.divider)
+
+    for i in range(body_h):
+        y = top + i
+        line = preview[i] if i < len(preview) else ""
+        attr = state.palette.text if i % 2 == 0 else _cycle(state.palette.bg, state.tick + i, speed=4, default=state.palette.text)
+        safe_addstr(stdscr, y, right_x, line[:right_w].ljust(right_w), attr)
 
 
 def _draw_footer(stdscr, state: AppState, rows: int, cols: int) -> None:
@@ -227,12 +459,20 @@ def draw(stdscr, state: AppState) -> None:
     rows, cols = stdscr.getmaxyx()
     stdscr.erase()
 
-    _draw_header(stdscr, state, cols)
+    if state.insane and state.palette is not None:
+        _draw_insane_background(stdscr, state, rows, cols)
+        _draw_insane_header(stdscr, state, cols)
+    else:
+        _draw_header(stdscr, state, cols)
     body_top = 3
 
     if state.viewer is not None:
-        _draw_viewer(stdscr, state, body_top, cols, rows)
-        _draw_footer(stdscr, state, rows, cols)
+        if state.insane and state.palette is not None:
+            _draw_insane_viewer(stdscr, state, body_top, cols, rows)
+            _draw_footer(stdscr, state, rows, cols)
+        else:
+            _draw_viewer(stdscr, state, body_top, cols, rows)
+            _draw_footer(stdscr, state, rows, cols)
         stdscr.refresh()
         return
 
@@ -240,9 +480,14 @@ def draw(stdscr, state: AppState) -> None:
     left_w = min(28, max(18, cols // 3))
     body_h = rows - body_top - 1
 
-    _draw_menu(stdscr, state, body_top, left_w, body_h)
-    _draw_right_pane(stdscr, state, body_top, left_w, cols, rows)
-    _draw_footer(stdscr, state, rows, cols)
+    if state.insane and state.palette is not None:
+        _draw_insane_menu(stdscr, state, body_top, left_w, body_h)
+        _draw_insane_right_pane(stdscr, state, body_top, left_w, cols, rows)
+        _draw_footer(stdscr, state, rows, cols)
+    else:
+        _draw_menu(stdscr, state, body_top, left_w, body_h)
+        _draw_right_pane(stdscr, state, body_top, left_w, cols, rows)
+        _draw_footer(stdscr, state, rows, cols)
     stdscr.refresh()
 
 
@@ -419,7 +664,7 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
     return True
 
 
-def run_tui(stdscr) -> None:
+def run_tui(stdscr, *, insane: bool = False) -> None:
     try:
         curses.curs_set(0)
     except curses.error:
@@ -430,13 +675,15 @@ def run_tui(stdscr) -> None:
         pass
 
     theme = init_theme()
-    state = AppState(theme=theme)
+    pal = init_insane_palette() if insane else None
+    state = AppState(theme=theme, insane=bool(insane), palette=pal, tick=0)
 
     stdscr.keypad(True)
     stdscr.nodelay(False)
-    stdscr.timeout(100)
+    stdscr.timeout(50 if insane else 100)
 
     while True:
+        state.tick += 1
         draw(stdscr, state)
         try:
             ch = stdscr.getch()
@@ -449,8 +696,11 @@ def run_tui(stdscr) -> None:
             break
 
 
-def main() -> int:
-    curses.wrapper(run_tui)
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    p = argparse.ArgumentParser(prog="eps-tui")
+    p.add_argument("--insane", action="store_true", help="Enable non-conforming neon TUI skin")
+    ns = p.parse_args(list(argv) if argv is not None else None)
+    curses.wrapper(lambda stdscr: run_tui(stdscr, insane=bool(ns.insane)))
     return 0
 
 

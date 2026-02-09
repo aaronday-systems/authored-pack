@@ -18,6 +18,7 @@ Design goals:
 No install required. Run with system Python 3.11+:
 
 - TUI: `python3 -B bin/eps.py`
+- TUI (insane skin): `python3 -B bin/eps.py --insane`
 - CLI: `python3 -m eps --help`
 
 ## Commands
