@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import curses
+import hashlib
 import re
 import shutil
 import subprocess
@@ -129,6 +130,7 @@ def init_insane_palette() -> InsanePalette:
         pass
 
     is_256 = getattr(curses, "COLORS", 0) >= 256
+    max_pairs = int(getattr(curses, "COLOR_PAIRS", 0) or 0)
     pink = 201 if is_256 else curses.COLOR_MAGENTA
     cyan = 51 if is_256 else curses.COLOR_CYAN
     green = 46 if is_256 else curses.COLOR_GREEN
@@ -176,6 +178,28 @@ def init_insane_palette() -> InsanePalette:
     _init_pair_safe(32, white, bg10)
     _init_pair_safe(33, white, bg11)
 
+    # Optional: generate a larger "video noise" background bank if we have pair slots.
+    # Uses white-on-neon backgrounds so space-fills become pure color fields.
+    extra_bg_pairs: List[int] = []
+    if is_256 and max_pairs >= 120:
+        neon_bgs = [
+            16, 17, 18, 19, 20, 21, 22, 23, 24,
+            52, 53, 54, 55, 56, 57,
+            88, 89, 90, 91, 92, 93,
+            124, 125, 126, 127, 128, 129,
+            160, 161, 162, 163, 164, 165,
+            196, 197, 198, 199, 200, 201,
+            202, 203, 204, 205,
+            220, 221, 222, 223, 224, 225, 226, 227,
+        ]
+        pair_id = 40
+        for bgc in neon_bgs:
+            if pair_id >= max_pairs:
+                break
+            _init_pair_safe(pair_id, white, int(bgc))
+            extra_bg_pairs.append(pair_id)
+            pair_id += 1
+
     bg = [
         curses.color_pair(11),
         curses.color_pair(12),
@@ -195,6 +219,8 @@ def init_insane_palette() -> InsanePalette:
         curses.color_pair(32),
         curses.color_pair(33),
     ]
+    for pid in extra_bg_pairs:
+        bg.append(curses.color_pair(pid))
     header = [curses.color_pair(16) | curses.A_BOLD, curses.color_pair(17) | curses.A_BOLD, curses.color_pair(20) | curses.A_BOLD]
     menu_hot = [curses.color_pair(19) | curses.A_BOLD, curses.color_pair(18) | curses.A_BOLD, curses.color_pair(17) | curses.A_BOLD]
     menu_dim = curses.color_pair(21)
@@ -294,6 +320,21 @@ def _load_wordlist_from_source(path: Path, *, max_bytes: int = 5_000_000) -> Lis
     if suffix != ".pdf":
         return _load_wordlist_from_text_file(path, max_bytes=max_bytes)
 
+    # Cache: avoid re-OCR/parsing every run.
+    # Key is sha256 of the PDF bytes (small enough here; also robust against renames).
+    cache_dir = Path("/tmp/eps_godel_cache")
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        pdf_bytes = path.read_bytes()
+    except Exception:
+        pdf_bytes = b""
+    cache_key = hashlib.sha256(pdf_bytes).hexdigest() if pdf_bytes else ""
+    cache_txt = cache_dir / f"{cache_key}.txt" if cache_key else None
+    if cache_txt is not None and cache_txt.is_file():
+        words = _load_wordlist_from_text_file(cache_txt, max_bytes=max_bytes)
+        if len(words) >= 20:
+            return words
+
     pdftotext = shutil.which("pdftotext")
     if pdftotext:
         fd, out_path_s = tempfile.mkstemp(prefix="eps_godel_", suffix=".txt")
@@ -317,6 +358,11 @@ def _load_wordlist_from_source(path: Path, *, max_bytes: int = 5_000_000) -> Lis
             if proc.returncode == 0 and out_path.is_file():
                 words = _load_wordlist_from_text_file(out_path, max_bytes=max_bytes)
                 if len(words) >= 50:
+                    if cache_txt is not None:
+                        try:
+                            cache_txt.write_text(out_path.read_text(encoding="utf-8", errors="ignore"), encoding="utf-8")
+                        except Exception:
+                            pass
                     return words
         except Exception:
             pass
@@ -352,6 +398,7 @@ def _load_wordlist_from_source(path: Path, *, max_bytes: int = 5_000_000) -> Lis
                     timeout=90,
                 )
                 words: List[str] = []
+                ocr_text_parts: List[str] = []
                 for img in sorted(Path(td).glob("page-*.png")):
                     try:
                         proc = subprocess.run(
@@ -363,21 +410,28 @@ def _load_wordlist_from_source(path: Path, *, max_bytes: int = 5_000_000) -> Lis
                         )
                         if proc.returncode != 0:
                             continue
-                        chunk_words = re.findall(r"[A-Za-zÀ-ÖØ-öø-ÿ]+", proc.stdout or "")
+                        ocr_text = proc.stdout or ""
+                        if ocr_text:
+                            ocr_text_parts.append(ocr_text)
+                        chunk_words = re.findall(r"[A-Za-zÀ-ÖØ-öø-ÿ]+", ocr_text)
                         words.extend([w for w in chunk_words if 3 <= len(w) <= 22 and any(c in "aeiouyäöüAEIOUYÄÖÜ" for c in w)])
                         if len(words) >= 800:
                             break
                     except Exception:
                         continue
                 if len(words) >= 20:
+                    if cache_txt is not None and ocr_text_parts:
+                        try:
+                            cache_txt.write_text("\n".join(ocr_text_parts), encoding="utf-8")
+                        except Exception:
+                            pass
                     return words
         except Exception:
             pass
 
     # Fallback: brute scan PDF bytes (often low quality, but better than nothing).
-    try:
-        data = path.read_bytes()
-    except Exception:
+    data = pdf_bytes
+    if not data:
         return []
     if len(data) > int(max_bytes):
         data = data[: int(max_bytes)]
@@ -510,9 +564,9 @@ def _draw_insane_background(stdscr, state: AppState, rows: int, cols: int) -> No
     if not bg:
         return
 
-    seg = 18 if cols >= 120 else 12
-    wobble = 7 + ((state.tick // 11) % 11)  # longer loop
-    direction = 1 if ((state.tick // 50) % 2 == 0) else -1
+    seg = 22 if cols >= 140 else (18 if cols >= 120 else 12)
+    wobble = 9 + ((state.tick // 13) % 17)  # longer loop
+    direction = 1 if ((state.tick // 60) % 2 == 0) else -1
 
     for y in range(rows):
         # Big horizontal banding (moves up/down over time).
@@ -534,6 +588,11 @@ def _draw_insane_background(stdscr, state: AppState, rows: int, cols: int) -> No
             tear_w = min(cols, 12 + ((row_seed >> 3) % 50))
             tear_attr = bg[(band + 7) % len(bg)]
             safe_addstr(stdscr, y, 0, ("▓" * tear_w), tear_attr)
+        # Sparkle noise: a few high-contrast pixels that "crawl".
+        if (row_seed % 7) == 0 and cols >= 6:
+            sx = int((row_seed >> 9) % max(1, cols - 1))
+            ch = "█" if (row_seed & 1) else "▒"
+            safe_addstr(stdscr, y, sx, ch, bg[(band + 3) % len(bg)] | curses.A_BOLD)
 
 
 def _draw_insane_header(stdscr, state: AppState, cols: int) -> None:
