@@ -83,6 +83,12 @@ def _sha256_hex_stream(handle, *, max_bytes: Optional[int] = None) -> Tuple[str,
 
 
 def _read_file_bytes_limited(path: Path, *, max_bytes: int) -> bytes:
+    try:
+        size = int(path.stat().st_size)
+        if size > int(max_bytes):
+            raise ValueError(f"file too large ({size} > {max_bytes})")
+    except OSError:
+        pass
     with path.open("rb") as handle:
         data = handle.read(int(max_bytes) + 1)
     if len(data) > int(max_bytes):
@@ -92,6 +98,11 @@ def _read_file_bytes_limited(path: Path, *, max_bytes: int) -> bytes:
 
 def _read_zip_member_bytes_limited(zf: zipfile.ZipFile, name: str, *, max_bytes: int) -> bytes:
     info = zf.getinfo(name)
+    if info.is_dir():
+        raise ValueError("zip member is a directory")
+    size = int(getattr(info, "file_size", -1))
+    if size >= 0 and size > int(max_bytes):
+        raise ValueError(f"zip member too large ({size} > {max_bytes})")
     with zf.open(info, "r") as handle:
         data = handle.read(int(max_bytes) + 1)
     if len(data) > int(max_bytes):
@@ -110,7 +121,8 @@ def _safe_write_text(path: Path, content: str) -> None:
 
 def _safe_write_json(path: Path, obj: Dict[str, object]) -> None:
     _ensure_parent(path)
-    path.write_text(json.dumps(obj, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False) + "\n", encoding="utf-8")
+    payload = json.dumps(obj, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False) + "\n"
+    path.write_text(payload, encoding="utf-8")
 
 
 def _copy_payload_files(
@@ -223,7 +235,8 @@ def stamp_pack(
             existing_manifest = pack_dir / "manifest.json"
             if existing_manifest.is_file():
                 try:
-                    existing = json.loads(existing_manifest.read_text(encoding="utf-8"))
+                    raw = _read_file_bytes_limited(existing_manifest, max_bytes=DEFAULT_MAX_MANIFEST_BYTES)
+                    existing = json.loads(raw.decode("utf-8"))
                     if isinstance(existing, dict) and manifest_root_sha256(existing) == root_sha:
                         seed_master: Optional[bytes] = None
                         if derive_seed:
@@ -391,7 +404,11 @@ def verify_pack(
 
         expected_path = pack_path / "entropy_root_sha256.txt"
         if expected_path.is_file():
-            expected = expected_path.read_text(encoding="utf-8").strip()
+            try:
+                raw_expected = _read_file_bytes_limited(expected_path, max_bytes=256)
+                expected = raw_expected.decode("utf-8").strip()
+            except Exception:
+                expected = ""
             if expected and expected != root_sha:
                 errors.append("entropy_root_sha256.txt does not match manifest root")
 
@@ -478,7 +495,8 @@ def verify_pack(
 
                 root_sha = manifest_root_sha256(manifest)
                 try:
-                    expected = zf.read("entropy_root_sha256.txt").decode("utf-8").strip()
+                    raw_expected = _read_zip_member_bytes_limited(zf, "entropy_root_sha256.txt", max_bytes=256)
+                    expected = raw_expected.decode("utf-8").strip()
                     if expected and expected != root_sha:
                         errors.append("entropy_root_sha256.txt does not match manifest root")
                 except KeyError:

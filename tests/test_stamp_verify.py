@@ -98,6 +98,43 @@ class TestStampVerify(unittest.TestCase):
             self.assertFalse(rz.ok)
             self.assertTrue(any("path" in e and "invalid" in e for e in rz.errors), msg=f"errors: {rz.errors}")
 
+    def test_verify_rejects_duplicate_zip_members(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            zip_path = tmp_path / "dup.zip"
+
+            # Write the same member name twice.
+            with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr("manifest.json", '{"schema_version":"entropy.pack.v1","artifacts":[]}')
+                zf.writestr("manifest.json", '{"schema_version":"entropy.pack.v1","artifacts":[]}')
+
+            res = verify_pack(zip_path)
+            self.assertFalse(res.ok)
+            self.assertTrue(any("duplicate" in e for e in res.errors), msg=f"errors: {res.errors}")
+
+    def test_verify_limits(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            pack_dir = tmp_path / "pack"
+            payload = pack_dir / "payload"
+            payload.mkdir(parents=True)
+            (pack_dir / "manifest.json").write_text(
+                '{"schema_version":"entropy.pack.v1","artifacts":[{"path":"payload/a.txt","sha256":"%s","size_bytes":5}]}'
+                % hashlib.sha256(b"hello").hexdigest(),
+                encoding="utf-8",
+            )
+            (payload / "a.txt").write_text("hello", encoding="utf-8")
+
+            # Per-artifact cap.
+            r1 = verify_pack(pack_dir, max_artifact_bytes=1)
+            self.assertFalse(r1.ok)
+            self.assertTrue(any("too large" in e for e in r1.errors), msg=f"errors: {r1.errors}")
+
+            # Manifest cap.
+            r2 = verify_pack(pack_dir, max_manifest_bytes=1)
+            self.assertFalse(r2.ok)
+            self.assertTrue(any("invalid manifest.json" in e for e in r2.errors), msg=f"errors: {r2.errors}")
+
 
 if __name__ == "__main__":
     unittest.main()
