@@ -276,6 +276,9 @@ class AppState:
     drop_seen: set[str] = field(default_factory=set)
     drop_last_count: int = 0
     drop_last_names: List[str] = field(default_factory=list)
+    drop_flash_ticks: int = 0
+    drop_paste_buf: str = ""
+    drop_paste_last_ns: int = 0
     focus: str = "menu"  # "menu" | "entropy"
     reward_ticks: int = 0
     menu: List[str] = field(
@@ -492,6 +495,57 @@ def _split_drop_payload(s: str) -> List[str]:
     return out
 
 
+def _apply_drop_paths(state: AppState, paths: Sequence[str]) -> List[str]:
+    """
+    Apply dropped paths: set default input dir and/or import entropy sources.
+    Returns log lines for what happened.
+    """
+    msgs: List[str] = []
+    for v in paths:
+        p = Path(v).expanduser()
+        if p.exists() and p.is_dir():
+            state.last_input_dir = p.resolve()
+            msgs.append(f"Input dir set: {state.last_input_dir}")
+            continue
+        if p.exists() and p.is_file() and _is_image_path(p):
+            try:
+                sha, size = _sha256_hex_path(p, max_bytes=100 * 1024 * 1024)
+                dims = _identify_image_dims(p)
+                meta: Dict[str, object] = {}
+                if dims:
+                    meta["dims"] = dims
+                state.entropy_sources.append(
+                    EntropySource(kind="photo", name=p.name, sha256=sha, size_bytes=size, meta=meta, path=p)
+                )
+                msgs.append(f"Photo source added: {p.name}")
+                continue
+            except Exception as exc:
+                msgs.append(f"Photo add failed: {p.name}: {exc}")
+                continue
+        if p.exists() and p.is_file() and p.suffix.lower() in (".txt", ".md", ".markdown"):
+            try:
+                data = p.read_bytes()
+                if len(data) > 2_000_000:
+                    data = data[:2_000_000]
+                txt = data.decode("utf-8", errors="ignore")
+                sha = hashlib.sha256(txt.encode("utf-8", errors="ignore")).hexdigest()
+                state.entropy_sources.append(
+                    EntropySource(kind="text", name=p.name, sha256=sha, size_bytes=len(txt.encode("utf-8")), text=txt)
+                )
+                msgs.append(f"Text source added: {p.name}")
+                continue
+            except Exception as exc:
+                msgs.append(f"Text add failed: {p.name}: {exc}")
+                continue
+        msgs.append(f"Not usable: {p}")
+
+    if msgs:
+        # Keep selection in bounds if list grew.
+        if state.entropy_sources:
+            state.entropy_selected = max(0, min(state.entropy_selected, len(state.entropy_sources) - 1))
+    return msgs
+
+
 def _dropzone_preview(state: AppState, *, width: int, height: int) -> List[str]:
     d = state.drop_dir
     have = len(state.drop_seen)
@@ -519,6 +573,9 @@ def _dropzone_preview(state: AppState, *, width: int, height: int) -> List[str]:
     if state.last_input_dir is not None:
         lines.append(f"Current default input dir: {state.last_input_dir}")
     lines.append(f"Seen drop items this run: {have}")
+    if state.drop_paste_buf:
+        buf = state.drop_paste_buf.replace("\n", " ")[: max(0, width - 20)]
+        lines.append(f"Buffered paste: {buf}")
     lines.append("Tip: Use Tab/Up/Down to navigate; q jumps to Quit, Enter quits.")
 
     # Draw a big landing box.
@@ -533,7 +590,7 @@ def _dropzone_preview(state: AppState, *, width: int, height: int) -> List[str]:
         for _ in range(box_h - 2):
             lines.append(mid)
         lines.append(bot)
-        msg = "DROP HERE (paste/drag) + Enter"
+        msg = "IMPORTED" if state.drop_flash_ticks > 0 else "DROP HERE (paste/drag)"
         if len(msg) < box_w - 2:
             pad = (box_w - 2 - len(msg)) // 2
             msg_line = "║" + (" " * pad) + msg + (" " * (box_w - 2 - pad - len(msg))) + "║"
@@ -579,51 +636,13 @@ def _poll_drop_dir(state: AppState) -> None:
             continue
         state.drop_seen.add(key)
 
-        # Directory: set default stamp input dir.
-        if p.is_dir():
-            state.last_input_dir = p.resolve()
-            state.status = "Drop: input dir set."
-            state.log_lines = [f"Drop detected (dir): {p}", f"Stamp default input dir set to: {state.last_input_dir}"]
+        msgs = _apply_drop_paths(state, [str(p)])
+        if msgs:
+            state.status = "Drop imported."
+            # Keep logs short; Drop Zone should not "teleport" the user to a different context.
+            state.log_lines = msgs[:8]
+            state.drop_flash_ticks = 10
             changed = True
-            continue
-
-        if not p.is_file():
-            continue
-
-        suf = p.suffix.lower()
-        if _is_image_path(p):
-            try:
-                sha, size = _sha256_hex_path(p, max_bytes=100 * 1024 * 1024)
-            except Exception:
-                continue
-            dims = _identify_image_dims(p)
-            meta: Dict[str, object] = {}
-            if dims:
-                meta["dims"] = dims
-            state.entropy_sources.append(
-                EntropySource(kind="photo", name=p.name, sha256=sha, size_bytes=size, meta=meta, path=p)
-            )
-            state.status = "Drop: photo source added."
-            state.log_lines = [f"Drop detected (photo): {p.name}", f"entropy_sources={len(state.entropy_sources)}"]
-            changed = True
-            continue
-
-        if suf in (".txt", ".md", ".markdown"):
-            try:
-                data = p.read_bytes()
-                if len(data) > 2_000_000:
-                    data = data[:2_000_000]
-                txt = data.decode("utf-8", errors="ignore")
-            except Exception:
-                continue
-            sha = hashlib.sha256(txt.encode("utf-8", errors="ignore")).hexdigest()
-            state.entropy_sources.append(
-                EntropySource(kind="text", name=p.name, sha256=sha, size_bytes=len(txt.encode("utf-8")), text=txt)
-            )
-            state.status = "Drop: text source added."
-            state.log_lines = [f"Drop detected (text): {p.name}", f"entropy_sources={len(state.entropy_sources)}"]
-            changed = True
-            continue
 
     if changed:
         # Keep selection in bounds if list grew/shrank.
@@ -1125,6 +1144,7 @@ def _draw_insane_background(stdscr, state: AppState, rows: int, cols: int) -> No
     direction = 1 if ((state.tick // 60) % 2 == 0) else -1
     ch_bank = [" ", "░", "▒", "▓"]
     reward = state.reward_ticks > 0
+    drop_flash = state.drop_flash_ticks > 0
 
     for y in range(rows):
         # Big horizontal banding (moves up/down over time).
@@ -1142,6 +1162,8 @@ def _draw_insane_background(stdscr, state: AppState, rows: int, cols: int) -> No
             ch = ch_bank[(row_seed >> (x % 17)) & 0x3]
             if reward and ((row_seed >> (x % 11)) & 0x7) == 0:
                 ch = "█"
+            if drop_flash and (y % 11 == 0) and (x % 19 == 0):
+                ch = " "
             safe_addstr(stdscr, y, x, (ch * run), bg[idx])
             x += run
 
@@ -2030,7 +2052,29 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
         return True
 
     if label == "Drop Zone":
+        # Capture paste/drag streams as data instead of letting them trigger random actions.
+        if 32 <= ch <= 126:
+            state.drop_paste_buf += chr(int(ch))
+            state.drop_paste_last_ns = time.monotonic_ns()
+            return True
+        if ch in (curses.KEY_BACKSPACE, 127, 8):
+            state.drop_paste_buf = state.drop_paste_buf[:-1]
+            state.drop_paste_last_ns = time.monotonic_ns()
+            return True
         if ch in (curses.KEY_ENTER, 10, 13):
+            # If we already have buffered paste, commit it immediately.
+            if state.drop_paste_buf:
+                paths = _split_drop_payload(state.drop_paste_buf)
+                state.drop_paste_buf = ""
+                state.drop_paste_last_ns = 0
+                if paths:
+                    msgs = _apply_drop_paths(state, paths)
+                    state.status = "Drop imported."
+                    state.log_lines = msgs[:10]
+                    state.drop_flash_ticks = 10
+                else:
+                    state.status = "Ready."
+                return True
             # Provide a focused "landing zone" input. If the user drags a folder into the terminal,
             # many terminals will paste the path into this field.
             raw = _prompt_str_curses(stdscr, "(EPS) drop path(s)", default=str(state.last_input_dir or ""), max_len=4096)
@@ -2038,47 +2082,10 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
             if not paths:
                 state.status = "Ready."
                 return True
-            msgs: List[str] = []
-            for v in paths:
-                p = Path(v).expanduser()
-                if p.exists() and p.is_dir():
-                    state.last_input_dir = p.resolve()
-                    msgs.append(f"Input dir set: {state.last_input_dir}")
-                    continue
-                if p.exists() and p.is_file() and _is_image_path(p):
-                    try:
-                        sha, size = _sha256_hex_path(p, max_bytes=100 * 1024 * 1024)
-                        dims = _identify_image_dims(p)
-                        meta: Dict[str, object] = {}
-                        if dims:
-                            meta["dims"] = dims
-                        state.entropy_sources.append(
-                            EntropySource(kind="photo", name=p.name, sha256=sha, size_bytes=size, meta=meta, path=p)
-                        )
-                        msgs.append(f"Photo source added: {p.name}")
-                        continue
-                    except Exception as exc:
-                        msgs.append(f"Photo add failed: {p.name}: {exc}")
-                        continue
-                if p.exists() and p.is_file() and p.suffix.lower() in (".txt", ".md", ".markdown"):
-                    try:
-                        data = p.read_bytes()
-                        if len(data) > 2_000_000:
-                            data = data[:2_000_000]
-                        txt = data.decode("utf-8", errors="ignore")
-                        sha = hashlib.sha256(txt.encode("utf-8", errors="ignore")).hexdigest()
-                        state.entropy_sources.append(
-                            EntropySource(kind="text", name=p.name, sha256=sha, size_bytes=len(txt.encode("utf-8")), text=txt)
-                        )
-                        msgs.append(f"Text source added: {p.name}")
-                        continue
-                    except Exception as exc:
-                        msgs.append(f"Text add failed: {p.name}: {exc}")
-                        continue
-                msgs.append(f"Not usable: {p}")
-
-            state.status = "Done." if any(("added" in m.lower() or "set" in m.lower()) for m in msgs) else "Failed."
-            state.log_lines = msgs[:60]
+            msgs = _apply_drop_paths(state, paths)
+            state.status = "Drop imported." if any(("added" in m.lower() or "set" in m.lower()) for m in msgs) else "Failed."
+            state.log_lines = msgs[:20]
+            state.drop_flash_ticks = 10 if msgs else 0
             return True
         # Do not swallow other keys; Up/Down should still navigate the menu.
 
@@ -2197,6 +2204,21 @@ def run_tui(stdscr, *, insane: bool = False, godel_source: Optional[str] = None)
         state.tick += 1
         if state.reward_ticks > 0:
             state.reward_ticks -= 1
+        if state.drop_flash_ticks > 0:
+            state.drop_flash_ticks -= 1
+        # If user drag-dropped a path into the terminal while on Drop Zone, it likely arrived as a fast paste
+        # stream. Auto-commit after a short idle gap.
+        if state.drop_paste_buf and state.drop_paste_last_ns:
+            if (time.monotonic_ns() - int(state.drop_paste_last_ns)) > 300_000_000:  # 300ms
+                paths = _split_drop_payload(state.drop_paste_buf)
+                state.drop_paste_buf = ""
+                state.drop_paste_last_ns = 0
+                if paths:
+                    msgs = _apply_drop_paths(state, paths)
+                    if msgs:
+                        state.status = "Drop imported."
+                        state.log_lines = msgs[:10]
+                        state.drop_flash_ticks = 10
         # Poll the filesystem landing zone occasionally (not every tick) to stay cheap.
         if state.tick % 4 == 0:
             _poll_drop_dir(state)
