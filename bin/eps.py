@@ -18,7 +18,10 @@ from __future__ import annotations
 import argparse
 import curses
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -231,6 +234,62 @@ def _load_wordlist_from_text_file(path: Path, *, max_bytes: int = 5_000_000) -> 
     return out
 
 
+def _load_wordlist_from_source(path: Path, *, max_bytes: int = 5_000_000) -> List[str]:
+    """
+    Load words from either text/markdown or PDF.
+
+    For PDFs we prefer `pdftotext` (if available) to extract readable words. If that fails,
+    fall back to scanning the raw bytes for Latin-ish tokens (may be noisy).
+    """
+    suffix = path.suffix.lower()
+    if suffix != ".pdf":
+        return _load_wordlist_from_text_file(path, max_bytes=max_bytes)
+
+    pdftotext = shutil.which("pdftotext")
+    if pdftotext:
+        fd, out_path_s = tempfile.mkstemp(prefix="eps_godel_", suffix=".txt")
+        try:
+            os_handle = None
+            try:
+                os_handle = fd
+            finally:
+                try:
+                    # Close the fd; pdftotext will write by path.
+                    import os as _os
+
+                    _os.close(fd)
+                except Exception:
+                    pass
+            out_path = Path(out_path_s)
+            # Extract first 100 pages max (user asked "100 pages is fine").
+            proc = subprocess.run(
+                [pdftotext, "-f", "1", "-l", "100", str(path), str(out_path)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+            if proc.returncode == 0 and out_path.is_file():
+                return _load_wordlist_from_text_file(out_path, max_bytes=max_bytes)
+        except Exception:
+            pass
+        finally:
+            try:
+                Path(out_path_s).unlink(missing_ok=True)
+            except Exception:
+                pass
+
+    # Fallback: brute scan PDF bytes (often low quality, but better than nothing).
+    try:
+        data = path.read_bytes()
+    except Exception:
+        return []
+    if len(data) > int(max_bytes):
+        data = data[: int(max_bytes)]
+    text = data.decode("latin-1", errors="ignore")
+    words = re.findall(r"[A-Za-zÀ-ÖØ-öø-ÿ]+", text)
+    return [w for w in words if 2 <= len(w) <= 18]
+
+
 def _resolve_godel_source(path_s: str) -> Optional[Path]:
     """
     Accept either a file path or a directory.
@@ -247,7 +306,7 @@ def _resolve_godel_source(path_s: str) -> Optional[Path]:
     if not p.is_dir():
         return None
 
-    exts = {".txt", ".md", ".markdown"}
+    exts = {".txt", ".md", ".markdown", ".pdf"}
     candidates: List[Path] = []
     # Keep it bounded; this is used at app start.
     for fp in p.rglob("*"):
@@ -273,6 +332,8 @@ def _resolve_godel_source(path_s: str) -> Optional[Path]:
         name_l = fp.name.lower()
         if fp.suffix.lower() == ".txt":
             s += 10
+        if fp.suffix.lower() == ".pdf":
+            s += 8
         if "set" in name_l or "sets" in name_l or "theory" in name_l:
             s += 5
         try:
@@ -650,18 +711,26 @@ def _action_stamp(state: AppState, stdscr) -> None:
         write_seed = _prompt_bool("(EPS) write seed files (chmod 600)", default=False) if derive_seed else False
         print_seed = _prompt_bool("(EPS) print seed to stdout", default=False) if derive_seed else False
 
-        res = stamp_pack(
-            input_dir=input_dir,
-            out_dir=out_dir,
-            pack_id=pack_id,
-            notes=notes,
-            created_at_utc=created_at,
-            include_hidden=include_hidden,
-            zip_pack=zip_pack,
-            derive_seed=derive_seed,
-            write_seed_files=write_seed,
-            print_seed=print_seed,
-        )
+        try:
+            res = stamp_pack(
+                input_dir=input_dir,
+                out_dir=out_dir,
+                pack_id=pack_id,
+                notes=notes,
+                created_at_utc=created_at,
+                include_hidden=include_hidden,
+                zip_pack=zip_pack,
+                derive_seed=derive_seed,
+                write_seed_files=write_seed,
+                print_seed=print_seed,
+            )
+        except Exception as exc:
+            print("")
+            print("stamp_failed")
+            print(f"- {exc}")
+            state.log_lines = ["Stamp failed.", f"- {exc}"]
+            state.status = "Failed."
+            return
         print("")
         print(f"pack_dir: {res.pack_dir}")
         print(f"entropy_root_sha256: {res.root_sha256}")
@@ -683,7 +752,15 @@ def _action_verify(state: AppState, stdscr) -> None:
     def run() -> None:
         print("(EPS) Verify Pack")
         pack = Path(input("(EPS) pack path (dir or .zip): ").strip() or ".").expanduser()
-        res = verify_pack(pack)
+        try:
+            res = verify_pack(pack)
+        except Exception as exc:
+            print("")
+            print("verify_failed")
+            print(f"- {exc}")
+            state.log_lines = ["Verify failed.", f"- {exc}"]
+            state.status = "Failed."
+            return
         if res.ok:
             print("ok")
             print(f"entropy_root_sha256: {res.root_sha256}")
@@ -789,7 +866,7 @@ def run_tui(stdscr, *, insane: bool = False, godel_source: Optional[str] = None)
                 # Make misconfiguration visible; don't silently fall back.
                 state.godel_phrase = "NO GODEL SOURCE"
             else:
-                words = _load_wordlist_from_text_file(src, max_bytes=5_000_000)
+                words = _load_wordlist_from_source(src, max_bytes=5_000_000)
                 state.godel_words = words
                 if words:
                     _update_godel_phrase(state, min_interval_ticks=0)
