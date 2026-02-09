@@ -279,6 +279,9 @@ class AppState:
     drop_flash_ticks: int = 0
     drop_paste_buf: str = ""
     drop_paste_last_ns: int = 0
+    drop_import_count: int = 0
+    drop_last_msgs: List[str] = field(default_factory=list)
+    drop_last_msgs_ticks: int = 0
     focus: str = "menu"  # "menu" | "entropy"
     reward_ticks: int = 0
     menu: List[str] = field(
@@ -546,6 +549,15 @@ def _apply_drop_paths(state: AppState, paths: Sequence[str]) -> List[str]:
     return msgs
 
 
+def _count_drop_success(msgs: Sequence[str]) -> int:
+    n = 0
+    for m in msgs:
+        ml = (m or "").lower()
+        if ml.startswith("photo source added:") or ml.startswith("text source added:") or ml.startswith("input dir set:"):
+            n += 1
+    return n
+
+
 def _dropzone_preview(state: AppState, *, width: int, height: int) -> List[str]:
     d = state.drop_dir
     have = len(state.drop_seen)
@@ -572,10 +584,16 @@ def _dropzone_preview(state: AppState, *, width: int, height: int) -> List[str]:
     lines.append("")
     if state.last_input_dir is not None:
         lines.append(f"Current default input dir: {state.last_input_dir}")
+    lines.append(f"Drop imports this run: {state.drop_import_count}")
     lines.append(f"Seen drop items this run: {have}")
     if state.drop_paste_buf:
         buf = state.drop_paste_buf.replace("\n", " ")[: max(0, width - 20)]
         lines.append(f"Buffered paste: {buf}")
+    if state.drop_last_msgs and state.drop_last_msgs_ticks > 0:
+        lines.append("")
+        lines.append("Last import:")
+        for m in state.drop_last_msgs[:3]:
+            lines.append(f"- {m}")
     lines.append("Tip: Use Tab/Up/Down to navigate; q jumps to Quit, Enter quits.")
 
     # Draw a big landing box.
@@ -637,10 +655,11 @@ def _poll_drop_dir(state: AppState) -> None:
         state.drop_seen.add(key)
 
         msgs = _apply_drop_paths(state, [str(p)])
-        if msgs:
-            state.status = "Drop imported."
-            # Keep logs short; Drop Zone should not "teleport" the user to a different context.
-            state.log_lines = msgs[:8]
+        ok = _count_drop_success(msgs)
+        if ok > 0:
+            state.drop_import_count += ok
+            state.drop_last_msgs = msgs[:3]
+            state.drop_last_msgs_ticks = 40
             state.drop_flash_ticks = 10
             changed = True
 
@@ -1339,7 +1358,7 @@ def _draw_insane_right_pane(stdscr, state: AppState, top: int, left_w: int, cols
     elif label == "Quit":
         preview = ["Exit."]
 
-    if state.log_lines:
+    if state.log_lines and label not in ("Drop Zone", "Entropy Sources"):
         preview = state.log_lines[-(body_h - 1) :]
 
     for i in range(body_h):
@@ -1349,7 +1368,14 @@ def _draw_insane_right_pane(stdscr, state: AppState, top: int, left_w: int, cols
     for i in range(body_h):
         y = top + i
         line = preview[i] if i < len(preview) else ""
-        attr = state.palette.text if i % 2 == 0 else _cycle(state.palette.bg, state.tick + i, speed=4, default=state.palette.text)
+        if label == "Drop Zone":
+            is_box = ("╔" in line) or ("╚" in line) or line.strip().startswith("║") or ("DROP HERE" in line) or ("IMPORTED" in line)
+            if state.drop_flash_ticks > 0 and is_box:
+                attr = state.palette.ok | curses.A_BOLD
+            else:
+                attr = state.palette.text
+        else:
+            attr = state.palette.text if i % 2 == 0 else _cycle(state.palette.bg, state.tick + i, speed=4, default=state.palette.text)
         safe_addstr(stdscr, y, right_x, line[:right_w].ljust(right_w), attr)
 
 
@@ -1445,7 +1471,7 @@ def _draw_right_pane(stdscr, state: AppState, top: int, left_w: int, cols: int, 
         preview = ["Exit EPS."]
 
     # If we have log output, show it instead of the generic preview.
-    if state.log_lines:
+    if state.log_lines and label not in ("Drop Zone", "Entropy Sources"):
         preview = state.log_lines[-(body_h - 1) :]
 
     for i in range(body_h):
@@ -2069,11 +2095,12 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
                 state.drop_paste_last_ns = 0
                 if paths:
                     msgs = _apply_drop_paths(state, paths)
-                    state.status = "Drop imported."
-                    state.log_lines = msgs[:10]
-                    state.drop_flash_ticks = 10
-                else:
-                    state.status = "Ready."
+                    ok = _count_drop_success(msgs)
+                    if ok > 0:
+                        state.drop_import_count += ok
+                        state.drop_last_msgs = msgs[:3]
+                        state.drop_last_msgs_ticks = 40
+                        state.drop_flash_ticks = 10
                 return True
             # Provide a focused "landing zone" input. If the user drags a folder into the terminal,
             # many terminals will paste the path into this field.
@@ -2083,9 +2110,12 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
                 state.status = "Ready."
                 return True
             msgs = _apply_drop_paths(state, paths)
-            state.status = "Drop imported." if any(("added" in m.lower() or "set" in m.lower()) for m in msgs) else "Failed."
-            state.log_lines = msgs[:20]
-            state.drop_flash_ticks = 10 if msgs else 0
+            ok = _count_drop_success(msgs)
+            if ok > 0:
+                state.drop_import_count += ok
+                state.drop_last_msgs = msgs[:3]
+                state.drop_last_msgs_ticks = 40
+                state.drop_flash_ticks = 10
             return True
         # Do not swallow other keys; Up/Down should still navigate the menu.
 
@@ -2206,6 +2236,10 @@ def run_tui(stdscr, *, insane: bool = False, godel_source: Optional[str] = None)
             state.reward_ticks -= 1
         if state.drop_flash_ticks > 0:
             state.drop_flash_ticks -= 1
+        if state.drop_last_msgs_ticks > 0:
+            state.drop_last_msgs_ticks -= 1
+            if state.drop_last_msgs_ticks == 0:
+                state.drop_last_msgs = []
         # If user drag-dropped a path into the terminal while on Drop Zone, it likely arrived as a fast paste
         # stream. Auto-commit after a short idle gap.
         if state.drop_paste_buf and state.drop_paste_last_ns:
@@ -2215,9 +2249,11 @@ def run_tui(stdscr, *, insane: bool = False, godel_source: Optional[str] = None)
                 state.drop_paste_last_ns = 0
                 if paths:
                     msgs = _apply_drop_paths(state, paths)
-                    if msgs:
-                        state.status = "Drop imported."
-                        state.log_lines = msgs[:10]
+                    ok = _count_drop_success(msgs)
+                    if ok > 0:
+                        state.drop_import_count += ok
+                        state.drop_last_msgs = msgs[:3]
+                        state.drop_last_msgs_ticks = 40
                         state.drop_flash_ticks = 10
         # Poll the filesystem landing zone occasionally (not every tick) to stay cheap.
         if state.tick % 4 == 0:
