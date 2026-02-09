@@ -271,7 +271,8 @@ class AppState:
     last_pack_dir: Optional[Path] = None
     last_out_dir: Optional[Path] = None
     last_input_dir: Optional[Path] = None
-    drop_dir: Path = field(default_factory=lambda: Path(tempfile.gettempdir()) / "eps_drop")
+    # Use a stable, user-visible folder by default (inside the repo).
+    drop_dir: Path = field(default_factory=lambda: _REPO_ROOT / "eps_drop")
     drop_seen: set[str] = field(default_factory=set)
     focus: str = "menu"  # "menu" | "entropy"
     reward_ticks: int = 0
@@ -474,6 +475,21 @@ def _clean_dropped_path(s: str) -> str:
     return v.strip()
 
 
+def _split_drop_payload(s: str) -> List[str]:
+    """
+    Some terminals paste multiple drop paths separated by newlines.
+    Return cleaned, non-empty entries.
+    """
+    raw = (s or "").replace("\r\n", "\n").replace("\r", "\n")
+    parts = [p for p in raw.split("\n") if p.strip()]
+    out: List[str] = []
+    for p in parts:
+        c = _clean_dropped_path(p)
+        if c:
+            out.append(c)
+    return out
+
+
 def _dropzone_preview(state: AppState, *, width: int, height: int) -> List[str]:
     d = state.drop_dir
     have = len(state.drop_seen)
@@ -485,7 +501,7 @@ def _dropzone_preview(state: AppState, *, width: int, height: int) -> List[str]:
     lines.append("   Most macOS terminals will paste the absolute path for you.")
     lines.append("")
     lines.append("2) Finder drop folder (deterministic):")
-    lines.append(f"   Drop items into: {d}")
+    lines.append(f"   Drop items into: {d.resolve() if d.exists() else d}")
     lines.append("   EPS will auto-detect new items and import them.")
     lines.append("")
     lines.append("Auto-import rules:")
@@ -538,6 +554,8 @@ def _poll_drop_dir(state: AppState) -> None:
 
     changed = False
     for p in items:
+        if p.name in (".DS_Store",):
+            continue
         try:
             key = str(p.resolve())
         except Exception:
@@ -1486,7 +1504,9 @@ def _prompt_str_curses(stdscr, label: str, *, default: str = "", max_len: int = 
         pass
     curses.echo()
     try:
-        raw = stdscr.getstr(y, min(len(prompt), max(0, cols - 1)), min(max_len, max(1, cols - len(prompt) - 1)))
+        # Allow long paste (e.g. drag-dropped absolute paths). ncurses will scroll horizontally;
+        # constraining to screen width truncates paths and makes drop feel "broken".
+        raw = stdscr.getstr(y, min(len(prompt), max(0, cols - 1)), int(max_len))
     finally:
         curses.noecho()
         try:
@@ -1998,35 +2018,52 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
         if ch in (curses.KEY_ENTER, 10, 13):
             # Provide a focused "landing zone" input. If the user drags a folder into the terminal,
             # many terminals will paste the path into this field.
-            raw = _prompt_str_curses(stdscr, "(EPS) drop path", default=str(state.last_input_dir or ""))
-            v = _clean_dropped_path(raw)
-            if not v:
+            raw = _prompt_str_curses(stdscr, "(EPS) drop path(s)", default=str(state.last_input_dir or ""), max_len=4096)
+            paths = _split_drop_payload(raw)
+            if not paths:
                 state.status = "Ready."
                 return True
-            p = Path(v).expanduser()
-            if p.exists() and p.is_dir():
-                state.last_input_dir = p.resolve()
-                state.status = "Done."
-                state.log_lines = [f"Input dir set from drop: {state.last_input_dir}"]
-            elif p.exists() and p.is_file() and _is_image_path(p):
-                # Treat as a single photo source.
-                try:
-                    sha, size = _sha256_hex_path(p, max_bytes=100 * 1024 * 1024)
-                    dims = _identify_image_dims(p)
-                    meta: Dict[str, object] = {}
-                    if dims:
-                        meta["dims"] = dims
-                    state.entropy_sources.append(
-                        EntropySource(kind="photo", name=p.name, sha256=sha, size_bytes=size, meta=meta, path=p)
-                    )
-                    state.status = "Done."
-                    state.log_lines = [f"Added photo source from drop: {p.name}"]
-                except Exception as exc:
-                    state.status = "Failed."
-                    state.log_lines = [f"Drop add failed: {exc}"]
-            else:
-                state.status = "Failed."
-                state.log_lines = [f"Drop path not usable: {p}"]
+            msgs: List[str] = []
+            for v in paths:
+                p = Path(v).expanduser()
+                if p.exists() and p.is_dir():
+                    state.last_input_dir = p.resolve()
+                    msgs.append(f"Input dir set: {state.last_input_dir}")
+                    continue
+                if p.exists() and p.is_file() and _is_image_path(p):
+                    try:
+                        sha, size = _sha256_hex_path(p, max_bytes=100 * 1024 * 1024)
+                        dims = _identify_image_dims(p)
+                        meta: Dict[str, object] = {}
+                        if dims:
+                            meta["dims"] = dims
+                        state.entropy_sources.append(
+                            EntropySource(kind="photo", name=p.name, sha256=sha, size_bytes=size, meta=meta, path=p)
+                        )
+                        msgs.append(f"Photo source added: {p.name}")
+                        continue
+                    except Exception as exc:
+                        msgs.append(f"Photo add failed: {p.name}: {exc}")
+                        continue
+                if p.exists() and p.is_file() and p.suffix.lower() in (".txt", ".md", ".markdown"):
+                    try:
+                        data = p.read_bytes()
+                        if len(data) > 2_000_000:
+                            data = data[:2_000_000]
+                        txt = data.decode("utf-8", errors="ignore")
+                        sha = hashlib.sha256(txt.encode("utf-8", errors="ignore")).hexdigest()
+                        state.entropy_sources.append(
+                            EntropySource(kind="text", name=p.name, sha256=sha, size_bytes=len(txt.encode("utf-8")), text=txt)
+                        )
+                        msgs.append(f"Text source added: {p.name}")
+                        continue
+                    except Exception as exc:
+                        msgs.append(f"Text add failed: {p.name}: {exc}")
+                        continue
+                msgs.append(f"Not usable: {p}")
+
+            state.status = "Done." if any(("added" in m.lower() or "set" in m.lower()) for m in msgs) else "Failed."
+            state.log_lines = msgs[:60]
             return True
         return True
 
