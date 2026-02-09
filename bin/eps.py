@@ -23,11 +23,13 @@ import json
 import os
 import re
 import shutil
+import shlex
 import stat
 import subprocess
 import sys
 import tempfile
 import time
+import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
@@ -475,6 +477,10 @@ def _clean_dropped_path(s: str) -> str:
     if v.startswith("file://"):
         # Finder may paste file:// URLs in some contexts.
         v = v[len("file://") :]
+        try:
+            v = urllib.parse.unquote(v)
+        except Exception:
+            pass
     # Strip matching quotes.
     if (v.startswith("'") and v.endswith("'")) or (v.startswith('"') and v.endswith('"')):
         v = v[1:-1]
@@ -483,18 +489,28 @@ def _clean_dropped_path(s: str) -> str:
     return v.strip()
 
 
-def _split_drop_payload(s: str) -> List[str]:
+def _split_drop_payload(s: str, *, max_paths: int = 7) -> List[str]:
     """
-    Some terminals paste multiple drop paths separated by newlines.
-    Return cleaned, non-empty entries.
+    Some terminals paste multiple drop paths separated by whitespace (or newlines).
+    Return cleaned, non-empty entries, capped to `max_paths`.
     """
-    raw = (s or "").replace("\r\n", "\n").replace("\r", "\n")
-    parts = [p for p in raw.split("\n") if p.strip()]
+    raw = (s or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not raw:
+        return []
+    # Normalize to whitespace and parse like a shell would (handles quotes and backslash escapes).
+    raw_ws = raw.replace("\n", " ")
+    parts: List[str]
+    try:
+        parts = shlex.split(raw_ws, posix=True)
+    except Exception:
+        parts = [p for p in raw.split("\n") if p.strip()]
     out: List[str] = []
     for p in parts:
         c = _clean_dropped_path(p)
         if c:
             out.append(c)
+        if len(out) >= int(max_paths):
+            break
     return out
 
 
@@ -567,6 +583,7 @@ def _dropzone_preview(state: AppState, *, width: int, height: int) -> List[str]:
     lines.append("1) Terminal drag-drop (best effort):")
     lines.append("   Press Enter to open a big path field, then drag a folder/file into the terminal.")
     lines.append("   Most macOS terminals will paste the absolute path for you.")
+    lines.append("   Supports dropping up to 7 paths per burst.")
     lines.append("")
     lines.append("2) Finder drop folder (deterministic):")
     lines.append(f"   Drop items into: {d.resolve() if d.exists() else d}")
@@ -643,6 +660,7 @@ def _poll_drop_dir(state: AppState) -> None:
     state.drop_last_names = names[:10]
 
     changed = False
+    imported_this_poll = 0
     for p in items:
         if p.name in (".DS_Store",):
             continue
@@ -662,6 +680,10 @@ def _poll_drop_dir(state: AppState) -> None:
             state.drop_last_msgs_ticks = 40
             state.drop_flash_ticks = 10
             changed = True
+            imported_this_poll += ok
+            # Keep the UI responsive if the user drops a ton of files.
+            if imported_this_poll >= 7:
+                break
 
     if changed:
         # Keep selection in bounds if list grew/shrank.
@@ -2104,9 +2126,17 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
             state.drop_paste_last_ns = time.monotonic_ns()
             return True
         if ch in (curses.KEY_ENTER, 10, 13):
+            # If a paste stream includes a newline, treat it as part of the payload (multiple paths)
+            # instead of committing immediately.
+            if state.drop_paste_buf and state.drop_paste_last_ns:
+                now = time.monotonic_ns()
+                if (now - int(state.drop_paste_last_ns)) < 75_000_000:  # 75ms
+                    state.drop_paste_buf += "\n"
+                    state.drop_paste_last_ns = now
+                    return True
             # If we already have buffered paste, commit it immediately.
             if state.drop_paste_buf:
-                paths = _split_drop_payload(state.drop_paste_buf)
+                paths = _split_drop_payload(state.drop_paste_buf, max_paths=7)
                 state.drop_paste_buf = ""
                 state.drop_paste_last_ns = 0
                 if paths:
@@ -2121,7 +2151,7 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
             # Provide a focused "landing zone" input. If the user drags a folder into the terminal,
             # many terminals will paste the path into this field.
             raw = _prompt_str_curses(stdscr, "(EPS) drop path(s)", default=str(state.last_input_dir or ""), max_len=4096)
-            paths = _split_drop_payload(raw)
+            paths = _split_drop_payload(raw, max_paths=7)
             if not paths:
                 state.status = "Ready."
                 return True
@@ -2260,7 +2290,7 @@ def run_tui(stdscr, *, insane: bool = False, godel_source: Optional[str] = None)
         # stream. Auto-commit after a short idle gap.
         if state.drop_paste_buf and state.drop_paste_last_ns:
             if (time.monotonic_ns() - int(state.drop_paste_last_ns)) > 300_000_000:  # 300ms
-                paths = _split_drop_payload(state.drop_paste_buf)
+                paths = _split_drop_payload(state.drop_paste_buf, max_paths=7)
                 state.drop_paste_buf = ""
                 state.drop_paste_last_ns = 0
                 if paths:
