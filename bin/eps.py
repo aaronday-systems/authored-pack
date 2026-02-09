@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import curses
+import re
 import sys
 import time
 from dataclasses import dataclass, field
@@ -178,6 +179,9 @@ class AppState:
     insane: bool = False
     palette: Optional[InsanePalette] = None
     tick: int = 0
+    godel_words: List[str] = field(default_factory=list)
+    godel_phrase: str = ""
+    godel_last_tick: int = 0
     menu: List[str] = field(
         default_factory=lambda: [
             "Stamp Pack",
@@ -203,6 +207,45 @@ def _cycle(items: Sequence[int], tick: int, *, speed: int = 2, default: int = 0)
         return default
     idx = (int(tick) // max(1, int(speed))) % len(items)
     return int(items[idx])
+
+
+def _load_wordlist_from_text_file(path: Path, *, max_bytes: int = 5_000_000) -> List[str]:
+    """
+    Best-effort word extraction for the insane header. This intentionally does not preserve
+    punctuation; it exists only to generate short flashing tags.
+    """
+    try:
+        data = path.read_bytes()
+    except Exception:
+        return []
+    if len(data) > int(max_bytes):
+        data = data[: int(max_bytes)]
+    try:
+        text = data.decode("utf-8", errors="ignore")
+    except Exception:
+        return []
+    # Accept common Latin letters including diacritics (covers "Gödel" in many encodings).
+    words = re.findall(r"[A-Za-zÀ-ÖØ-öø-ÿ]+", text)
+    # Keep only moderately-sized tokens so the header doesn't explode.
+    out = [w for w in words if 2 <= len(w) <= 18]
+    return out
+
+
+def _update_godel_phrase(state: AppState, *, min_interval_ticks: int = 6) -> None:
+    if not state.godel_words:
+        return
+    if state.tick - state.godel_last_tick < int(min_interval_ticks):
+        return
+    state.godel_last_tick = state.tick
+
+    # Pseudo-random selection driven by monotonic time; "insane" mode is allowed to be non-deterministic.
+    t = time.monotonic_ns()
+    n_words = 1 + int((t >> 7) % 3)  # 1..3
+    start = int((t ^ (state.tick << 16)) % len(state.godel_words))
+    chosen: List[str] = []
+    for i in range(n_words):
+        chosen.append(state.godel_words[(start + i) % len(state.godel_words)])
+    state.godel_phrase = " ".join(chosen)
 
 
 def _read_text_lines(path: Path, limit: int = 2000) -> List[str]:
@@ -258,8 +301,10 @@ def _draw_insane_header(stdscr, state: AppState, cols: int) -> None:
     head_attr = _cycle(state.palette.header, state.tick, speed=1, default=state.palette.text)
     safe_addstr(stdscr, 0, 0, (" " * cols), head_attr)
 
+    _update_godel_phrase(state)
     phase = int(time.monotonic() * 8) % 4
-    tag = ["NEON", "RAVE", "GLITCH", "HOT"][phase]
+    fallback = ["NEON", "RAVE", "GLITCH", "HOT"][phase]
+    tag = state.godel_phrase or fallback
     title = f" {tag} // {APP_NAME} {APP_VERSION} "
     safe_addstr(stdscr, 0, 0, title[:cols].ljust(cols), head_attr)
 
@@ -664,7 +709,7 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
     return True
 
 
-def run_tui(stdscr, *, insane: bool = False) -> None:
+def run_tui(stdscr, *, insane: bool = False, godel_source: Optional[str] = None) -> None:
     try:
         curses.curs_set(0)
     except curses.error:
@@ -677,6 +722,13 @@ def run_tui(stdscr, *, insane: bool = False) -> None:
     theme = init_theme()
     pal = init_insane_palette() if insane else None
     state = AppState(theme=theme, insane=bool(insane), palette=pal, tick=0)
+    if insane:
+        src = (godel_source or "").strip()
+        if src:
+            words = _load_wordlist_from_text_file(Path(src).expanduser(), max_bytes=5_000_000)
+            state.godel_words = words
+            if words:
+                _update_godel_phrase(state, min_interval_ticks=0)
 
     stdscr.keypad(True)
     stdscr.nodelay(False)
@@ -699,8 +751,9 @@ def run_tui(stdscr, *, insane: bool = False) -> None:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     p = argparse.ArgumentParser(prog="eps-tui")
     p.add_argument("--insane", action="store_true", help="Enable non-conforming neon TUI skin")
+    p.add_argument("--godel-source", default=None, help="Path to a text/markdown file to sample header words from (insane mode)")
     ns = p.parse_args(list(argv) if argv is not None else None)
-    curses.wrapper(lambda stdscr: run_tui(stdscr, insane=bool(ns.insane)))
+    curses.wrapper(lambda stdscr: run_tui(stdscr, insane=bool(ns.insane), godel_source=ns.godel_source))
     return 0
 
 
