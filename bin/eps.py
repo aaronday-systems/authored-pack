@@ -309,6 +309,144 @@ def _load_wordlist_from_text_file(path: Path, *, max_bytes: int = 5_000_000) -> 
     return out
 
 
+_EN_WORDS: Optional[set[str]] = None
+
+
+def _load_english_words() -> set[str]:
+    """
+    Best-effort English dictionary set from macOS word lists.
+    This is intentionally light: it exists only to filter OCR garbage in the insane header.
+    """
+    global _EN_WORDS
+    if _EN_WORDS is not None:
+        return _EN_WORDS
+    candidates = [
+        Path("/Library/Spelling/web2"),
+        Path("/Library/Spelling/words"),
+        Path("/usr/share/dict/words"),
+    ]
+    words: set[str] = set()
+    for p in candidates:
+        try:
+            if not p.is_file():
+                continue
+        except OSError:
+            continue
+        try:
+            raw = p.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+        for line in raw.splitlines():
+            w = line.strip()
+            if not w or w.startswith("#"):
+                continue
+            if "'" in w or "-" in w:
+                continue
+            if not w.isalpha():
+                continue
+            if 3 <= len(w) <= 22:
+                words.add(w.lower())
+        if len(words) >= 50_000:
+            break
+    _EN_WORDS = words
+    return words
+
+
+_DE_STOP = {
+    "der",
+    "die",
+    "das",
+    "und",
+    "nicht",
+    "ist",
+    "sein",
+    "sind",
+    "mit",
+    "für",
+    "auf",
+    "aus",
+    "als",
+    "auch",
+    "eine",
+    "einer",
+    "eines",
+    "dem",
+    "den",
+    "des",
+    "im",
+    "in",
+    "zu",
+    "von",
+    "oder",
+    "dass",
+}
+
+_EN_SHORT_OK = {
+    # Allow a small set of common short words; 3-letter OCR tokens are otherwise too noisy.
+    "and",
+    "are",
+    "but",
+    "can",
+    "for",
+    "not",
+    "set",
+    "the",
+    "was",
+    "with",
+}
+
+
+def _looks_german(word: str) -> bool:
+    w = word.lower()
+    if w in _DE_STOP:
+        return True
+    if any(c in w for c in ("ä", "ö", "ü", "ß")):
+        return True
+    # Common German morphological tails.
+    suffixes = (
+        "ung",
+        "keit",
+        "heit",
+        "lich",
+        "isch",
+        "schaft",
+        "tion",
+        "ismus",
+        "ieren",
+        "chen",
+        "lein",
+    )
+    if len(w) >= 6 and w.endswith(suffixes):
+        return True
+    # A few high-signal trigrams.
+    if "sch" in w and len(w) >= 5:
+        return True
+    return False
+
+
+def _filter_words_en_de(words: List[str]) -> List[str]:
+    en = _load_english_words()
+    out: List[str] = []
+    seen: set[str] = set()
+    for w in words:
+        wl = w.lower()
+        is_en = wl in en
+        is_de = _looks_german(w)
+        if not (is_en or is_de):
+            continue
+        # Guardrail: 3-letter OCR tokens are often fragments; only keep a tiny allowlist.
+        if len(wl) == 3 and is_en and wl not in _EN_SHORT_OK:
+            continue
+        if len(wl) < 3 or len(wl) > 22:
+            continue
+        if wl in seen:
+            continue
+        seen.add(wl)
+        # Header rendering prefers stable lowercase to avoid OCR SHOUTING.
+        out.append(wl)
+    return out
+
+
 def _load_wordlist_from_source(path: Path, *, max_bytes: int = 5_000_000) -> List[str]:
     """
     Load words from either text/markdown or PDF.
@@ -322,7 +460,7 @@ def _load_wordlist_from_source(path: Path, *, max_bytes: int = 5_000_000) -> Lis
 
     # Cache: avoid re-OCR/parsing every run.
     # Key is sha256 of the PDF bytes (small enough here; also robust against renames).
-    cache_dir = Path("/tmp/eps_godel_cache")
+    cache_dir = Path(tempfile.gettempdir()) / "eps_godel_cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
     try:
         pdf_bytes = path.read_bytes()
@@ -330,9 +468,25 @@ def _load_wordlist_from_source(path: Path, *, max_bytes: int = 5_000_000) -> Lis
         pdf_bytes = b""
     cache_key = hashlib.sha256(pdf_bytes).hexdigest() if pdf_bytes else ""
     cache_txt = cache_dir / f"{cache_key}.txt" if cache_key else None
+    # Versioned words cache so we can tighten filters without getting stuck on old noisy caches.
+    cache_words = cache_dir / f"{cache_key}.words.v2.txt" if cache_key else None
+    if cache_words is not None and cache_words.is_file():
+        try:
+            cached = [ln.strip() for ln in cache_words.read_text(encoding="utf-8", errors="ignore").splitlines()]
+            cached = [w for w in cached if w]
+            if len(cached) >= 10:
+                return cached
+        except Exception:
+            pass
     if cache_txt is not None and cache_txt.is_file():
         words = _load_wordlist_from_text_file(cache_txt, max_bytes=max_bytes)
-        if len(words) >= 20:
+        words = _filter_words_en_de(words)
+        if len(words) >= 10:
+            if cache_words is not None:
+                try:
+                    cache_words.write_text("\n".join(words[:5000]) + "\n", encoding="utf-8")
+                except Exception:
+                    pass
             return words
 
     pdftotext = shutil.which("pdftotext")
@@ -357,10 +511,17 @@ def _load_wordlist_from_source(path: Path, *, max_bytes: int = 5_000_000) -> Lis
             )
             if proc.returncode == 0 and out_path.is_file():
                 words = _load_wordlist_from_text_file(out_path, max_bytes=max_bytes)
-                if len(words) >= 50:
+                # Some PDFs have sparse text layers; we only need a small bank of usable tokens.
+                words = _filter_words_en_de(words)
+                if len(words) >= 10:
                     if cache_txt is not None:
                         try:
                             cache_txt.write_text(out_path.read_text(encoding="utf-8", errors="ignore"), encoding="utf-8")
+                        except Exception:
+                            pass
+                    if cache_words is not None and words:
+                        try:
+                            cache_words.write_text("\n".join(words[:5000]) + "\n", encoding="utf-8")
                         except Exception:
                             pass
                     return words
@@ -375,6 +536,7 @@ def _load_wordlist_from_source(path: Path, *, max_bytes: int = 5_000_000) -> Lis
     # If the PDF has no text layer (common for scans), fall back to OCR.
     pdftoppm = shutil.which("pdftoppm")
     tesseract = shutil.which("tesseract")
+    magick = shutil.which("magick")
     if pdftoppm and tesseract:
         try:
             langs = "eng"
@@ -388,8 +550,9 @@ def _load_wordlist_from_source(path: Path, *, max_bytes: int = 5_000_000) -> Lis
 
             with tempfile.TemporaryDirectory(prefix="eps_godel_ocr_") as td:
                 out_prefix = str(Path(td) / "page")
-                pages = 8
-                dpi = 200
+                # Heavier first-run OCR is ok since we cache results.
+                pages = 12
+                dpi = 300
                 subprocess.run(
                     [pdftoppm, "-f", "1", "-l", str(pages), "-r", str(dpi), "-png", str(path), out_prefix],
                     stdout=subprocess.DEVNULL,
@@ -401,8 +564,34 @@ def _load_wordlist_from_source(path: Path, *, max_bytes: int = 5_000_000) -> Lis
                 ocr_text_parts: List[str] = []
                 for img in sorted(Path(td).glob("page-*.png")):
                     try:
+                        img_for_ocr = img
+                        # Optional preprocessing: improves OCR on scans (grayscale + normalize + threshold).
+                        if magick:
+                            pre = img.with_name(img.stem + ".pre.png")
+                            subprocess.run(
+                                [
+                                    magick,
+                                    str(img),
+                                    "-colorspace",
+                                    "Gray",
+                                    "-auto-level",
+                                    "-contrast-stretch",
+                                    "0.5%x0.5%",
+                                    "-sharpen",
+                                    "0x1",
+                                    "-threshold",
+                                    "60%",
+                                    str(pre),
+                                ],
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                                check=False,
+                                timeout=20,
+                            )
+                            if pre.is_file():
+                                img_for_ocr = pre
                         proc = subprocess.run(
-                            [tesseract, str(img), "stdout", "-l", langs, "--psm", "6"],
+                            [tesseract, str(img_for_ocr), "stdout", "-l", langs, "--oem", "1", "--psm", "6"],
                             capture_output=True,
                             text=True,
                             check=False,
@@ -414,17 +603,29 @@ def _load_wordlist_from_source(path: Path, *, max_bytes: int = 5_000_000) -> Lis
                         if ocr_text:
                             ocr_text_parts.append(ocr_text)
                         chunk_words = re.findall(r"[A-Za-zÀ-ÖØ-öø-ÿ]+", ocr_text)
-                        words.extend([w for w in chunk_words if 3 <= len(w) <= 22 and any(c in "aeiouyäöüAEIOUYÄÖÜ" for c in w)])
+                        words.extend(
+                            [
+                                w
+                                for w in chunk_words
+                                if 3 <= len(w) <= 22 and any(c in "aeiouyäöüAEIOUYÄÖÜ" for c in w)
+                            ]
+                        )
                         if len(words) >= 800:
                             break
                     except Exception:
                         continue
-                if len(words) >= 20:
-                    if cache_txt is not None and ocr_text_parts:
-                        try:
-                            cache_txt.write_text("\n".join(ocr_text_parts), encoding="utf-8")
-                        except Exception:
-                            pass
+                if cache_txt is not None and ocr_text_parts:
+                    try:
+                        cache_txt.write_text("\n".join(ocr_text_parts), encoding="utf-8")
+                    except Exception:
+                        pass
+                words = _filter_words_en_de(words)
+                if cache_words is not None and words:
+                    try:
+                        cache_words.write_text("\n".join(words[:5000]) + "\n", encoding="utf-8")
+                    except Exception:
+                        pass
+                if len(words) >= 10:
                     return words
         except Exception:
             pass
@@ -564,9 +765,10 @@ def _draw_insane_background(stdscr, state: AppState, rows: int, cols: int) -> No
     if not bg:
         return
 
-    seg = 22 if cols >= 140 else (18 if cols >= 120 else 12)
-    wobble = 9 + ((state.tick // 13) % 17)  # longer loop
+    seg = 26 if cols >= 160 else (22 if cols >= 140 else (18 if cols >= 120 else 12))
+    wobble = 11 + ((state.tick // 11) % 29)  # longer loop
     direction = 1 if ((state.tick // 60) % 2 == 0) else -1
+    ch_bank = [" ", "░", "▒", "▓"]
 
     for y in range(rows):
         # Big horizontal banding (moves up/down over time).
@@ -580,7 +782,9 @@ def _draw_insane_background(stdscr, state: AppState, rows: int, cols: int) -> No
             jitter = ((row_seed >> (x % 13)) & 0x3) - 1  # -1..2
             run = max(6, min(seg + jitter, cols - x))
             idx = (band + (x // seg) + ((row_seed >> 8) & 0xF)) % len(bg)
-            safe_addstr(stdscr, y, x, (" " * run), bg[idx])
+            # Occasionally fill with grain characters instead of spaces to amplify the "video noise" look.
+            ch = ch_bank[(row_seed >> (x % 17)) & 0x3]
+            safe_addstr(stdscr, y, x, (ch * run), bg[idx])
             x += run
 
         # Occasional tear bars.
@@ -593,6 +797,12 @@ def _draw_insane_background(stdscr, state: AppState, rows: int, cols: int) -> No
             sx = int((row_seed >> 9) % max(1, cols - 1))
             ch = "█" if (row_seed & 1) else "▒"
             safe_addstr(stdscr, y, sx, ch, bg[(band + 3) % len(bg)] | curses.A_BOLD)
+        # Vertical scanlines: small high-frequency jitter overlay.
+        if cols >= 40 and (row_seed & 0x1) == 0:
+            step = 3 if cols >= 120 else 4
+            for sx in range((row_seed >> 5) % step, cols, step):
+                attr = bg[(band + (sx // step) + ((row_seed >> 11) & 0x7)) % len(bg)]
+                safe_addstr(stdscr, y, sx, " ", attr | (curses.A_BOLD if (row_seed >> (sx % 9)) & 1 else 0))
 
 
 def _draw_insane_header(stdscr, state: AppState, cols: int) -> None:
@@ -605,9 +815,16 @@ def _draw_insane_header(stdscr, state: AppState, cols: int) -> None:
     _update_godel_phrase(state)
     phase = int(time.monotonic() * 8) % 4
     fallback = ["NEON", "RAVE", "GLITCH", "HOT"][phase]
-    tag = state.godel_phrase or fallback
-    title = f" {tag} // {APP_NAME} {APP_VERSION} "
-    safe_addstr(stdscr, 0, 0, title[:cols].ljust(cols), head_attr)
+    left_tag = state.godel_phrase or fallback
+
+    left = f" {left_tag} "
+    right = f"{APP_NAME} {APP_VERSION}"
+    # Draw right first so it never gets overwritten by a long left phrase.
+    rx = max(0, cols - len(right))
+    safe_addstr(stdscr, 0, rx, right[: max(0, cols - rx)], head_attr)
+    # If overlap, truncate left so it cannot collide with the right identity.
+    max_left = max(0, rx - 1)
+    safe_addstr(stdscr, 0, 0, left[:max_left].ljust(max_left), head_attr)
 
     s = (state.status or "").strip()
     s_l = s.lower()
@@ -870,6 +1087,43 @@ def _run_outside_curses(stdscr, fn: Callable[[], None]) -> None:
             pass
 
 
+def _prompt_str_curses(stdscr, label: str, *, default: str = "", max_len: int = 512) -> str:
+    rows, cols = stdscr.getmaxyx()
+    prompt = f"{label} [{default}]: " if default else f"{label}: "
+    y = rows - 1
+    stdscr.move(y, 0)
+    stdscr.clrtoeol()
+    safe_addstr(stdscr, y, 0, prompt[:cols], curses.A_REVERSE)
+    stdscr.refresh()
+    try:
+        curses.curs_set(1)
+    except curses.error:
+        pass
+    curses.echo()
+    try:
+        raw = stdscr.getstr(y, min(len(prompt), max(0, cols - 1)), min(max_len, max(1, cols - len(prompt) - 1)))
+    finally:
+        curses.noecho()
+        try:
+            curses.curs_set(0)
+        except curses.error:
+            pass
+    s = ""
+    try:
+        s = raw.decode("utf-8", errors="ignore").strip()
+    except Exception:
+        s = str(raw).strip()
+    return s if s else str(default)
+
+
+def _prompt_bool_curses(stdscr, label: str, *, default: bool = False) -> bool:
+    d = "y" if default else "n"
+    s = _prompt_str_curses(stdscr, f"{label} (y/n)", default=d, max_len=5).strip().lower()
+    if not s:
+        return bool(default)
+    return s.startswith("y") or s in ("1", "true", "yes")
+
+
 def _prompt_bool(label: str, default: bool = False) -> bool:
     suffix = "Y/n" if default else "y/N"
     raw = input(f"{label} [{suffix}]: ").strip().lower()
@@ -879,89 +1133,89 @@ def _prompt_bool(label: str, default: bool = False) -> bool:
 
 
 def _action_stamp(state: AppState, stdscr) -> None:
-    def run() -> None:
-        print("(EPS) Stamp Pack")
-        input_dir = Path(input("(EPS) input dir: ").strip() or ".").expanduser()
-        out_dir = Path(input("(EPS) out dir: ").strip() or "./out").expanduser()
-        pack_id = input("(EPS) pack_id (optional): ").strip() or None
-        notes = input("(EPS) notes (optional): ").strip() or None
-        created_at = input("(EPS) created_at_utc (optional, affects root): ").strip() or None
-        include_hidden = _prompt_bool("(EPS) include hidden files", default=False)
-        zip_pack = _prompt_bool("(EPS) write entropy_pack.zip", default=True)
-        derive_seed = _prompt_bool("(EPS) derive seed_master", default=False)
-        write_seed = _prompt_bool("(EPS) write seed files (chmod 600)", default=False) if derive_seed else False
-        print_seed = _prompt_bool("(EPS) print seed to stdout", default=False) if derive_seed else False
+    # In-curses prompt sequence (no dropping out of the UI).
+    state.status = "Stamp: configure..."
+    state.log_lines = []
+    rows, cols = stdscr.getmaxyx()
+    stdscr.move(rows - 1, 0)
+    stdscr.clrtoeol()
+    stdscr.refresh()
 
-        try:
-            res = stamp_pack(
-                input_dir=input_dir,
-                out_dir=out_dir,
-                pack_id=pack_id,
-                notes=notes,
-                created_at_utc=created_at,
-                include_hidden=include_hidden,
-                zip_pack=zip_pack,
-                derive_seed=derive_seed,
-                write_seed_files=write_seed,
-                print_seed=print_seed,
-            )
-        except Exception as exc:
-            print("")
-            print("stamp_failed")
-            print(f"- {exc}")
-            state.log_lines = ["Stamp failed.", f"- {exc}"]
-            state.status = "Failed."
-            return
-        print("")
-        print(f"pack_dir: {res.pack_dir}")
-        print(f"entropy_root_sha256: {res.root_sha256}")
-        fp = res.receipt.get("seed_fingerprint_sha256")
-        if isinstance(fp, str) and fp:
-            print(f"seed_fingerprint_sha256: {fp}")
+    input_s = _prompt_str_curses(stdscr, "(EPS) input dir", default=".")
+    out_s = _prompt_str_curses(stdscr, "(EPS) out dir", default="./out")
+    pack_id_s = _prompt_str_curses(stdscr, "(EPS) pack_id (optional)", default="")
+    notes_s = _prompt_str_curses(stdscr, "(EPS) notes (optional)", default="")
+    created_at_s = _prompt_str_curses(stdscr, "(EPS) created_at_utc (optional)", default="")
+    include_hidden = _prompt_bool_curses(stdscr, "(EPS) include hidden files", default=False)
+    zip_pack = _prompt_bool_curses(stdscr, "(EPS) write entropy_pack.zip", default=True)
+    derive_seed = _prompt_bool_curses(stdscr, "(EPS) derive seed_master", default=False)
+    write_seed = _prompt_bool_curses(stdscr, "(EPS) write seed files (chmod 600)", default=False) if derive_seed else False
+    show_seed = _prompt_bool_curses(stdscr, "(EPS) show seed in UI", default=False) if derive_seed else False
 
-        state.log_lines = [
-            "Stamp complete.",
-            f"pack_dir: {res.pack_dir}",
-            f"entropy_root_sha256: {res.root_sha256}",
-        ]
-        state.status = "Done."
+    input_dir = Path(input_s).expanduser()
+    out_dir = Path(out_s).expanduser()
+    pack_id = pack_id_s.strip() or None
+    notes = notes_s.strip() or None
+    created_at = created_at_s.strip() or None
 
-    _run_outside_curses(stdscr, run)
+    try:
+        res = stamp_pack(
+            input_dir=input_dir,
+            out_dir=out_dir,
+            pack_id=pack_id,
+            notes=notes,
+            created_at_utc=created_at,
+            include_hidden=include_hidden,
+            zip_pack=zip_pack,
+            derive_seed=derive_seed,
+            write_seed_files=write_seed,
+            print_seed=False,  # never print to stdout from TUI
+        )
+    except Exception as exc:
+        state.log_lines = ["Stamp failed.", f"- {exc}"]
+        state.status = "Failed."
+        return
+
+    state.log_lines = [
+        "Stamp complete.",
+        f"pack_dir: {res.pack_dir}",
+        f"entropy_root_sha256: {res.root_sha256}",
+    ]
+    fp = res.receipt.get("seed_fingerprint_sha256")
+    if isinstance(fp, str) and fp:
+        state.log_lines.append(f"seed_fingerprint_sha256: {fp}")
+    if show_seed and res.seed_master is not None:
+        seed_hex = res.seed_master.hex()
+        import base64 as _b64
+
+        seed_b64 = _b64.b64encode(res.seed_master).decode("ascii")
+        state.log_lines.append(f"seed_master.hex: {seed_hex}")
+        state.log_lines.append(f"seed_master.b64: {seed_b64}")
+    state.status = "Done."
 
 
 def _action_verify(state: AppState, stdscr) -> None:
-    def run() -> None:
-        print("(EPS) Verify Pack")
-        pack = Path(input("(EPS) pack path (dir or .zip): ").strip() or ".").expanduser()
-        try:
-            res = verify_pack(pack)
-        except Exception as exc:
-            print("")
-            print("verify_failed")
-            print(f"- {exc}")
-            state.log_lines = ["Verify failed.", f"- {exc}"]
-            state.status = "Failed."
-            return
-        if res.ok:
-            print("ok")
-            print(f"entropy_root_sha256: {res.root_sha256}")
-            print(f"artifact_count_verified: {res.file_count}")
-            print(f"artifact_bytes_verified: {res.total_bytes}")
-            state.log_lines = [
-                "Verify ok.",
-                f"entropy_root_sha256: {res.root_sha256}",
-                f"artifact_count_verified: {res.file_count}",
-                f"artifact_bytes_verified: {res.total_bytes}",
-            ]
-            state.status = "Done."
-        else:
-            print("verify_failed")
-            for e in res.errors:
-                print(f"- {e}")
-            state.log_lines = ["Verify failed."] + [f"- {e}" for e in res.errors]
-            state.status = "Failed."
-
-    _run_outside_curses(stdscr, run)
+    state.status = "Verify: configure..."
+    state.log_lines = []
+    pack_s = _prompt_str_curses(stdscr, "(EPS) pack path (dir or .zip)", default=".")
+    pack = Path(pack_s).expanduser()
+    try:
+        res = verify_pack(pack)
+    except Exception as exc:
+        state.log_lines = ["Verify failed.", f"- {exc}"]
+        state.status = "Failed."
+        return
+    if res.ok:
+        state.log_lines = [
+            "Verify ok.",
+            f"entropy_root_sha256: {res.root_sha256}",
+            f"artifact_count_verified: {res.file_count}",
+            f"artifact_bytes_verified: {res.total_bytes}",
+        ]
+        state.status = "Done."
+    else:
+        state.log_lines = ["Verify failed."] + [f"- {e}" for e in res.errors]
+        state.status = "Failed."
 
 
 def handle_key(stdscr, state: AppState, ch: int) -> bool:
@@ -1052,7 +1306,7 @@ def run_tui(stdscr, *, insane: bool = False, godel_source: Optional[str] = None)
                 if words:
                     _update_godel_phrase(state, min_interval_ticks=0)
                 else:
-                    state.godel_phrase = "EMPTY GODEL TEXT"
+                    state.godel_phrase = "GODEL OCR TOO NOISY" if src.suffix.lower() == ".pdf" else "EMPTY GODEL TEXT"
 
     stdscr.keypad(True)
     stdscr.nodelay(False)
