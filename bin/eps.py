@@ -141,6 +141,15 @@ def init_insane_palette() -> InsanePalette:
     bg1 = 18 if is_256 else black
     bg2 = 52 if is_256 else black
     bg3 = 53 if is_256 else black
+    # Extra glitch backgrounds (256-color only).
+    bg4 = 54 if is_256 else black
+    bg5 = 55 if is_256 else black
+    bg6 = 56 if is_256 else black
+    bg7 = 57 if is_256 else black
+    bg8 = 88 if is_256 else black
+    bg9 = 89 if is_256 else black
+    bg10 = 90 if is_256 else black
+    bg11 = 91 if is_256 else black
 
     # Reserve a block of pair IDs for the insane skin.
     _init_pair_safe(11, pink, bg0)
@@ -155,8 +164,37 @@ def init_insane_palette() -> InsanePalette:
     _init_pair_safe(20, black, purple)
     _init_pair_safe(21, white, bg0)
     _init_pair_safe(22, cyan, purple)
+    _init_pair_safe(23, white, bg1)
+    _init_pair_safe(24, white, bg2)
+    _init_pair_safe(25, white, bg3)
+    _init_pair_safe(26, white, bg4)
+    _init_pair_safe(27, white, bg5)
+    _init_pair_safe(28, white, bg6)
+    _init_pair_safe(29, white, bg7)
+    _init_pair_safe(30, white, bg8)
+    _init_pair_safe(31, white, bg9)
+    _init_pair_safe(32, white, bg10)
+    _init_pair_safe(33, white, bg11)
 
-    bg = [curses.color_pair(11), curses.color_pair(12), curses.color_pair(13), curses.color_pair(14), curses.color_pair(15)]
+    bg = [
+        curses.color_pair(11),
+        curses.color_pair(12),
+        curses.color_pair(13),
+        curses.color_pair(14),
+        curses.color_pair(15),
+        curses.color_pair(21),
+        curses.color_pair(23),
+        curses.color_pair(24),
+        curses.color_pair(25),
+        curses.color_pair(26),
+        curses.color_pair(27),
+        curses.color_pair(28),
+        curses.color_pair(29),
+        curses.color_pair(30),
+        curses.color_pair(31),
+        curses.color_pair(32),
+        curses.color_pair(33),
+    ]
     header = [curses.color_pair(16) | curses.A_BOLD, curses.color_pair(17) | curses.A_BOLD, curses.color_pair(20) | curses.A_BOLD]
     menu_hot = [curses.color_pair(19) | curses.A_BOLD, curses.color_pair(18) | curses.A_BOLD, curses.color_pair(17) | curses.A_BOLD]
     menu_dim = curses.color_pair(21)
@@ -229,8 +267,19 @@ def _load_wordlist_from_text_file(path: Path, *, max_bytes: int = 5_000_000) -> 
         return []
     # Accept common Latin letters including diacritics (covers "Gödel" in many encodings).
     words = re.findall(r"[A-Za-zÀ-ÖØ-öø-ÿ]+", text)
-    # Keep only moderately-sized tokens so the header doesn't explode.
-    out = [w for w in words if 2 <= len(w) <= 18]
+    vowels = set("aeiouyAEIOUYäöüÄÖÜ")
+
+    def ok(w: str) -> bool:
+        if not (3 <= len(w) <= 22):
+            return False
+        if not any(c in vowels for c in w):
+            return False
+        # Reject low-information runs like "SSSS" or "IIII".
+        if len(set(w)) <= 1:
+            return False
+        return True
+
+    out = [w for w in words if ok(w)]
     return out
 
 
@@ -249,27 +298,26 @@ def _load_wordlist_from_source(path: Path, *, max_bytes: int = 5_000_000) -> Lis
     if pdftotext:
         fd, out_path_s = tempfile.mkstemp(prefix="eps_godel_", suffix=".txt")
         try:
-            os_handle = None
             try:
-                os_handle = fd
-            finally:
-                try:
-                    # Close the fd; pdftotext will write by path.
-                    import os as _os
+                # Close the fd; pdftotext will write by path.
+                import os as _os
 
-                    _os.close(fd)
-                except Exception:
-                    pass
+                _os.close(fd)
+            except Exception:
+                pass
             out_path = Path(out_path_s)
             # Extract first 100 pages max (user asked "100 pages is fine").
             proc = subprocess.run(
-                [pdftotext, "-f", "1", "-l", "100", str(path), str(out_path)],
+                [pdftotext, "-f", "1", "-l", "100", "-enc", "UTF-8", str(path), str(out_path)],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 check=False,
+                timeout=60,
             )
             if proc.returncode == 0 and out_path.is_file():
-                return _load_wordlist_from_text_file(out_path, max_bytes=max_bytes)
+                words = _load_wordlist_from_text_file(out_path, max_bytes=max_bytes)
+                if len(words) >= 50:
+                    return words
         except Exception:
             pass
         finally:
@@ -277,6 +325,54 @@ def _load_wordlist_from_source(path: Path, *, max_bytes: int = 5_000_000) -> Lis
                 Path(out_path_s).unlink(missing_ok=True)
             except Exception:
                 pass
+
+    # If the PDF has no text layer (common for scans), fall back to OCR.
+    pdftoppm = shutil.which("pdftoppm")
+    tesseract = shutil.which("tesseract")
+    if pdftoppm and tesseract:
+        try:
+            langs = "eng"
+            try:
+                out = subprocess.run([tesseract, "--list-langs"], capture_output=True, text=True, timeout=10, check=False)
+                available = set((out.stdout or "").split())
+                if "deu" in available and "eng" in available:
+                    langs = "deu+eng"
+            except Exception:
+                pass
+
+            with tempfile.TemporaryDirectory(prefix="eps_godel_ocr_") as td:
+                out_prefix = str(Path(td) / "page")
+                pages = 8
+                dpi = 200
+                subprocess.run(
+                    [pdftoppm, "-f", "1", "-l", str(pages), "-r", str(dpi), "-png", str(path), out_prefix],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                    timeout=90,
+                )
+                words: List[str] = []
+                for img in sorted(Path(td).glob("page-*.png")):
+                    try:
+                        proc = subprocess.run(
+                            [tesseract, str(img), "stdout", "-l", langs, "--psm", "6"],
+                            capture_output=True,
+                            text=True,
+                            check=False,
+                            timeout=45,
+                        )
+                        if proc.returncode != 0:
+                            continue
+                        chunk_words = re.findall(r"[A-Za-zÀ-ÖØ-öø-ÿ]+", proc.stdout or "")
+                        words.extend([w for w in chunk_words if 3 <= len(w) <= 22 and any(c in "aeiouyäöüAEIOUYÄÖÜ" for c in w)])
+                        if len(words) >= 800:
+                            break
+                    except Exception:
+                        continue
+                if len(words) >= 20:
+                    return words
+        except Exception:
+            pass
 
     # Fallback: brute scan PDF bytes (often low quality, but better than nothing).
     try:
@@ -287,7 +383,7 @@ def _load_wordlist_from_source(path: Path, *, max_bytes: int = 5_000_000) -> Lis
         data = data[: int(max_bytes)]
     text = data.decode("latin-1", errors="ignore")
     words = re.findall(r"[A-Za-zÀ-ÖØ-öø-ÿ]+", text)
-    return [w for w in words if 2 <= len(w) <= 18]
+    return [w for w in words if 3 <= len(w) <= 22 and any(c in "aeiouyäöüAEIOUYÄÖÜ" for c in w)]
 
 
 def _resolve_godel_source(path_s: str) -> Optional[Path]:
@@ -409,9 +505,35 @@ def _draw_header(stdscr, state: AppState, cols: int) -> None:
 def _draw_insane_background(stdscr, state: AppState, rows: int, cols: int) -> None:
     if state.palette is None:
         return
+    # Glitch stripes: horizontal bands plus shifting vertical segments.
+    bg = state.palette.bg
+    if not bg:
+        return
+
+    seg = 18 if cols >= 120 else 12
+    wobble = 7 + ((state.tick // 11) % 11)  # longer loop
+    direction = 1 if ((state.tick // 50) % 2 == 0) else -1
+
     for y in range(rows):
-        attr = _cycle(state.palette.bg, state.tick + y, speed=1, default=state.palette.text)
-        safe_addstr(stdscr, y, 0, (" " * cols), attr)
+        # Big horizontal banding (moves up/down over time).
+        band = (y + direction * (state.tick // 2)) // max(1, wobble)
+        # Per-row seed for vertical segmentation.
+        row_seed = (state.tick * 5 + band * 17 + y * 3) & 0xFFFFFFFF
+
+        x = 0
+        while x < cols:
+            # Per-segment jitter changes width slightly.
+            jitter = ((row_seed >> (x % 13)) & 0x3) - 1  # -1..2
+            run = max(6, min(seg + jitter, cols - x))
+            idx = (band + (x // seg) + ((row_seed >> 8) & 0xF)) % len(bg)
+            safe_addstr(stdscr, y, x, (" " * run), bg[idx])
+            x += run
+
+        # Occasional tear bars.
+        if (state.tick + y) % 31 == 0 and cols >= 16:
+            tear_w = min(cols, 12 + ((row_seed >> 3) % 50))
+            tear_attr = bg[(band + 7) % len(bg)]
+            safe_addstr(stdscr, y, 0, ("▓" * tear_w), tear_attr)
 
 
 def _draw_insane_header(stdscr, state: AppState, cols: int) -> None:
