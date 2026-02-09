@@ -273,6 +273,8 @@ class AppState:
     last_input_dir: Optional[Path] = None
     drop_dir: Path = field(default_factory=lambda: Path(tempfile.gettempdir()) / "eps_drop")
     drop_seen: set[str] = field(default_factory=set)
+    focus: str = "menu"  # "menu" | "entropy"
+    reward_ticks: int = 0
     menu: List[str] = field(
         default_factory=lambda: [
             "Entropy Sources",
@@ -494,6 +496,7 @@ def _dropzone_preview(state: AppState, *, width: int, height: int) -> List[str]:
     if state.last_input_dir is not None:
         lines.append(f"Current default input dir: {state.last_input_dir}")
     lines.append(f"Seen drop items this run: {have}")
+    lines.append("Tip: Use Tab/Up/Down to navigate; q jumps to Quit, Enter quits.")
 
     # Draw a big landing box.
     box_w = max(12, min(width - 2, 78))
@@ -1088,6 +1091,7 @@ def _draw_insane_background(stdscr, state: AppState, rows: int, cols: int) -> No
     wobble = 11 + ((state.tick // 11) % 29)  # longer loop
     direction = 1 if ((state.tick // 60) % 2 == 0) else -1
     ch_bank = [" ", "░", "▒", "▓"]
+    reward = state.reward_ticks > 0
 
     for y in range(rows):
         # Big horizontal banding (moves up/down over time).
@@ -1103,6 +1107,8 @@ def _draw_insane_background(stdscr, state: AppState, rows: int, cols: int) -> No
             idx = (band + (x // seg) + ((row_seed >> 8) & 0xF)) % len(bg)
             # Occasionally fill with grain characters instead of spaces to amplify the "video noise" look.
             ch = ch_bank[(row_seed >> (x % 17)) & 0x3]
+            if reward and ((row_seed >> (x % 11)) & 0x7) == 0:
+                ch = "█"
             safe_addstr(stdscr, y, x, (ch * run), bg[idx])
             x += run
 
@@ -1112,7 +1118,7 @@ def _draw_insane_background(stdscr, state: AppState, rows: int, cols: int) -> No
             tear_attr = bg[(band + 7) % len(bg)]
             safe_addstr(stdscr, y, 0, ("▓" * tear_w), tear_attr)
         # Sparkle noise: a few high-contrast pixels that "crawl".
-        if (row_seed % 7) == 0 and cols >= 6:
+        if (row_seed % (3 if reward else 7)) == 0 and cols >= 6:
             sx = int((row_seed >> 9) % max(1, cols - 1))
             ch = "█" if (row_seed & 1) else "▒"
             safe_addstr(stdscr, y, sx, ch, bg[(band + 3) % len(bg)] | curses.A_BOLD)
@@ -1174,7 +1180,12 @@ def _draw_insane_menu(stdscr, state: AppState, top: int, left_w: int, height: in
             continue
         label = state.menu[idx]
         selected = idx == state.selected
-        attr = _cycle(state.palette.menu_hot, state.tick + idx, speed=2, default=state.palette.menu_dim) if selected else state.palette.menu_dim
+        if selected and state.focus == "menu":
+            attr = _cycle(state.palette.menu_hot, state.tick + idx, speed=2, default=state.palette.menu_dim)
+        elif selected:
+            attr = state.palette.menu_dim | curses.A_BOLD
+        else:
+            attr = state.palette.menu_dim
         prefix = ">> " if selected else "   "
         text = (prefix + label)[:left_w].ljust(left_w)
         safe_addstr(stdscr, y, 0, text, attr)
@@ -1205,7 +1216,10 @@ def _entropy_sources_preview(state: AppState, *, width: int, height: int) -> Lis
     pool = _entropy_pool_sha256(state.entropy_sources)[:16] if state.entropy_sources else "none"
     header = f"ENTROPY SOURCES // {n}/{min_n} required for LOCKDOWN seed  pool={pool}"
     lines: List[str] = [header, ""]
-    lines.append("Keys: a=add photos  t=add text  Space=tap entropy  d=delete  c=clear  Enter=preview")
+    focus = "LIST" if state.focus == "entropy" else "MENU"
+    lines.append(f"FOCUS={focus}  Tab=toggle focus")
+    lines.append("")
+    lines.append("[A] Add Photos   [T] Add Text   [Space] Tap Entropy   [Enter] Preview   [D] Delete   [C] Clear")
     lines.append("")
     if not state.entropy_sources:
         lines.append("No sources staged.")
@@ -1285,7 +1299,13 @@ def _draw_insane_right_pane(stdscr, state: AppState, top: int, left_w: int, cols
 
 
 def _draw_footer(stdscr, state: AppState, rows: int, cols: int) -> None:
-    legend = "Up/Down: move  Enter: select  q: quit  Esc: back"
+    label = state.menu[state.selected] if 0 <= state.selected < len(state.menu) else ""
+    if label == "Entropy Sources":
+        legend = "Up/Down: move  Tab: focus  A/T/Space: add  Enter: preview  Esc: back"
+    elif label == "Drop Zone":
+        legend = "Up/Down: move  Enter: drop path  Esc: back"
+    else:
+        legend = "Up/Down: move  Enter: select  Esc: back"
     msg = state.status.strip() if state.status else ""
     line = legend
     if msg:
@@ -1308,7 +1328,11 @@ def _draw_menu(stdscr, state: AppState, top: int, left_w: int, height: int) -> N
         selected = idx == state.selected
         prefix = "> " if selected else "  "
         text = (prefix + label)[:left_w].ljust(left_w)
-        safe_addstr(stdscr, y, 0, text, state.theme.reverse if selected else state.theme.normal)
+        # When focus is not on the menu, keep the highlight but make it less "actionable".
+        attr = state.theme.reverse if selected else state.theme.normal
+        if selected and state.focus != "menu":
+            attr = state.theme.normal | curses.A_BOLD
+        safe_addstr(stdscr, y, 0, text, attr)
 
 
 def _draw_viewer(stdscr, state: AppState, top: int, cols: int, rows: int) -> None:
@@ -1621,8 +1645,14 @@ def _action_entropy_tap(state: AppState, stdscr) -> None:
     meta: Dict[str, object] = {"events": int(count), "sample": sample_events[:16]}
     # size_bytes is the conceptual size of the captured stream.
     state.entropy_sources.append(EntropySource(kind="tap", name="tap", sha256=digest, size_bytes=target * 8, meta=meta))
-    state.status = "Done."
-    state.log_lines = [f"Added tap source: events={count} sha={digest[:10]}."]
+    # Reward hook: stub out where we will play a sound effect later.
+    state.reward_ticks = 18
+    state.status = "Entropy collected."
+    state.log_lines = [
+        f"Entropy collected: tap events={count}",
+        f"tap_sha256: {digest}",
+        "(SFX stub) jackpot",
+    ]
 
 
 def _action_entropy_delete_selected(state: AppState) -> None:
@@ -1937,14 +1967,32 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
             state.viewer.top = min(max(0, len(state.viewer.lines) - 1), state.viewer.top + 10)
         return True
 
-    if ch in (ord("q"), ord("Q"), 27, curses.KEY_EXIT):
-        label = state.menu[state.selected]
+    label = state.menu[state.selected] if 0 <= state.selected < len(state.menu) else ""
+
+    # Back / quit semantics:
+    # - Esc backs out of focus modes (and clears transient status), but does not hard-quit.
+    # - q is a two-step quit: first press jumps to Quit; second press exits.
+    if ch == 27:
+        if state.focus != "menu":
+            state.focus = "menu"
+        state.status = "Ready."
+        return True
+    if ch in (ord("q"), ord("Q"), curses.KEY_EXIT):
         if label == "Quit":
             return False
-        # Allow quick quit regardless of selection.
-        return False
+        # Arm quit by selecting the Quit menu item.
+        state.selected = len(state.menu) - 1
+        state.focus = "menu"
+        state.status = "Ready. (Enter to quit)"
+        return True
 
-    label = state.menu[state.selected] if 0 <= state.selected < len(state.menu) else ""
+    # Focus toggle.
+    if ch in (9, getattr(curses, "KEY_BTAB", -999)):
+        if label == "Entropy Sources":
+            state.focus = "entropy" if state.focus == "menu" else "menu"
+        else:
+            state.focus = "menu"
+        return True
 
     if label == "Drop Zone":
         if ch in (curses.KEY_ENTER, 10, 13):
@@ -1984,11 +2032,11 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
 
     # Entropy Sources mode has its own navigation/actions.
     if label == "Entropy Sources":
-        if ch in (curses.KEY_UP, ord("k")):
+        if ch in (curses.KEY_UP, ord("k")) and state.focus == "entropy":
             state.entropy_selected = max(0, state.entropy_selected - 1)
             state.status = "Ready."
             return True
-        if ch in (curses.KEY_DOWN, ord("j")):
+        if ch in (curses.KEY_DOWN, ord("j")) and state.focus == "entropy":
             state.entropy_selected = min(max(0, len(state.entropy_sources) - 1), state.entropy_selected + 1)
             state.status = "Ready."
             return True
@@ -2007,17 +2055,21 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
         if ch in (ord("c"), ord("C")):
             _action_entropy_clear(state)
             return True
-        if ch in (curses.KEY_ENTER, 10, 13):
+        if ch in (curses.KEY_ENTER, 10, 13) and state.focus == "entropy":
             _action_entropy_preview(state)
             return True
 
     if ch in (curses.KEY_UP, ord("k")):
         state.selected = max(0, state.selected - 1)
+        label2 = state.menu[state.selected] if 0 <= state.selected < len(state.menu) else ""
+        state.focus = "entropy" if label2 == "Entropy Sources" else "menu"
         state.status = "Ready."
         state.log_lines = []
         return True
     if ch in (curses.KEY_DOWN, ord("j")):
         state.selected = min(len(state.menu) - 1, state.selected + 1)
+        label2 = state.menu[state.selected] if 0 <= state.selected < len(state.menu) else ""
+        state.focus = "entropy" if label2 == "Entropy Sources" else "menu"
         state.status = "Ready."
         state.log_lines = []
         return True
@@ -2030,7 +2082,9 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
             _action_verify(state, stdscr)
             return True
         if label == "Entropy Sources":
-            # Enter is handled above for preview; keep as a no-op here.
+            # With focus on the menu, Enter toggles focus into the entropy list.
+            if state.focus == "menu":
+                state.focus = "entropy"
             return True
         if label == "Drop Zone":
             return True
@@ -2089,6 +2143,8 @@ def run_tui(stdscr, *, insane: bool = False, godel_source: Optional[str] = None)
 
     while True:
         state.tick += 1
+        if state.reward_ticks > 0:
+            state.reward_ticks -= 1
         # Poll the filesystem landing zone occasionally (not every tick) to stay cheap.
         if state.tick % 4 == 0:
             _poll_drop_dir(state)
