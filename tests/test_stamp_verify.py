@@ -26,6 +26,7 @@ class TestStampVerify(unittest.TestCase):
                 pack_id="test_pack",
                 zip_pack=True,
                 derive_seed=True,
+                entropy_sources_sha256=None,
                 write_seed_files=False,
                 print_seed=False,
             )
@@ -54,6 +55,37 @@ class TestStampVerify(unittest.TestCase):
             )
             self.assertEqual(res2.root_sha256, res.root_sha256)
             self.assertEqual(res2.pack_dir, res.pack_dir)
+
+    def test_seed_changes_when_sources_hash_is_mixed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            res1 = stamp_pack(
+                input_dir=input_dir,
+                out_dir=out_dir,
+                zip_pack=False,
+                derive_seed=True,
+                entropy_sources_sha256=None,
+                write_seed_files=False,
+                print_seed=False,
+            )
+            self.assertIsNotNone(res1.seed_master)
+
+            res2 = stamp_pack(
+                input_dir=input_dir,
+                out_dir=out_dir,
+                zip_pack=False,
+                derive_seed=True,
+                entropy_sources_sha256=hashlib.sha256(b"demo").hexdigest(),
+                write_seed_files=False,
+                print_seed=False,
+            )
+            self.assertIsNotNone(res2.seed_master)
+            self.assertNotEqual(res1.seed_master, res2.seed_master)
 
     def test_verify_rejects_path_traversal_and_symlinks(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

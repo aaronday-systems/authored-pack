@@ -270,9 +270,13 @@ class AppState:
     entropy_min_sources: int = 7
     last_pack_dir: Optional[Path] = None
     last_out_dir: Optional[Path] = None
+    last_input_dir: Optional[Path] = None
+    drop_dir: Path = field(default_factory=lambda: Path(tempfile.gettempdir()) / "eps_drop")
+    drop_seen: set[str] = field(default_factory=set)
     menu: List[str] = field(
         default_factory=lambda: [
             "Entropy Sources",
+            "Drop Zone",
             "Stamp Pack",
             "Verify Pack",
             "View README",
@@ -447,6 +451,148 @@ def _image_ascii_cached(path: Path, *, cols: int = 72, rows: int = 28) -> List[s
     except Exception:
         pass
     return lines
+
+
+def _clean_dropped_path(s: str) -> str:
+    """
+    Terminals on macOS often paste dropped paths either quoted or with backslash-escapes.
+    Normalize the common forms.
+    """
+    v = (s or "").strip()
+    if not v:
+        return ""
+    if v.startswith("file://"):
+        # Finder may paste file:// URLs in some contexts.
+        v = v[len("file://") :]
+    # Strip matching quotes.
+    if (v.startswith("'") and v.endswith("'")) or (v.startswith('"') and v.endswith('"')):
+        v = v[1:-1]
+    # Unescape common backslash escapes for spaces.
+    v = v.replace("\\ ", " ")
+    return v.strip()
+
+
+def _dropzone_preview(state: AppState, *, width: int, height: int) -> List[str]:
+    d = state.drop_dir
+    have = len(state.drop_seen)
+    lines: List[str] = []
+    lines.append("DROP ZONE // human affordances for a chaotic TUI")
+    lines.append("")
+    lines.append("1) Terminal drag-drop (best effort):")
+    lines.append("   Press Enter to open a big path field, then drag a folder/file into the terminal.")
+    lines.append("   Most macOS terminals will paste the absolute path for you.")
+    lines.append("")
+    lines.append("2) Finder drop folder (deterministic):")
+    lines.append(f"   Drop items into: {d}")
+    lines.append("   EPS will auto-detect new items and import them.")
+    lines.append("")
+    lines.append("Auto-import rules:")
+    lines.append("- Dropped directory: sets default Stamp input dir")
+    lines.append("- Dropped image file: added as Entropy Source (photo)")
+    lines.append("- Dropped .txt/.md: added as Entropy Source (text)")
+    lines.append("")
+    if state.last_input_dir is not None:
+        lines.append(f"Current default input dir: {state.last_input_dir}")
+    lines.append(f"Seen drop items this run: {have}")
+
+    # Draw a big landing box.
+    box_w = max(12, min(width - 2, 78))
+    box_h = max(6, min(height - len(lines) - 1, 12))
+    if box_h >= 6 and box_w >= 20:
+        lines.append("")
+        top = "╔" + ("═" * (box_w - 2)) + "╗"
+        mid = "║" + (" " * (box_w - 2)) + "║"
+        bot = "╚" + ("═" * (box_w - 2)) + "╝"
+        lines.append(top)
+        for _ in range(box_h - 2):
+            lines.append(mid)
+        lines.append(bot)
+        msg = "DROP HERE (paste/drag) + Enter"
+        if len(msg) < box_w - 2:
+            pad = (box_w - 2 - len(msg)) // 2
+            msg_line = "║" + (" " * pad) + msg + (" " * (box_w - 2 - pad - len(msg))) + "║"
+            # Put message near the center.
+            insert_at = len(lines) - (box_h // 2) - 1
+            if 0 <= insert_at < len(lines):
+                lines[insert_at] = msg_line
+    return [ln[:width] for ln in lines[:height]]
+
+
+def _poll_drop_dir(state: AppState) -> None:
+    """
+    Best-effort "drag and drop" via a filesystem landing zone.
+    Users can drop items into `state.drop_dir` (Finder can access /tmp via Go to Folder).
+    """
+    d = state.drop_dir
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return
+    try:
+        items = sorted(d.iterdir(), key=lambda p: p.name)
+    except Exception:
+        return
+
+    changed = False
+    for p in items:
+        try:
+            key = str(p.resolve())
+        except Exception:
+            key = str(p)
+        if key in state.drop_seen:
+            continue
+        state.drop_seen.add(key)
+
+        # Directory: set default stamp input dir.
+        if p.is_dir():
+            state.last_input_dir = p.resolve()
+            state.status = "Drop: input dir set."
+            state.log_lines = [f"Drop detected (dir): {p}", f"Stamp default input dir set to: {state.last_input_dir}"]
+            changed = True
+            continue
+
+        if not p.is_file():
+            continue
+
+        suf = p.suffix.lower()
+        if _is_image_path(p):
+            try:
+                sha, size = _sha256_hex_path(p, max_bytes=100 * 1024 * 1024)
+            except Exception:
+                continue
+            dims = _identify_image_dims(p)
+            meta: Dict[str, object] = {}
+            if dims:
+                meta["dims"] = dims
+            state.entropy_sources.append(
+                EntropySource(kind="photo", name=p.name, sha256=sha, size_bytes=size, meta=meta, path=p)
+            )
+            state.status = "Drop: photo source added."
+            state.log_lines = [f"Drop detected (photo): {p.name}", f"entropy_sources={len(state.entropy_sources)}"]
+            changed = True
+            continue
+
+        if suf in (".txt", ".md", ".markdown"):
+            try:
+                data = p.read_bytes()
+                if len(data) > 2_000_000:
+                    data = data[:2_000_000]
+                txt = data.decode("utf-8", errors="ignore")
+            except Exception:
+                continue
+            sha = hashlib.sha256(txt.encode("utf-8", errors="ignore")).hexdigest()
+            state.entropy_sources.append(
+                EntropySource(kind="text", name=p.name, sha256=sha, size_bytes=len(txt.encode("utf-8")), text=txt)
+            )
+            state.status = "Drop: text source added."
+            state.log_lines = [f"Drop detected (text): {p.name}", f"entropy_sources={len(state.entropy_sources)}"]
+            changed = True
+            continue
+
+    if changed:
+        # Keep selection in bounds if list grew/shrank.
+        if state.entropy_sources:
+            state.entropy_selected = max(0, min(state.entropy_selected, len(state.entropy_sources) - 1))
 
 
 def _load_wordlist_from_text_file(path: Path, *, max_bytes: int = 5_000_000) -> List[str]:
@@ -1095,6 +1241,8 @@ def _draw_insane_right_pane(stdscr, state: AppState, top: int, left_w: int, cols
     preview: List[str] = []
     if label == "Entropy Sources":
         preview = _entropy_sources_preview(state, width=right_w, height=body_h)
+    elif label == "Drop Zone":
+        preview = _dropzone_preview(state, width=right_w, height=body_h)
     elif label == "Stamp Pack":
         preview = [
             "STAMP // directory -> content-addressed pack",
@@ -1187,6 +1335,8 @@ def _draw_right_pane(stdscr, state: AppState, top: int, left_w: int, cols: int, 
     preview: List[str] = []
     if label == "Entropy Sources":
         preview = _entropy_sources_preview(state, width=right_w, height=body_h)
+    elif label == "Drop Zone":
+        preview = _dropzone_preview(state, width=right_w, height=body_h)
     elif label == "Stamp Pack":
         preview = [
             "Stamp a content-addressed EntropyPack from a directory.",
@@ -1633,7 +1783,8 @@ def _action_stamp(state: AppState, stdscr) -> None:
     stdscr.refresh()
 
     default_out = str(state.last_out_dir) if state.last_out_dir is not None else "./out"
-    input_s = _prompt_str_curses(stdscr, "(EPS) input dir (or @sources)", default=".")
+    default_in = str(state.last_input_dir) if state.last_input_dir is not None else "."
+    input_s = _prompt_str_curses(stdscr, "(EPS) input dir (or @sources)", default=default_in)
     out_s = _prompt_str_curses(stdscr, "(EPS) out dir", default=default_out)
     pack_id_s = _prompt_str_curses(stdscr, "(EPS) pack_id (optional)", default="")
     notes_s = _prompt_str_curses(stdscr, "(EPS) notes (optional)", default="")
@@ -1795,6 +1946,42 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
 
     label = state.menu[state.selected] if 0 <= state.selected < len(state.menu) else ""
 
+    if label == "Drop Zone":
+        if ch in (curses.KEY_ENTER, 10, 13):
+            # Provide a focused "landing zone" input. If the user drags a folder into the terminal,
+            # many terminals will paste the path into this field.
+            raw = _prompt_str_curses(stdscr, "(EPS) drop path", default=str(state.last_input_dir or ""))
+            v = _clean_dropped_path(raw)
+            if not v:
+                state.status = "Ready."
+                return True
+            p = Path(v).expanduser()
+            if p.exists() and p.is_dir():
+                state.last_input_dir = p.resolve()
+                state.status = "Done."
+                state.log_lines = [f"Input dir set from drop: {state.last_input_dir}"]
+            elif p.exists() and p.is_file() and _is_image_path(p):
+                # Treat as a single photo source.
+                try:
+                    sha, size = _sha256_hex_path(p, max_bytes=100 * 1024 * 1024)
+                    dims = _identify_image_dims(p)
+                    meta: Dict[str, object] = {}
+                    if dims:
+                        meta["dims"] = dims
+                    state.entropy_sources.append(
+                        EntropySource(kind="photo", name=p.name, sha256=sha, size_bytes=size, meta=meta, path=p)
+                    )
+                    state.status = "Done."
+                    state.log_lines = [f"Added photo source from drop: {p.name}"]
+                except Exception as exc:
+                    state.status = "Failed."
+                    state.log_lines = [f"Drop add failed: {exc}"]
+            else:
+                state.status = "Failed."
+                state.log_lines = [f"Drop path not usable: {p}"]
+            return True
+        return True
+
     # Entropy Sources mode has its own navigation/actions.
     if label == "Entropy Sources":
         if ch in (curses.KEY_UP, ord("k")):
@@ -1844,6 +2031,8 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
             return True
         if label == "Entropy Sources":
             # Enter is handled above for preview; keep as a no-op here.
+            return True
+        if label == "Drop Zone":
             return True
         if label == "View README":
             root = Path(__file__).resolve().parents[1]
@@ -1900,6 +2089,9 @@ def run_tui(stdscr, *, insane: bool = False, godel_source: Optional[str] = None)
 
     while True:
         state.tick += 1
+        # Poll the filesystem landing zone occasionally (not every tick) to stay cheap.
+        if state.tick % 4 == 0:
+            _poll_drop_dir(state)
         draw(stdscr, state)
         try:
             ch = stdscr.getch()
