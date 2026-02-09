@@ -31,6 +31,7 @@ PACK_LAYOUT_VERSION = "eps.pack_layout.v1"
 DEFAULT_MAX_MANIFEST_BYTES = 4 * 1024 * 1024  # 4 MiB
 DEFAULT_MAX_ARTIFACT_BYTES = 512 * 1024 * 1024  # 512 MiB
 DEFAULT_MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB
+EVIDENCE_SCHEMA_VERSION = "eps.evidence.v1"
 
 
 def _utc_now_iso() -> str:
@@ -219,6 +220,7 @@ def stamp_pack(
     zip_pack: bool = False,
     derive_seed: bool = False,
     entropy_sources_sha256: Optional[str] = None,
+    evidence_bundle: bool = False,
     write_seed_files: bool = False,
     print_seed: bool = False,
 ) -> StampResult:
@@ -287,6 +289,11 @@ def stamp_pack(
                             entropy_sources_sha256=entropy_sources_sha256,
                             seed_master=seed_master,
                         )
+                        if evidence_bundle:
+                            ev_path, ev_sha = write_evidence_bundle(pack_dir)
+                            receipt["evidence_bundle_path"] = str(ev_path.name)
+                            if ev_sha:
+                                receipt["evidence_bundle_sha256"] = str(ev_sha)
                         _safe_write_json(pack_dir / "receipt.json", receipt)
                         if print_seed and seed_master is not None:
                             _print_seed_material(seed_master)
@@ -333,6 +340,13 @@ def stamp_pack(
 
         # Atomic-ish move: rename tmp dir into content-addressed target.
         tmp_dir.replace(pack_dir)
+
+        if evidence_bundle:
+            ev_path, ev_sha = write_evidence_bundle(pack_dir)
+            receipt["evidence_bundle_path"] = str(ev_path.name)
+            if ev_sha:
+                receipt["evidence_bundle_sha256"] = str(ev_sha)
+            _safe_write_json(pack_dir / "receipt.json", receipt)
 
         if print_seed and seed_master is not None:
             _print_seed_material(seed_master)
@@ -402,6 +416,103 @@ def _write_zip(pack_dir: Path, zip_path: Path) -> None:
             if rel in exclude:
                 continue
             zf.write(path, arcname=rel)
+
+
+def write_evidence_bundle(pack_dir: Path) -> Tuple[Path, Optional[str]]:
+    """
+    Write a tamper-*evident* evidence bundle zip into the pack directory.
+
+    Notes:
+    - This is not cryptographically "untamperable" without an external signature.
+    - The bundle is still useful as an audit artifact: it contains exact bytes + a hash manifest.
+    """
+    # Name includes the pack root for human ergonomics.
+    root = ""
+    try:
+        root = (pack_dir / "entropy_root_sha256.txt").read_text(encoding="utf-8", errors="ignore").strip()
+    except Exception:
+        root = ""
+    if not (isinstance(root, str) and len(root) == 64 and all(c in "0123456789abcdef" for c in root.lower())):
+        # Fall back to pack dir name.
+        root = pack_dir.name
+
+    zip_name = f"eps_evidence_{root}.zip"
+    zip_path = pack_dir / zip_name
+
+    exclude_names = {
+        "seed_master.hex",
+        "seed_master.b64",
+        "entropy_pack.zip",
+        zip_name,
+    }
+
+    # Collect files to include (deterministic order).
+    include: List[Path] = []
+    for p in sorted(pack_dir.rglob("*")):
+        if p.is_dir():
+            continue
+        rel = p.relative_to(pack_dir).as_posix()
+        if rel in exclude_names:
+            continue
+        # Always exclude nested zips; evidence should be canonical, not recursively bundled.
+        if rel.endswith(".zip"):
+            continue
+        include.append(p)
+
+    # Stream files into zip with fixed timestamps to keep bundles stable across runs.
+    fixed_dt = (1980, 1, 1, 0, 0, 0)
+    entries: List[Dict[str, object]] = []
+
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
+        for src in include:
+            rel = src.relative_to(pack_dir).as_posix()
+            zi = zipfile.ZipInfo(filename=rel, date_time=fixed_dt)
+            zi.compress_type = zipfile.ZIP_DEFLATED
+            zi.external_attr = (0o644 & 0xFFFF) << 16
+
+            h = hashlib.sha256()
+            size = 0
+            with src.open("rb") as r, zf.open(zi, "w") as w:
+                while True:
+                    chunk = r.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    size += len(chunk)
+                    h.update(chunk)
+                    w.write(chunk)
+            entries.append({"path": rel, "size_bytes": int(size), "sha256": h.hexdigest()})
+
+        entries.sort(key=lambda d: str(d.get("path", "")))
+        evidence_manifest: Dict[str, object] = {
+            "schema_version": EVIDENCE_SCHEMA_VERSION,
+            "pack_root_sha256": str(root),
+            "created_at_utc": _utc_now_iso(),
+            "entries": entries,
+        }
+        payload = (
+            json.dumps(evidence_manifest, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False).encode("utf-8")
+            + b"\n"
+        )
+        mzi = zipfile.ZipInfo(filename="evidence_manifest.json", date_time=fixed_dt)
+        mzi.compress_type = zipfile.ZIP_DEFLATED
+        mzi.external_attr = (0o644 & 0xFFFF) << 16
+        zf.writestr(mzi, payload)
+
+        mh = hashlib.sha256(payload).hexdigest()
+        hzi = zipfile.ZipInfo(filename="evidence_manifest_sha256.txt", date_time=fixed_dt)
+        hzi.compress_type = zipfile.ZIP_DEFLATED
+        hzi.external_attr = (0o644 & 0xFFFF) << 16
+        zf.writestr(hzi, (mh + "\n").encode("utf-8"))
+
+    # Store a sidecar hash for the zip bytes (useful when publishing the bundle).
+    zip_sha: Optional[str] = None
+    try:
+        zip_bytes = zip_path.read_bytes()
+        zip_sha = hashlib.sha256(zip_bytes).hexdigest()
+        _safe_write_text(pack_dir / f"{zip_name}.sha256", zip_sha + "\n")
+    except Exception:
+        zip_sha = None
+    return zip_path, zip_sha
 
 
 def verify_pack(

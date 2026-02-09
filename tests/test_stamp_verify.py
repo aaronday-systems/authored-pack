@@ -27,6 +27,7 @@ class TestStampVerify(unittest.TestCase):
                 zip_pack=True,
                 derive_seed=True,
                 entropy_sources_sha256=None,
+                evidence_bundle=True,
                 write_seed_files=False,
                 print_seed=False,
             )
@@ -44,6 +45,16 @@ class TestStampVerify(unittest.TestCase):
             self.assertTrue(vz.ok, msg=f"errors: {vz.errors}")
             self.assertEqual(vz.root_sha256, res.root_sha256)
             self.assertEqual(vz.file_count, 2)
+
+            ev_zip = res.pack_dir / f"eps_evidence_{res.root_sha256}.zip"
+            self.assertTrue(ev_zip.is_file())
+            with zipfile.ZipFile(ev_zip, "r") as zf:
+                names = set(zf.namelist())
+                self.assertIn("manifest.json", names)
+                self.assertIn("receipt.json", names)
+                self.assertIn("entropy_root_sha256.txt", names)
+                self.assertIn("evidence_manifest.json", names)
+                self.assertIn("evidence_manifest_sha256.txt", names)
 
             # Idempotent re-stamp: same input should not fail.
             res2 = stamp_pack(
@@ -70,6 +81,7 @@ class TestStampVerify(unittest.TestCase):
                 zip_pack=False,
                 derive_seed=True,
                 entropy_sources_sha256=None,
+                evidence_bundle=False,
                 write_seed_files=False,
                 print_seed=False,
             )
@@ -81,6 +93,7 @@ class TestStampVerify(unittest.TestCase):
                 zip_pack=False,
                 derive_seed=True,
                 entropy_sources_sha256=hashlib.sha256(b"demo").hexdigest(),
+                evidence_bundle=False,
                 write_seed_files=False,
                 print_seed=False,
             )

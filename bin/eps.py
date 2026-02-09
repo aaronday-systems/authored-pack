@@ -47,7 +47,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from eps import __version__
-from eps.pack import stamp_pack, verify_pack
+from eps.pack import stamp_pack, verify_pack, write_evidence_bundle
 
 
 APP_NAME = "ENTROPY PACK STAMPER"
@@ -1959,7 +1959,18 @@ def _action_stamp(state: AppState, stdscr) -> None:
             pool_sha = _entropy_pool_sha256(state.entropy_sources)
     write_seed = _prompt_bool_curses(stdscr, "(EPS) write seed files (chmod 600)", default=False) if derive_seed else False
     show_seed = _prompt_bool_curses(stdscr, "(EPS) show seed in UI", default=False) if derive_seed else False
-    write_sources = _prompt_bool_curses(stdscr, "(EPS) write entropy_sources into pack (excluded from zip)", default=False) if derive_seed else False
+    write_sources_default = bool(mix_sources)  # if sources affect the seed, default to auditing them
+    write_sources = (
+        _prompt_bool_curses(
+            stdscr,
+            "(EPS) write entropy_sources into pack (excluded from entropy_pack.zip)",
+            default=write_sources_default,
+        )
+        if derive_seed
+        else False
+    )
+    evidence_default = bool(derive_seed)
+    evidence_bundle = _prompt_bool_curses(stdscr, "(EPS) write evidence bundle zip (tamper-evident)", default=evidence_default)
 
     tmp_payload_dir: Optional[Path] = None
     input_dir: Path
@@ -1988,6 +1999,7 @@ def _action_stamp(state: AppState, stdscr) -> None:
             zip_pack=zip_pack,
             derive_seed=derive_seed,
             entropy_sources_sha256=pool_sha if mix_sources else None,
+            evidence_bundle=False,  # do this post-stamp so it can include entropy_sources if we choose to write them
             write_seed_files=write_seed,
             print_seed=False,  # never print to stdout from TUI
         )
@@ -2026,6 +2038,14 @@ def _action_stamp(state: AppState, stdscr) -> None:
         p = _write_entropy_sources_into_pack(res.pack_dir, state.entropy_sources)
         if p is not None:
             state.log_lines.append(f"entropy_sources_dir: {p}")
+    if evidence_bundle:
+        try:
+            ev_path, ev_sha = write_evidence_bundle(res.pack_dir)
+            state.log_lines.append(f"evidence_bundle: {ev_path}")
+            if ev_sha:
+                state.log_lines.append(f"evidence_bundle_sha256: {ev_sha}")
+        except Exception as exc:
+            state.log_lines.append(f"evidence_bundle failed: {exc}")
     if show_seed and res.seed_master is not None:
         seed_hex = res.seed_master.hex()
         seed_b64 = base64.b64encode(res.seed_master).decode("ascii")
