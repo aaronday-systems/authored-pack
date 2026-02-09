@@ -274,6 +274,8 @@ class AppState:
     # Use a stable, user-visible folder by default (inside the repo).
     drop_dir: Path = field(default_factory=lambda: _REPO_ROOT / "eps_drop")
     drop_seen: set[str] = field(default_factory=set)
+    drop_last_count: int = 0
+    drop_last_names: List[str] = field(default_factory=list)
     focus: str = "menu"  # "menu" | "entropy"
     reward_ticks: int = 0
     menu: List[str] = field(
@@ -503,6 +505,11 @@ def _dropzone_preview(state: AppState, *, width: int, height: int) -> List[str]:
     lines.append("2) Finder drop folder (deterministic):")
     lines.append(f"   Drop items into: {d.resolve() if d.exists() else d}")
     lines.append("   EPS will auto-detect new items and import them.")
+    lines.append(f"   Items currently in folder: {state.drop_last_count}")
+    if state.drop_last_names:
+        # Show a few to validate the user dropped into the right place.
+        sample = ", ".join(state.drop_last_names[:5])
+        lines.append(f"   Recent items: {sample}")
     lines.append("")
     lines.append("Auto-import rules:")
     lines.append("- Dropped directory: sets default Stamp input dir")
@@ -551,6 +558,14 @@ def _poll_drop_dir(state: AppState) -> None:
         items = sorted(d.iterdir(), key=lambda p: p.name)
     except Exception:
         return
+
+    # Telemetry for the Drop Zone screen so users can see whether they're dropping into the right folder.
+    try:
+        names = [p.name for p in items if p.name not in (".DS_Store",)]
+    except Exception:
+        names = []
+    state.drop_last_count = len(names)
+    state.drop_last_names = names[:10]
 
     changed = False
     for p in items:
@@ -2065,7 +2080,7 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
             state.status = "Done." if any(("added" in m.lower() or "set" in m.lower()) for m in msgs) else "Failed."
             state.log_lines = msgs[:60]
             return True
-        return True
+        # Do not swallow other keys; Up/Down should still navigate the menu.
 
     # Entropy Sources mode has its own navigation/actions.
     if label == "Entropy Sources":
