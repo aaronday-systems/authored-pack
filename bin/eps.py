@@ -1380,6 +1380,18 @@ def _draw_insane_right_pane(stdscr, state: AppState, top: int, left_w: int, cols
 
 
 def _draw_footer(stdscr, state: AppState, rows: int, cols: int) -> None:
+    if state.viewer is not None:
+        legend = "Up/Down/PgUp/PgDn: scroll  Esc/q/Enter: back"
+        msg = state.status.strip() if state.status else ""
+        line = legend
+        if msg:
+            if len(line) + 2 + len(msg) <= cols:
+                line = f"{legend}{' ' * (cols - len(legend) - len(msg))}{msg}"
+            else:
+                line = f"{legend}  {msg}"
+        safe_addstr(stdscr, rows - 1, 0, line[:cols].ljust(cols), state.theme.normal)
+        return
+
     label = state.menu[state.selected] if 0 <= state.selected < len(state.menu) else ""
     if label == "Entropy Sources":
         legend = "Up/Down: move  Tab: focus  A/T/Space: add  Enter: preview  Esc: back"
@@ -1911,12 +1923,16 @@ def _action_stamp(state: AppState, stdscr) -> None:
         mix_sources = _prompt_bool_curses(stdscr, "(EPS) mix staged entropy sources into seed", default=True)
         if mix_sources:
             if len(state.entropy_sources) < int(state.entropy_min_sources):
+                need_more = int(state.entropy_min_sources) - len(state.entropy_sources)
                 state.status = "Failed."
                 state.log_lines = [
                     "Stamp blocked: not enough entropy sources.",
                     f"Need {state.entropy_min_sources}, have {len(state.entropy_sources)}.",
-                    "Go to Entropy Sources and add more (photos/text/tap).",
+                    f"Add {need_more} more (photos/text/tap), then try again.",
                 ]
+                # Guide the user back to the deterministic path: go stage more sources now.
+                state.selected = 0  # Entropy Sources
+                state.focus = "entropy"
                 return
             pool_sha = _entropy_pool_sha256(state.entropy_sources)
     write_seed = _prompt_bool_curses(stdscr, "(EPS) write seed files (chmod 600)", default=False) if derive_seed else False
@@ -2037,7 +2053,7 @@ def _action_verify(state: AppState, stdscr) -> None:
 
 def handle_key(stdscr, state: AppState, ch: int) -> bool:
     if state.viewer is not None:
-        if ch in (27, ord("q"), ord("Q")):
+        if ch in (27, ord("q"), ord("Q"), 10, 13, curses.KEY_ENTER, curses.KEY_LEFT, curses.KEY_BACKSPACE, 127, 8, ord("b"), ord("B")):
             close_viewer(state)
             return True
         if ch in (curses.KEY_UP, ord("k")):
