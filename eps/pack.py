@@ -157,10 +157,29 @@ def _copy_payload_files(
     return out
 
 
-def derive_seed_master(*, root_sha256_hex: str, derivation_version: str = DEFAULT_DERIVATION_VERSION) -> bytes:
+def derive_seed_master(
+    *,
+    root_sha256_hex: str,
+    derivation_version: str = DEFAULT_DERIVATION_VERSION,
+    entropy_sources_sha256_hex: Optional[str] = None,
+) -> bytes:
+    """
+    Derive the 32-byte seed_master.
+
+    Backwards compatible behavior:
+    - If entropy_sources_sha256_hex is None: identical to the v1 derivation (root-only).
+    - If provided: mix the sources hash into the HKDF salt, producing a different seed.
+    """
     root_bytes = bytes.fromhex(root_sha256_hex)
     info = derivation_version.encode("utf-8")
     salt = b"EPS-SALT-v1"
+    if entropy_sources_sha256_hex:
+        try:
+            src = bytes.fromhex(str(entropy_sources_sha256_hex))
+        except Exception:
+            src = b""
+        # Salt-mixing keeps root as the IKM, and makes the additional sources explicit.
+        salt = b"EPS-SALT-v2" + src
     return hkdf_sha256(ikm=root_bytes, length=32, salt=salt, info=info)
 
 
@@ -199,6 +218,7 @@ def stamp_pack(
     include_hidden: bool = False,
     zip_pack: bool = False,
     derive_seed: bool = False,
+    entropy_sources_sha256: Optional[str] = None,
     write_seed_files: bool = False,
     print_seed: bool = False,
 ) -> StampResult:
@@ -228,6 +248,9 @@ def stamp_pack(
             dice=dice,
         )
         root_sha = manifest_root_sha256(manifest)
+        deriv_version = None
+        if derive_seed:
+            deriv_version = DEFAULT_DERIVATION_VERSION if not entropy_sources_sha256 else f"{DEFAULT_DERIVATION_VERSION}+SOURCES"
 
         pack_dir = _pack_dir_for_root(out_dir, root_sha)
         if pack_dir.exists():
@@ -240,7 +263,10 @@ def stamp_pack(
                     if isinstance(existing, dict) and manifest_root_sha256(existing) == root_sha:
                         seed_master: Optional[bytes] = None
                         if derive_seed:
-                            seed_master = derive_seed_master(root_sha256_hex=root_sha)
+                            seed_master = derive_seed_master(
+                                root_sha256_hex=root_sha,
+                                entropy_sources_sha256_hex=entropy_sources_sha256,
+                            )
                         # Best-effort: ensure requested derived outputs exist when reusing a pack.
                         if zip_pack and not (pack_dir / "entropy_pack.zip").is_file():
                             _write_zip(pack_dir, pack_dir / "entropy_pack.zip")
@@ -257,7 +283,8 @@ def stamp_pack(
                             pack_id=pack_id,
                             artifact_entries=artifact_entries,
                             zip_path=Path("entropy_pack.zip") if zip_pack else None,
-                            derivation_version=DEFAULT_DERIVATION_VERSION if derive_seed else None,
+                            derivation_version=deriv_version,
+                            entropy_sources_sha256=entropy_sources_sha256,
                             seed_master=seed_master,
                         )
                         _safe_write_json(pack_dir / "receipt.json", receipt)
@@ -278,7 +305,10 @@ def stamp_pack(
 
         seed_master: Optional[bytes] = None
         if derive_seed:
-            seed_master = derive_seed_master(root_sha256_hex=root_sha)
+            seed_master = derive_seed_master(
+                root_sha256_hex=root_sha,
+                entropy_sources_sha256_hex=entropy_sources_sha256,
+            )
             if write_seed_files:
                 seed_hex = seed_master.hex()
                 seed_b64 = base64.b64encode(seed_master).decode("ascii")
@@ -295,7 +325,8 @@ def stamp_pack(
             pack_id=pack_id,
             artifact_entries=artifact_entries,
             zip_path=Path("entropy_pack.zip") if zip_pack else None,
-            derivation_version=DEFAULT_DERIVATION_VERSION if derive_seed else None,
+            derivation_version=deriv_version,
+            entropy_sources_sha256=entropy_sources_sha256,
             seed_master=seed_master,
         )
         _safe_write_json(tmp_dir / "receipt.json", receipt)
@@ -322,6 +353,7 @@ def _build_receipt(
     artifact_entries: Sequence[Dict[str, object]],
     zip_path: Optional[Path],
     derivation_version: Optional[str],
+    entropy_sources_sha256: Optional[str],
     seed_master: Optional[bytes],
 ) -> Dict[str, object]:
     total_bytes = sum(int(a.get("size_bytes", 0) or 0) for a in artifact_entries)
@@ -343,6 +375,8 @@ def _build_receipt(
         receipt["zip_path"] = str(Path(str(zip_path)).name)
     if derivation_version:
         receipt["derivation_version"] = derivation_version
+    if entropy_sources_sha256:
+        receipt["entropy_sources_sha256"] = str(entropy_sources_sha256)
     if seed_master is not None:
         receipt["seed_fingerprint_sha256"] = seed_fingerprint_sha256(seed_master)
     return receipt
@@ -363,6 +397,8 @@ def _write_zip(pack_dir: Path, zip_path: Path) -> None:
             if path.is_dir():
                 continue
             rel = path.relative_to(pack_dir).as_posix()
+            if rel.startswith("entropy_sources/") or rel.startswith("entropy_sources\\"):
+                continue
             if rel in exclude:
                 continue
             zf.write(path, arcname=rel)

@@ -16,17 +16,21 @@ run: `python3 -B bin/eps.py --insane`
 from __future__ import annotations
 
 import argparse
+import base64
 import curses
 import hashlib
+import json
+import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, List, Optional, Sequence
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 # When running as `python3 bin/eps.py`, Python prepends `bin/` to sys.path,
 # which would cause `import eps` to resolve to this file (bin/eps.py).
@@ -241,6 +245,18 @@ class ViewerState:
 
 
 @dataclass
+class EntropySource:
+    # Material is not stored by default for photos; we store file path + hash.
+    kind: str  # "photo" | "text" | "tap"
+    name: str
+    sha256: str
+    size_bytes: int
+    meta: Dict[str, object] = field(default_factory=dict)
+    path: Optional[Path] = None
+    text: Optional[str] = None
+
+
+@dataclass
 class AppState:
     theme: Theme
     insane: bool = False
@@ -249,8 +265,14 @@ class AppState:
     godel_words: List[str] = field(default_factory=list)
     godel_phrase: str = ""
     godel_last_tick: int = 0
+    entropy_sources: List[EntropySource] = field(default_factory=list)
+    entropy_selected: int = 0
+    entropy_min_sources: int = 7
+    last_pack_dir: Optional[Path] = None
+    last_out_dir: Optional[Path] = None
     menu: List[str] = field(
         default_factory=lambda: [
+            "Entropy Sources",
             "Stamp Pack",
             "Verify Pack",
             "View README",
@@ -274,6 +296,157 @@ def _cycle(items: Sequence[int], tick: int, *, speed: int = 2, default: int = 0)
         return default
     idx = (int(tick) // max(1, int(speed))) % len(items)
     return int(items[idx])
+
+
+def _fmt_bytes(n: int) -> str:
+    try:
+        n = int(n)
+    except Exception:
+        return "?"
+    units = ["B", "KiB", "MiB", "GiB"]
+    v = float(n)
+    for u in units:
+        if v < 1024.0 or u == units[-1]:
+            if u == "B":
+                return f"{int(v)}{u}"
+            return f"{v:.1f}{u}"
+        v /= 1024.0
+    return f"{n}B"
+
+
+def _sha256_hex_path(path: Path, *, max_bytes: Optional[int] = None) -> Tuple[str, int]:
+    h = hashlib.sha256()
+    n = 0
+    with path.open("rb") as handle:
+        while True:
+            chunk = handle.read(1024 * 1024)
+            if not chunk:
+                break
+            n += len(chunk)
+            if max_bytes is not None and n > int(max_bytes):
+                raise ValueError(f"file exceeded max_bytes ({n} > {max_bytes})")
+            h.update(chunk)
+    return h.hexdigest(), n
+
+
+def _entropy_pool_sha256(sources: Sequence["EntropySource"]) -> str:
+    """
+    Deterministic fingerprint of the *set* of staged sources (order-independent).
+    Only uses non-sensitive metadata (hashes and kinds), not raw materials.
+    """
+    h = hashlib.sha256()
+    parts: List[bytes] = []
+    for s in sources:
+        parts.append(f"{s.kind}:{s.sha256}:{int(s.size_bytes)}".encode("utf-8"))
+    for p in sorted(parts):
+        h.update(p)
+        h.update(b"\n")
+    return h.hexdigest()
+
+
+_IMG_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".webp", ".heic"}
+
+
+def _is_image_path(path: Path) -> bool:
+    return path.suffix.lower() in _IMG_EXTS
+
+
+def _image_ascii_cached(path: Path, *, cols: int = 72, rows: int = 28) -> List[str]:
+    """
+    Convert an image into a small grayscale ASCII preview using ImageMagick.
+    Cached by content hash + geometry so browsing in the TUI is fast.
+    """
+    magick = shutil.which("magick")
+    if not magick:
+        return [f"(no magick) {path.name}"]
+
+    try:
+        sha, _n = _sha256_hex_path(path, max_bytes=25 * 1024 * 1024)
+    except Exception:
+        sha = hashlib.sha256(path.as_posix().encode("utf-8")).hexdigest()
+
+    cache_dir = Path(tempfile.gettempdir()) / "eps_img_cache"
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    cache_path = cache_dir / f"{sha}_{int(cols)}x{int(rows)}.txt"
+    if cache_path.is_file():
+        try:
+            return cache_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+        except Exception:
+            pass
+
+    # Render to a tiny binary PGM and map pixels to chars.
+    cmd = [
+        magick,
+        str(path),
+        "-auto-orient",
+        "-resize",
+        f"{int(cols)}x{int(rows)}!",
+        "-colorspace",
+        "Gray",
+        "-depth",
+        "8",
+        "pgm:-",
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, check=False, timeout=15)
+    except Exception as exc:
+        return [f"preview failed: {exc}"]
+    if proc.returncode != 0 or not proc.stdout:
+        return [f"preview failed (magick rc={proc.returncode})"]
+
+    data = proc.stdout
+    # Parse PGM P5 header.
+    if not data.startswith(b"P5"):
+        return [f"preview failed (unexpected format)"]
+    try:
+        # Header is ascii tokens separated by whitespace; comments start with '#'.
+        rest = data[2:]
+        tokens: List[bytes] = []
+        i = 0
+        while len(tokens) < 3 and i < len(rest):
+            # Skip whitespace
+            while i < len(rest) and rest[i] in b" \t\r\n":
+                i += 1
+            if i >= len(rest):
+                break
+            if rest[i] == 35:  # '#'
+                while i < len(rest) and rest[i] != 10:
+                    i += 1
+                continue
+            j = i
+            while j < len(rest) and rest[j] not in b" \t\r\n":
+                j += 1
+            tokens.append(rest[i:j])
+            i = j
+        w = int(tokens[0])
+        h = int(tokens[1])
+        _maxv = int(tokens[2])
+        # Skip single whitespace char after maxv.
+        while i < len(rest) and rest[i] in b" \t\r\n":
+            i += 1
+        pixels = rest[i : i + (w * h)]
+        if len(pixels) < w * h:
+            return [f"preview failed (short pixel data)"]
+    except Exception:
+        return [f"preview failed (bad pgm)"]
+
+    ramp = " .,:;irsXA253hMHGS#9B&@"  # dense ramp
+    lines: List[str] = []
+    for y in range(h):
+        row = pixels[y * w : (y + 1) * w]
+        out = []
+        for b in row:
+            idx = int(b) * (len(ramp) - 1) // 255
+            out.append(ramp[idx])
+        lines.append("".join(out))
+    try:
+        cache_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    except Exception:
+        pass
+    return lines
 
 
 def _load_wordlist_from_text_file(path: Path, *, max_bytes: int = 5_000_000) -> List[str]:
@@ -877,6 +1050,40 @@ def _draw_insane_viewer(stdscr, state: AppState, top: int, cols: int, rows: int)
         safe_addstr(stdscr, y, 0, v.lines[src_idx][:cols].ljust(cols), state.palette.text)
 
 
+def _entropy_sources_preview(state: AppState, *, width: int, height: int) -> List[str]:
+    """
+    Right-pane content for the Entropy Sources screen.
+    """
+    min_n = int(state.entropy_min_sources)
+    n = len(state.entropy_sources)
+    pool = _entropy_pool_sha256(state.entropy_sources)[:16] if state.entropy_sources else "none"
+    header = f"ENTROPY SOURCES // {n}/{min_n} required for LOCKDOWN seed  pool={pool}"
+    lines: List[str] = [header, ""]
+    lines.append("Keys: a=add photos  t=add text  Space=tap entropy  d=delete  c=clear  Enter=preview")
+    lines.append("")
+    if not state.entropy_sources:
+        lines.append("No sources staged.")
+        lines.append("Add at least 7 sources, then enable derive seed in Stamp Pack.")
+        return lines[:height]
+
+    sel = max(0, min(int(state.entropy_selected), len(state.entropy_sources) - 1))
+    for i, s in enumerate(state.entropy_sources[: max(0, height - 6)]):
+        mark = ">>" if i == sel else "  "
+        meta_bits: List[str] = []
+        if s.kind == "photo":
+            dims = s.meta.get("dims")
+            if isinstance(dims, str) and dims:
+                meta_bits.append(dims)
+        if s.kind == "tap":
+            cnt = s.meta.get("events")
+            if isinstance(cnt, int):
+                meta_bits.append(f"events={cnt}")
+        meta = (" " + " ".join(meta_bits)) if meta_bits else ""
+        short = s.sha256[:10]
+        lines.append(f"{mark} [{s.kind}] {s.name}  {_fmt_bytes(s.size_bytes)}  sha={short}{meta}")
+    return [ln[:width] for ln in lines[:height]]
+
+
 def _draw_insane_right_pane(stdscr, state: AppState, top: int, left_w: int, cols: int, rows: int) -> None:
     if state.palette is None:
         return
@@ -886,7 +1093,9 @@ def _draw_insane_right_pane(stdscr, state: AppState, top: int, left_w: int, cols
 
     label = state.menu[state.selected] if 0 <= state.selected < len(state.menu) else ""
     preview: List[str] = []
-    if label == "Stamp Pack":
+    if label == "Entropy Sources":
+        preview = _entropy_sources_preview(state, width=right_w, height=body_h)
+    elif label == "Stamp Pack":
         preview = [
             "STAMP // directory -> content-addressed pack",
             "",
@@ -976,7 +1185,9 @@ def _draw_right_pane(stdscr, state: AppState, top: int, left_w: int, cols: int, 
 
     label = state.menu[state.selected] if 0 <= state.selected < len(state.menu) else ""
     preview: List[str] = []
-    if label == "Stamp Pack":
+    if label == "Entropy Sources":
+        preview = _entropy_sources_preview(state, width=right_w, height=body_h)
+    elif label == "Stamp Pack":
         preview = [
             "Stamp a content-addressed EntropyPack from a directory.",
             "",
@@ -1124,12 +1335,292 @@ def _prompt_bool_curses(stdscr, label: str, *, default: bool = False) -> bool:
     return s.startswith("y") or s in ("1", "true", "yes")
 
 
+def _identify_image_dims(path: Path) -> Optional[str]:
+    magick = shutil.which("magick")
+    if not magick:
+        return None
+    try:
+        proc = subprocess.run(
+            [magick, "identify", "-format", "%w x %h", str(path)],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        out = (proc.stdout or "").strip()
+        return out if out else None
+    except Exception:
+        return None
+
+
+def _action_entropy_add_photos(state: AppState, stdscr) -> None:
+    p_s = _prompt_str_curses(stdscr, "(EPS) photo path (file or dir)", default=".")
+    p = Path(p_s).expanduser()
+    if not p.exists():
+        state.status = "Failed."
+        state.log_lines = [f"Entropy add failed: not found: {p}"]
+        return
+    paths: List[Path] = []
+    if p.is_file():
+        paths = [p]
+    elif p.is_dir():
+        # Deterministic scan. Bound it to keep the UI responsive.
+        for fp in sorted(p.rglob("*")):
+            try:
+                if fp.is_file() and _is_image_path(fp):
+                    paths.append(fp)
+            except OSError:
+                continue
+            if len(paths) >= 250:
+                break
+    else:
+        state.status = "Failed."
+        state.log_lines = [f"Entropy add failed: not a file/dir: {p}"]
+        return
+
+    added = 0
+    for fp in paths:
+        try:
+            sha, size = _sha256_hex_path(fp, max_bytes=100 * 1024 * 1024)
+        except Exception:
+            continue
+        name = fp.name
+        dims = _identify_image_dims(fp)
+        meta: Dict[str, object] = {}
+        if dims:
+            meta["dims"] = dims
+        state.entropy_sources.append(
+            EntropySource(kind="photo", name=name, sha256=sha, size_bytes=size, meta=meta, path=fp)
+        )
+        added += 1
+
+    if added:
+        state.status = "Done."
+        state.log_lines = [f"Added {added} photo source(s)."]
+    else:
+        state.status = "Failed."
+        state.log_lines = ["No valid images found or hash failed."]
+
+
+def _action_entropy_add_text(state: AppState, stdscr) -> None:
+    label = _prompt_str_curses(stdscr, "(EPS) text label", default="note")
+    text = _prompt_str_curses(stdscr, "(EPS) text (one line)", default="", max_len=4096)
+    raw = text.encode("utf-8", errors="ignore")
+    sha = hashlib.sha256(raw).hexdigest()
+    state.entropy_sources.append(
+        EntropySource(kind="text", name=label.strip() or "note", sha256=sha, size_bytes=len(raw), text=text)
+    )
+    state.status = "Done."
+    state.log_lines = [f"Added text source: {label.strip() or 'note'} ({_fmt_bytes(len(raw))})."]
+
+
+def _action_entropy_tap(state: AppState, stdscr) -> None:
+    """
+    Capture keystroke timing + codes for entropy.
+    ESC ends early.
+    """
+    target = 256
+    h = hashlib.sha256()
+    sample_events: List[Tuple[int, int]] = []
+    count = 0
+    start_ns = time.monotonic_ns()
+    last_ns = start_ns
+
+    # Temporarily switch to non-blocking reads for this capture.
+    try:
+        stdscr.nodelay(True)
+        stdscr.timeout(25)
+    except curses.error:
+        pass
+
+    try:
+        while True:
+            now = time.monotonic_ns()
+            dt_us = int((now - last_ns) // 1000)
+            last_ns = now
+            try:
+                ch = stdscr.getch()
+            except curses.error:
+                ch = -1
+            if ch == -1:
+                # Update status without adding entropy.
+                state.status = f"Tap entropy: {count}/{target} ..."
+                draw(stdscr, state)
+                continue
+            if ch == 27:  # ESC
+                break
+            code = int(ch) & 0xFFFFFFFF
+            # Mix timing + code deterministically into the hash.
+            h.update(dt_us.to_bytes(4, "little", signed=False))
+            h.update(code.to_bytes(4, "little", signed=False))
+            count += 1
+            if len(sample_events) < 64:
+                sample_events.append((dt_us, code))
+            if count >= target:
+                break
+            state.status = f"Tap entropy: {count}/{target} ..."
+            draw(stdscr, state)
+    finally:
+        try:
+            stdscr.nodelay(False)
+            stdscr.timeout(50 if state.insane else 100)
+        except curses.error:
+            pass
+
+    digest = h.hexdigest()
+    meta: Dict[str, object] = {"events": int(count), "sample": sample_events[:16]}
+    # size_bytes is the conceptual size of the captured stream.
+    state.entropy_sources.append(EntropySource(kind="tap", name="tap", sha256=digest, size_bytes=target * 8, meta=meta))
+    state.status = "Done."
+    state.log_lines = [f"Added tap source: events={count} sha={digest[:10]}."]
+
+
+def _action_entropy_delete_selected(state: AppState) -> None:
+    if not state.entropy_sources:
+        return
+    idx = max(0, min(int(state.entropy_selected), len(state.entropy_sources) - 1))
+    removed = state.entropy_sources.pop(idx)
+    state.entropy_selected = max(0, min(state.entropy_selected, len(state.entropy_sources) - 1))
+    state.status = "Done."
+    state.log_lines = [f"Removed source: [{removed.kind}] {removed.name}."]
+
+
+def _action_entropy_clear(state: AppState) -> None:
+    n = len(state.entropy_sources)
+    state.entropy_sources.clear()
+    state.entropy_selected = 0
+    state.status = "Done."
+    state.log_lines = [f"Cleared {n} source(s)."]
+
+
+def _action_entropy_preview(state: AppState) -> None:
+    if not state.entropy_sources:
+        return
+    idx = max(0, min(int(state.entropy_selected), len(state.entropy_sources) - 1))
+    s = state.entropy_sources[idx]
+    lines: List[str] = []
+    lines.append(f"[{s.kind}] {s.name}")
+    lines.append(f"sha256: {s.sha256}")
+    lines.append(f"size: {_fmt_bytes(s.size_bytes)}")
+    if s.meta:
+        lines.append("")
+        lines.append("meta:")
+        for k in sorted(s.meta.keys()):
+            lines.append(f"- {k}: {s.meta[k]}")
+    if s.kind == "text" and s.text is not None:
+        lines.append("")
+        lines.append("text:")
+        lines.extend((s.text or "").splitlines() or [""])
+    if s.kind == "photo" and s.path is not None and s.path.is_file():
+        lines.append("")
+        lines.append("preview:")
+        lines.extend(_image_ascii_cached(s.path, cols=72, rows=28))
+    open_viewer(state, f"Entropy Source: {s.kind}", lines)
+
+
 def _prompt_bool(label: str, default: bool = False) -> bool:
     suffix = "Y/n" if default else "y/N"
     raw = input(f"{label} [{suffix}]: ").strip().lower()
     if not raw:
         return bool(default)
     return raw in ("y", "yes", "true", "1")
+
+
+def _build_sources_payload_dir(sources: Sequence[EntropySource]) -> Path:
+    """
+    Materialize staged entropy sources into a real directory so they can be stamped as artifacts.
+    Photos are copied; text/tap become files. The caller owns cleanup.
+    """
+    td = Path(tempfile.mkdtemp(prefix="eps_payload_sources_"))
+    (td / "photos").mkdir(parents=True, exist_ok=True)
+    (td / "text").mkdir(parents=True, exist_ok=True)
+    (td / "tap").mkdir(parents=True, exist_ok=True)
+
+    index: List[Dict[str, object]] = []
+    for i, s in enumerate(sources, start=1):
+        entry: Dict[str, object] = {
+            "i": int(i),
+            "kind": s.kind,
+            "name": s.name,
+            "sha256": s.sha256,
+            "size_bytes": int(s.size_bytes),
+            "meta": dict(s.meta or {}),
+        }
+        if s.kind == "photo" and s.path is not None and s.path.is_file():
+            dst = td / "photos" / f"{i:03d}_{s.path.name}"
+            try:
+                shutil.copy2(s.path, dst)
+            except Exception:
+                pass
+            entry["path"] = str(Path("photos") / dst.name)
+        elif s.kind == "text" and s.text is not None:
+            dst = td / "text" / f"{i:03d}_{re.sub(r'[^A-Za-z0-9._-]+', '_', s.name)[:40] or 'note'}.txt"
+            dst.write_text(s.text, encoding="utf-8", errors="ignore")
+            try:
+                dst.chmod(stat.S_IRUSR | stat.S_IWUSR)
+            except OSError:
+                pass
+            entry["path"] = str(Path("text") / dst.name)
+        elif s.kind == "tap":
+            dst = td / "tap" / f"{i:03d}_tap.json"
+            dst.write_text(json.dumps(entry, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+            try:
+                dst.chmod(stat.S_IRUSR | stat.S_IWUSR)
+            except OSError:
+                pass
+            entry["path"] = str(Path("tap") / dst.name)
+        index.append(entry)
+
+    (td / "sources.json").write_text(json.dumps(index, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+    return td
+
+
+def _write_entropy_sources_into_pack(pack_dir: Path, sources: Sequence[EntropySource]) -> Optional[Path]:
+    """
+    Persist staged sources into the pack directory (outside payload/) for audit.
+    These files are excluded from entropy_pack.zip.
+    """
+    out = pack_dir / "entropy_sources"
+    try:
+        out.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return None
+    index: List[Dict[str, object]] = []
+    for i, s in enumerate(sources, start=1):
+        entry: Dict[str, object] = {
+            "i": int(i),
+            "kind": s.kind,
+            "name": s.name,
+            "sha256": s.sha256,
+            "size_bytes": int(s.size_bytes),
+            "meta": dict(s.meta or {}),
+        }
+        if s.kind == "photo" and s.path is not None and s.path.is_file():
+            dst = out / f"{i:03d}_{s.path.name}"
+            try:
+                shutil.copy2(s.path, dst)
+            except Exception:
+                pass
+            entry["path"] = dst.name
+        elif s.kind == "text" and s.text is not None:
+            dst = out / f"{i:03d}_{re.sub(r'[^A-Za-z0-9._-]+', '_', s.name)[:40] or 'note'}.txt"
+            dst.write_text(s.text, encoding="utf-8", errors="ignore")
+            try:
+                dst.chmod(stat.S_IRUSR | stat.S_IWUSR)
+            except OSError:
+                pass
+            entry["path"] = dst.name
+        elif s.kind == "tap":
+            dst = out / f"{i:03d}_tap.json"
+            dst.write_text(json.dumps(entry, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+            try:
+                dst.chmod(stat.S_IRUSR | stat.S_IWUSR)
+            except OSError:
+                pass
+            entry["path"] = dst.name
+        index.append(entry)
+    (out / "sources.index.json").write_text(json.dumps(index, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+    return out
 
 
 def _action_stamp(state: AppState, stdscr) -> None:
@@ -1141,18 +1632,44 @@ def _action_stamp(state: AppState, stdscr) -> None:
     stdscr.clrtoeol()
     stdscr.refresh()
 
-    input_s = _prompt_str_curses(stdscr, "(EPS) input dir", default=".")
-    out_s = _prompt_str_curses(stdscr, "(EPS) out dir", default="./out")
+    default_out = str(state.last_out_dir) if state.last_out_dir is not None else "./out"
+    input_s = _prompt_str_curses(stdscr, "(EPS) input dir (or @sources)", default=".")
+    out_s = _prompt_str_curses(stdscr, "(EPS) out dir", default=default_out)
     pack_id_s = _prompt_str_curses(stdscr, "(EPS) pack_id (optional)", default="")
     notes_s = _prompt_str_curses(stdscr, "(EPS) notes (optional)", default="")
     created_at_s = _prompt_str_curses(stdscr, "(EPS) created_at_utc (optional)", default="")
     include_hidden = _prompt_bool_curses(stdscr, "(EPS) include hidden files", default=False)
     zip_pack = _prompt_bool_curses(stdscr, "(EPS) write entropy_pack.zip", default=True)
-    derive_seed = _prompt_bool_curses(stdscr, "(EPS) derive seed_master", default=False)
+    derive_seed = _prompt_bool_curses(stdscr, "(EPS) derive seed_master (LOCKDOWN)", default=bool(state.insane))
+    mix_sources = False
+    pool_sha = None
+    if derive_seed and state.entropy_sources:
+        mix_sources = _prompt_bool_curses(stdscr, "(EPS) mix staged entropy sources into seed", default=True)
+        if mix_sources:
+            if len(state.entropy_sources) < int(state.entropy_min_sources):
+                state.status = "Failed."
+                state.log_lines = [
+                    "Stamp blocked: not enough entropy sources.",
+                    f"Need {state.entropy_min_sources}, have {len(state.entropy_sources)}.",
+                    "Go to Entropy Sources and add more (photos/text/tap).",
+                ]
+                return
+            pool_sha = _entropy_pool_sha256(state.entropy_sources)
     write_seed = _prompt_bool_curses(stdscr, "(EPS) write seed files (chmod 600)", default=False) if derive_seed else False
     show_seed = _prompt_bool_curses(stdscr, "(EPS) show seed in UI", default=False) if derive_seed else False
+    write_sources = _prompt_bool_curses(stdscr, "(EPS) write entropy_sources into pack (excluded from zip)", default=False) if derive_seed else False
 
-    input_dir = Path(input_s).expanduser()
+    tmp_payload_dir: Optional[Path] = None
+    input_dir: Path
+    if input_s.strip() == "@sources":
+        if not state.entropy_sources:
+            state.status = "Failed."
+            state.log_lines = ["@sources selected, but no entropy sources are staged."]
+            return
+        tmp_payload_dir = _build_sources_payload_dir(state.entropy_sources)
+        input_dir = tmp_payload_dir
+    else:
+        input_dir = Path(input_s).expanduser()
     out_dir = Path(out_s).expanduser()
     pack_id = pack_id_s.strip() or None
     notes = notes_s.strip() or None
@@ -1168,27 +1685,48 @@ def _action_stamp(state: AppState, stdscr) -> None:
             include_hidden=include_hidden,
             zip_pack=zip_pack,
             derive_seed=derive_seed,
+            entropy_sources_sha256=pool_sha if mix_sources else None,
             write_seed_files=write_seed,
             print_seed=False,  # never print to stdout from TUI
         )
     except Exception as exc:
         state.log_lines = ["Stamp failed.", f"- {exc}"]
         state.status = "Failed."
+        if tmp_payload_dir is not None:
+            try:
+                shutil.rmtree(tmp_payload_dir)
+            except Exception:
+                pass
         return
+    finally:
+        if tmp_payload_dir is not None:
+            try:
+                shutil.rmtree(tmp_payload_dir)
+            except Exception:
+                pass
 
+    state.last_pack_dir = res.pack_dir
+    state.last_out_dir = out_dir.resolve()
     state.log_lines = [
         "Stamp complete.",
+        f"input_dir: {input_dir.resolve()}",
+        f"out_dir: {out_dir.resolve()}",
         f"pack_dir: {res.pack_dir}",
         f"entropy_root_sha256: {res.root_sha256}",
     ]
     fp = res.receipt.get("seed_fingerprint_sha256")
     if isinstance(fp, str) and fp:
         state.log_lines.append(f"seed_fingerprint_sha256: {fp}")
+    if mix_sources and pool_sha:
+        state.log_lines.append(f"entropy_sources_count: {len(state.entropy_sources)}")
+        state.log_lines.append(f"entropy_sources_sha256: {pool_sha}")
+    if write_sources and derive_seed and state.entropy_sources:
+        p = _write_entropy_sources_into_pack(res.pack_dir, state.entropy_sources)
+        if p is not None:
+            state.log_lines.append(f"entropy_sources_dir: {p}")
     if show_seed and res.seed_master is not None:
         seed_hex = res.seed_master.hex()
-        import base64 as _b64
-
-        seed_b64 = _b64.b64encode(res.seed_master).decode("ascii")
+        seed_b64 = base64.b64encode(res.seed_master).decode("ascii")
         state.log_lines.append(f"seed_master.hex: {seed_hex}")
         state.log_lines.append(f"seed_master.b64: {seed_b64}")
     state.status = "Done."
@@ -1197,8 +1735,20 @@ def _action_stamp(state: AppState, stdscr) -> None:
 def _action_verify(state: AppState, stdscr) -> None:
     state.status = "Verify: configure..."
     state.log_lines = []
-    pack_s = _prompt_str_curses(stdscr, "(EPS) pack path (dir or .zip)", default=".")
+    default = str(state.last_pack_dir) if state.last_pack_dir is not None else (str(state.last_out_dir) if state.last_out_dir is not None else "./out")
+    pack_s = _prompt_str_curses(stdscr, "(EPS) pack path (dir or .zip)", default=default)
     pack = Path(pack_s).expanduser()
+    if pack.is_dir() and not (pack / "manifest.json").is_file():
+        # If the user pointed at an out/ directory, pick the most recent pack subdir.
+        try:
+            candidates = [p for p in pack.iterdir() if p.is_dir() and (p / "manifest.json").is_file()]
+        except Exception:
+            candidates = []
+        if candidates:
+            candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+            picked = candidates[0]
+            state.log_lines = [f"Auto-selected pack dir: {picked}"]
+            pack = picked
     try:
         res = verify_pack(pack)
     except Exception as exc:
@@ -1215,6 +1765,9 @@ def _action_verify(state: AppState, stdscr) -> None:
         state.status = "Done."
     else:
         state.log_lines = ["Verify failed."] + [f"- {e}" for e in res.errors]
+        if any("missing manifest.json" in e for e in res.errors):
+            state.log_lines.append("")
+            state.log_lines.append("Hint: verify expects a stamped pack dir (out/<root_sha256>/) or entropy_pack.zip.")
         state.status = "Failed."
 
 
@@ -1240,6 +1793,37 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
         # Allow quick quit regardless of selection.
         return False
 
+    label = state.menu[state.selected] if 0 <= state.selected < len(state.menu) else ""
+
+    # Entropy Sources mode has its own navigation/actions.
+    if label == "Entropy Sources":
+        if ch in (curses.KEY_UP, ord("k")):
+            state.entropy_selected = max(0, state.entropy_selected - 1)
+            state.status = "Ready."
+            return True
+        if ch in (curses.KEY_DOWN, ord("j")):
+            state.entropy_selected = min(max(0, len(state.entropy_sources) - 1), state.entropy_selected + 1)
+            state.status = "Ready."
+            return True
+        if ch in (ord("a"), ord("A")):
+            _action_entropy_add_photos(state, stdscr)
+            return True
+        if ch in (ord("t"), ord("T")):
+            _action_entropy_add_text(state, stdscr)
+            return True
+        if ch == ord(" "):
+            _action_entropy_tap(state, stdscr)
+            return True
+        if ch in (ord("d"), ord("D")):
+            _action_entropy_delete_selected(state)
+            return True
+        if ch in (ord("c"), ord("C")):
+            _action_entropy_clear(state)
+            return True
+        if ch in (curses.KEY_ENTER, 10, 13):
+            _action_entropy_preview(state)
+            return True
+
     if ch in (curses.KEY_UP, ord("k")):
         state.selected = max(0, state.selected - 1)
         state.status = "Ready."
@@ -1252,12 +1836,14 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
         return True
 
     if ch in (curses.KEY_ENTER, 10, 13):
-        label = state.menu[state.selected]
         if label == "Stamp Pack":
             _action_stamp(state, stdscr)
             return True
         if label == "Verify Pack":
             _action_verify(state, stdscr)
+            return True
+        if label == "Entropy Sources":
+            # Enter is handled above for preview; keep as a no-op here.
             return True
         if label == "View README":
             root = Path(__file__).resolve().parents[1]
