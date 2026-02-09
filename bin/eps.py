@@ -117,7 +117,13 @@ def _draw_header(stdscr, state: AppState, cols: int) -> None:
 
     # Keep semantics simple and monotone-safe.
     mode = "offline"
-    risk = "INFO" if not state.log_lines else "OK"
+    s = (state.status or "").strip().lower()
+    if "fail" in s:
+        risk = "WARN"
+    elif "done" in s:
+        risk = "OK"
+    else:
+        risk = "INFO"
     action = "none"
     status_line = f"MODE: {mode}  RISK: {risk}  ACTION: {action}"
     safe_addstr(stdscr, 1, 0, status_line[:cols].ljust(cols), state.theme.normal)

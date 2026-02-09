@@ -13,7 +13,8 @@ DEFAULT_DERIVATION_VERSION = "ENTROPYPACK-SEED-v1"
 
 
 def stable_dumps(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    # Strict JSON: disallow NaN/Infinity to keep the root stable and portable.
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
 
 
 def sha256_hex(data: bytes) -> str:
@@ -55,6 +56,10 @@ def collect_artifacts(input_dir: Path, *, include_hidden: bool = False) -> List[
     artifacts: List[Dict[str, object]] = []
     for path in _iter_files(input_dir, include_hidden=include_hidden):
         rel = path.relative_to(input_dir).as_posix()
+        if path.is_symlink():
+            raise ValueError(f"refusing to include symlink artifact: {rel}")
+        if not path.is_file():
+            raise ValueError(f"refusing to include non-file artifact: {rel}")
         size = path.stat().st_size
         artifacts.append(
             {
@@ -114,4 +119,3 @@ class VerificationResult:
     file_count: int
     total_bytes: int
     errors: List[str]
-

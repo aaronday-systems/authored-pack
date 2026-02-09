@@ -20,7 +20,6 @@ from .manifest import (
     VerificationResult,
     build_manifest,
     collect_artifacts,
-    file_sha256_hex,
     manifest_root_sha256,
     sha256_hex,
 )
@@ -29,18 +28,14 @@ from .manifest import (
 RECEIPT_SCHEMA_VERSION = "eps.receipt.v1"
 PACK_LAYOUT_VERSION = "eps.pack_layout.v1"
 
-RESERVED_TOPLEVEL = {
-    "manifest.json",
-    "entropy_root_sha256.txt",
-    "receipt.json",
-    "entropy_pack.zip",
-    "seed_master.hex",
-    "seed_master.b64",
-}
+DEFAULT_MAX_MANIFEST_BYTES = 4 * 1024 * 1024  # 4 MiB
+DEFAULT_MAX_ARTIFACT_BYTES = 512 * 1024 * 1024  # 512 MiB
+DEFAULT_MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB
 
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
 
 def _looks_like_windows_drive(path: str) -> bool:
     # "C:foo" and "C:\foo" patterns are ambiguous across platforms.
@@ -65,7 +60,7 @@ def _validate_artifact_relpath(value: object) -> Optional[Path]:
     p = Path(rel)
     if p.is_absolute():
         return None
-    if any(part == ".." for part in p.parts):
+    if any(part in (".", "..") for part in p.parts):
         return None
     # Current pack layout requires artifacts under payload/.
     if not p.parts or p.parts[0] != "payload":
@@ -87,6 +82,23 @@ def _sha256_hex_stream(handle, *, max_bytes: Optional[int] = None) -> Tuple[str,
     return h.hexdigest(), n
 
 
+def _read_file_bytes_limited(path: Path, *, max_bytes: int) -> bytes:
+    with path.open("rb") as handle:
+        data = handle.read(int(max_bytes) + 1)
+    if len(data) > int(max_bytes):
+        raise ValueError(f"file too large ({len(data)} > {max_bytes})")
+    return data
+
+
+def _read_zip_member_bytes_limited(zf: zipfile.ZipFile, name: str, *, max_bytes: int) -> bytes:
+    info = zf.getinfo(name)
+    with zf.open(info, "r") as handle:
+        data = handle.read(int(max_bytes) + 1)
+    if len(data) > int(max_bytes):
+        raise ValueError(f"zip member too large ({len(data)} > {max_bytes})")
+    return data
+
+
 def _ensure_parent(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -98,7 +110,7 @@ def _safe_write_text(path: Path, content: str) -> None:
 
 def _safe_write_json(path: Path, obj: Dict[str, object]) -> None:
     _ensure_parent(path)
-    path.write_text(json.dumps(obj, ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+    path.write_text(json.dumps(obj, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False) + "\n", encoding="utf-8")
 
 
 def _copy_payload_files(
@@ -107,7 +119,6 @@ def _copy_payload_files(
     pack_dir: Path,
     artifacts: Sequence[Dict[str, object]],
 ) -> List[Dict[str, object]]:
-    payload_dir = pack_dir / "payload"
     out: List[Dict[str, object]] = []
     for a in artifacts:
         src_rel = str(a.get("source_relpath", "") or "")
@@ -118,9 +129,6 @@ def _copy_payload_files(
             raise ValueError(f"artifact source missing: {src}")
 
         dst_rel = Path("payload") / Path(src_rel)
-        # Top-level reserved collisions are not allowed.
-        if len(dst_rel.parts) == 1 and dst_rel.name in RESERVED_TOPLEVEL:
-            raise ValueError(f"reserved artifact name collision: {dst_rel.name}")
 
         dst = pack_dir / dst_rel
         dst.parent.mkdir(parents=True, exist_ok=True)
@@ -220,18 +228,6 @@ def stamp_pack(
                         seed_master: Optional[bytes] = None
                         if derive_seed:
                             seed_master = derive_seed_master(root_sha256_hex=root_sha)
-                        receipt = _build_receipt(
-                            root_sha256=root_sha,
-                            pack_id=pack_id,
-                            artifact_entries=artifact_entries,
-                            zip_path=Path("entropy_pack.zip") if zip_pack else None,
-                            derivation_version=DEFAULT_DERIVATION_VERSION if derive_seed else None,
-                            seed_master=seed_master,
-                        )
-                        # Ensure receipt exists for older packs; do not overwrite an existing receipt.
-                        receipt_path = pack_dir / "receipt.json"
-                        if not receipt_path.is_file():
-                            _safe_write_json(receipt_path, receipt)
                         # Best-effort: ensure requested derived outputs exist when reusing a pack.
                         if zip_pack and not (pack_dir / "entropy_pack.zip").is_file():
                             _write_zip(pack_dir, pack_dir / "entropy_pack.zip")
@@ -242,6 +238,16 @@ def stamp_pack(
                             _safe_write_text(pack_dir / "seed_master.b64", seed_b64 + "\n")
                             _chmod_600(pack_dir / "seed_master.hex")
                             _chmod_600(pack_dir / "seed_master.b64")
+                        # receipt.json is operational metadata; keep it aligned with the most recent stamp call.
+                        receipt = _build_receipt(
+                            root_sha256=root_sha,
+                            pack_id=pack_id,
+                            artifact_entries=artifact_entries,
+                            zip_path=Path("entropy_pack.zip") if zip_pack else None,
+                            derivation_version=DEFAULT_DERIVATION_VERSION if derive_seed else None,
+                            seed_master=seed_master,
+                        )
+                        _safe_write_json(pack_dir / "receipt.json", receipt)
                         if print_seed and seed_master is not None:
                             _print_seed_material(seed_master)
                         try:
@@ -268,6 +274,9 @@ def stamp_pack(
                 _chmod_600(tmp_dir / "seed_master.hex")
                 _chmod_600(tmp_dir / "seed_master.b64")
 
+        if zip_pack:
+            _write_zip(tmp_dir, tmp_dir / "entropy_pack.zip")
+
         receipt = _build_receipt(
             root_sha256=root_sha,
             pack_id=pack_id,
@@ -277,9 +286,6 @@ def stamp_pack(
             seed_master=seed_master,
         )
         _safe_write_json(tmp_dir / "receipt.json", receipt)
-
-        if zip_pack:
-            _write_zip(tmp_dir, tmp_dir / "entropy_pack.zip")
 
         # Atomic-ish move: rename tmp dir into content-addressed target.
         tmp_dir.replace(pack_dir)
@@ -320,7 +326,8 @@ def _build_receipt(
     if pack_id:
         receipt["pack_id"] = str(pack_id)
     if zip_path is not None:
-        receipt["zip_path"] = str(zip_path)
+        # Avoid embedding absolute local paths in receipts.
+        receipt["zip_path"] = str(Path(str(zip_path)).name)
     if derivation_version:
         receipt["derivation_version"] = derivation_version
     if seed_master is not None:
@@ -348,18 +355,34 @@ def _write_zip(pack_dir: Path, zip_path: Path) -> None:
             zf.write(path, arcname=rel)
 
 
-def verify_pack(pack_path: Path) -> VerificationResult:
+def verify_pack(
+    pack_path: Path,
+    *,
+    max_manifest_bytes: int = DEFAULT_MAX_MANIFEST_BYTES,
+    max_artifact_bytes: int = DEFAULT_MAX_ARTIFACT_BYTES,
+    max_total_bytes: int = DEFAULT_MAX_TOTAL_BYTES,
+    reject_duplicate_zip_members: bool = True,
+) -> VerificationResult:
     pack_path = Path(pack_path).resolve()
     errors: List[str] = []
     file_count = 0
     total_bytes = 0
+    try:
+        max_manifest_bytes = int(max_manifest_bytes)
+        max_artifact_bytes = int(max_artifact_bytes)
+        max_total_bytes = int(max_total_bytes)
+    except Exception:
+        return VerificationResult(ok=False, root_sha256="", file_count=0, total_bytes=0, errors=["invalid verify limits"])
+    if max_manifest_bytes <= 0 or max_artifact_bytes <= 0 or max_total_bytes <= 0:
+        return VerificationResult(ok=False, root_sha256="", file_count=0, total_bytes=0, errors=["invalid verify limits"])
 
     if pack_path.is_dir():
         manifest_path = pack_path / "manifest.json"
         if not manifest_path.is_file():
             return VerificationResult(ok=False, root_sha256="", file_count=0, total_bytes=0, errors=["missing manifest.json"])
         try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            raw = _read_file_bytes_limited(manifest_path, max_bytes=max_manifest_bytes)
+            manifest = json.loads(raw.decode("utf-8"))
         except Exception as exc:
             return VerificationResult(ok=False, root_sha256="", file_count=0, total_bytes=0, errors=[f"invalid manifest.json: {exc}"])
         if not isinstance(manifest, dict):
@@ -393,6 +416,12 @@ def verify_pack(pack_path: Path) -> VerificationResult:
             if not isinstance(size, int) or size < 0:
                 errors.append(f"artifact[{i}].size_bytes invalid")
                 continue
+            if size > max_artifact_bytes:
+                errors.append(f"artifact[{i}] too large: {rel_path.as_posix()} size_bytes={size} cap={max_artifact_bytes}")
+                continue
+            if total_bytes + int(size) > max_total_bytes:
+                errors.append(f"pack too large (cap exceeded): cap={max_total_bytes}")
+                continue
             target = pack_path / rel_path
             # Guard against path traversal and symlink escapes.
             try:
@@ -412,20 +441,32 @@ def verify_pack(pack_path: Path) -> VerificationResult:
             if actual_size != size:
                 errors.append(f"size mismatch: {rel_path.as_posix()} expected={size} actual={actual_size}")
                 continue
-            actual_sha = file_sha256_hex(target)
+            try:
+                with target.open("rb") as handle:
+                    actual_sha, n = _sha256_hex_stream(handle, max_bytes=size)
+            except Exception as exc:
+                errors.append(f"failed to read artifact: {rel_path.as_posix()}: {exc}")
+                continue
+            if n != size:
+                errors.append(f"size mismatch: {rel_path.as_posix()} expected={size} actual={n}")
+                continue
             if actual_sha != sha:
                 errors.append(f"sha256 mismatch: {rel_path.as_posix()}")
                 continue
             file_count += 1
-            total_bytes += int(actual_size)
+            total_bytes += int(size)
 
         return VerificationResult(ok=not errors, root_sha256=root_sha, file_count=file_count, total_bytes=total_bytes, errors=errors)
 
     if pack_path.is_file() and pack_path.suffix.lower() == ".zip":
         try:
             with zipfile.ZipFile(pack_path, "r") as zf:
+                if reject_duplicate_zip_members:
+                    names = [zi.filename for zi in zf.infolist()]
+                    if len(names) != len(set(names)):
+                        return VerificationResult(ok=False, root_sha256="", file_count=0, total_bytes=0, errors=["zip contains duplicate member names"])
                 try:
-                    raw = zf.read("manifest.json")
+                    raw = _read_zip_member_bytes_limited(zf, "manifest.json", max_bytes=max_manifest_bytes)
                 except KeyError:
                     return VerificationResult(ok=False, root_sha256="", file_count=0, total_bytes=0, errors=["missing manifest.json in zip"])
                 try:
@@ -459,13 +500,19 @@ def verify_pack(pack_path: Path) -> VerificationResult:
                     if rel_path is None:
                         errors.append(f"artifact[{i}].path invalid")
                         continue
+                    rel_s = rel_path.as_posix()
                     if not isinstance(sha, str) or len(sha) != 64:
                         errors.append(f"artifact[{i}].sha256 invalid")
                         continue
                     if not isinstance(size, int) or size < 0:
                         errors.append(f"artifact[{i}].size_bytes invalid")
                         continue
-                    rel_s = rel_path.as_posix()
+                    if size > max_artifact_bytes:
+                        errors.append(f"artifact[{i}] too large: {rel_s} size_bytes={size} cap={max_artifact_bytes}")
+                        continue
+                    if total_bytes + int(size) > max_total_bytes:
+                        errors.append(f"pack too large (cap exceeded): cap={max_total_bytes}")
+                        continue
                     try:
                         info = zf.getinfo(rel_s)
                     except KeyError:
