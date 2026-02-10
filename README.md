@@ -55,6 +55,18 @@ python3 -m eps stamp-bin \
 By default, it refuses to run if it would leave fewer than **50 files** in the bin after consuming 7.
 Use `--allow-low-bin` to proceed anyway (prints a warning).
 
+#### Repo-local bins (pre-created)
+
+This repo includes pre-created bins (contents ignored by git):
+- `./bins/entropy_bin` (drop entropy files here)
+- `./bins/eps_out` (stamped outputs go here)
+
+Quick run:
+
+```bash
+python3 -m eps stamp-bin --entropy-bin ./bins/entropy_bin --out ./bins/eps_out --json
+```
+
 ### Verify a pack (dir or zip)
 
 ```bash

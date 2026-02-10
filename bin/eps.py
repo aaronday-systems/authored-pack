@@ -20,7 +20,9 @@ import base64
 import curses
 import hashlib
 import json
+import math
 import os
+import random
 import re
 import shutil
 import shlex
@@ -28,8 +30,10 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.parse
+import wave
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
@@ -1226,6 +1230,182 @@ def _draw_insane_background(stdscr, state: AppState, rows: int, cols: int) -> No
                 safe_addstr(stdscr, y, sx, " ", attr | (curses.A_BOLD if (row_seed >> (sx % 9)) & 1 else 0))
 
 
+def _write_modulated_sine_wav(
+    wav_path: Path,
+    *,
+    duration_s: float = 3.0,
+    hold_hz: float = 25.0,
+    f_min_hz: float = 100.0,
+    f_max_hz: float = 1000.0,
+    sample_rate: int = 44100,
+) -> None:
+    """
+    Generate a 16-bit PCM mono WAV:
+    - sample-and-hold frequency updates at hold_hz (default 25 Hz)
+    - random frequency per hold in [f_min_hz, f_max_hz]
+    - duration_s seconds total
+    """
+    rng = random.SystemRandom()
+    n_segs = max(1, int(round(float(duration_s) * float(hold_hz))))
+    seg_len = max(1, int(sample_rate // max(1.0, float(hold_hz))))
+    amp = 0.22
+    phase = 0.0
+
+    wav_path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(wav_path), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(int(sample_rate))
+        out = bytearray()
+        for _ in range(n_segs):
+            f = float(rng.uniform(float(f_min_hz), float(f_max_hz)))
+            w = (2.0 * math.pi * f) / float(sample_rate)
+            for _i in range(seg_len):
+                phase += w
+                s = int(amp * 32767.0 * math.sin(phase))
+                out += int(s).to_bytes(2, "little", signed=True)
+        wf.writeframes(out)
+
+
+def _start_supernova_sfx_best_effort() -> None:
+    """
+    Best-effort audio effect for macOS (afplay). Non-fatal if unavailable.
+    Runs async to avoid blocking the TUI.
+    """
+    if shutil.which("afplay") is None:
+        return
+
+    tmp_dir = Path(tempfile.gettempdir())
+    wav_path = tmp_dir / f"eps_supernova_{os.getpid()}_{int(time.time())}.wav"
+
+    def _worker() -> None:
+        try:
+            _write_modulated_sine_wav(wav_path)
+            p = subprocess.Popen(
+                ["afplay", str(wav_path)],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            try:
+                p.wait(timeout=10)
+            except Exception:
+                pass
+        except Exception:
+            pass
+        finally:
+            try:
+                wav_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+    t = threading.Thread(target=_worker, name="eps_supernova_sfx", daemon=True)
+    t.start()
+
+
+def _fx_supernova(stdscr, state: AppState, *, duration_s: float = 3.0, fps: int = 25) -> None:
+    """
+    Stamp-complete visual: psychedelic kaleidoscopic supernova.
+
+    Intentional baseline violation; only runs in insane mode.
+    """
+    if not state.insane or state.palette is None:
+        return
+
+    rows, cols = stdscr.getmaxyx()
+    if rows < 10 or cols < 40:
+        return
+
+    rng = random.SystemRandom()
+    max_r = max(6, min(rows // 2 - 2, cols // 2 - 4))
+    cx = cols // 2
+    cy = rows // 2
+    frames = max(1, int(round(float(duration_s) * int(fps))))
+
+    # Try not to permanently disturb the input mode.
+    try:
+        stdscr.nodelay(True)
+        stdscr.timeout(0)
+    except curses.error:
+        pass
+
+    chars = ["██", "▓▓", "▒▒", "░░", "##", "[]", "<>"]
+    colors = list(state.palette.bg) + list(state.palette.header) + list(state.palette.menu_hot)
+    if not colors:
+        colors = [state.palette.text]
+
+    _start_supernova_sfx_best_effort()
+
+    for f in range(frames):
+        t = float(f) / float(max(1, frames - 1))
+        # Easing: slow start, explosive middle, then settle.
+        e = (t * t) * (3.0 - 2.0 * t)
+        r = int(e * max_r)
+
+        stdscr.erase()
+
+        # Background sparkle field (kaleidoscope noise).
+        spark_n = 120 if cols >= 140 else 80
+        for _ in range(spark_n):
+            sx = int(rng.randrange(0, cols - 2))
+            sy = int(rng.randrange(0, rows))
+            ch = chars[int(rng.randrange(0, len(chars)))]
+            attr = colors[int(rng.randrange(0, len(colors)))]
+            if rng.randrange(0, 9) == 0:
+                attr |= curses.A_BOLD
+            safe_addstr(stdscr, sy, sx, ch[: max(0, cols - sx)], attr)
+
+        # Concentric "square rings" approximated on a circle, with 8-way symmetry.
+        rings = 4
+        pts = 52 if cols >= 140 else 40
+        spin = (t * 2.0 * math.pi) * (1.0 + (rng.random() * 0.2))
+        for ri in range(1, rings + 1):
+            rr = int((r * ri) / rings)
+            if rr <= 0:
+                continue
+            jitter = (rng.random() - 0.5) * 0.25
+            for k in range(pts):
+                a = (2.0 * math.pi * float(k) / float(pts)) + spin + jitter
+                dx = int(round(float(rr) * math.cos(a)))
+                dy = int(round(float(rr) * math.sin(a)))
+                # Kaleidoscope: reflect into 4 quadrants, plus axis swap.
+                for sx, sy in ((dx, dy), (-dx, dy), (dx, -dy), (-dx, -dy), (dy, dx), (-dy, dx), (dy, -dx), (-dy, -dx)):
+                    x = cx + int(sx)
+                    y = cy + int(sy)
+                    if y < 0 or y >= rows or x < 0 or x >= cols - 1:
+                        continue
+                    ch = chars[(k + ri + f) % len(chars)]
+                    attr = colors[(k + ri * 7 + f * 3) % len(colors)]
+                    if ((k + f) % 11) == 0:
+                        attr |= curses.A_BOLD
+                    if ((k + ri + f) % 17) == 0:
+                        attr |= curses.A_BLINK
+                    safe_addstr(stdscr, y, x, ch[: max(0, cols - x)], attr)
+
+        # Hot core.
+        core = "SUPERNOVA"
+        core_attr = colors[(f * 5) % len(colors)] | curses.A_BOLD
+        safe_addstr(stdscr, cy, max(0, cx - len(core) // 2), core[:cols], core_attr)
+
+        stdscr.refresh()
+
+        # Allow skipping.
+        try:
+            ch = stdscr.getch()
+        except curses.error:
+            ch = -1
+        if ch in (27, ord("q")):
+            break
+
+        time.sleep(max(0.0, (1.0 / float(fps))))
+
+    try:
+        stdscr.nodelay(False)
+        stdscr.timeout(50 if state.insane else 100)
+    except curses.error:
+        pass
+
+
 def _draw_insane_header(stdscr, state: AppState, cols: int) -> None:
     if state.palette is None:
         return
@@ -2021,6 +2201,9 @@ def _action_stamp(state: AppState, stdscr) -> None:
 
     state.last_pack_dir = res.pack_dir
     state.last_out_dir = out_dir.resolve()
+    if state.insane:
+        # Stamp-complete payoff: run the kaleidoscopic supernova before we render the result log.
+        _fx_supernova(stdscr, state)
     state.log_lines = [
         "Stamp complete.",
         f"input_dir: {input_dir.resolve()}",
