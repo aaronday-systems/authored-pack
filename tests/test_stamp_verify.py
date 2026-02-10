@@ -71,6 +71,29 @@ class TestStampVerify(unittest.TestCase):
             self.assertEqual(res2.root_sha256, res.root_sha256)
             self.assertEqual(res2.pack_dir, res.pack_dir)
 
+    def test_stamp_exclude_relpaths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "keep.txt").write_text("keep", encoding="utf-8")
+            (input_dir / "drop.txt").write_text("drop", encoding="utf-8")
+
+            res = stamp_pack(
+                input_dir=input_dir,
+                out_dir=out_dir,
+                zip_pack=False,
+                derive_seed=False,
+                exclude_relpaths=["drop.txt"],
+            )
+            vr = verify_pack(res.pack_dir)
+            self.assertTrue(vr.ok, msg=f"errors: {vr.errors}")
+            self.assertEqual(vr.file_count, 1)
+            manifest = (res.pack_dir / "manifest.json").read_text(encoding="utf-8")
+            self.assertIn("keep.txt", manifest)
+            self.assertNotIn("drop.txt", manifest)
+
     def test_seed_changes_when_sources_hash_is_mixed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

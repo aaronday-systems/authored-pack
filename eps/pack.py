@@ -217,6 +217,7 @@ def stamp_pack(
     created_at_utc: Optional[str] = None,
     dice: Optional[Sequence[Tuple[str, int]]] = None,
     include_hidden: bool = False,
+    exclude_relpaths: Optional[Sequence[str]] = None,
     zip_pack: bool = False,
     derive_seed: bool = False,
     entropy_sources_sha256: Optional[str] = None,
@@ -230,7 +231,7 @@ def stamp_pack(
         raise ValueError(f"--input must be a directory: {input_dir}")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    raw_artifacts = collect_artifacts(input_dir, include_hidden=include_hidden)
+    raw_artifacts = collect_artifacts(input_dir, include_hidden=include_hidden, exclude_relpaths=exclude_relpaths)
     if not raw_artifacts:
         raise ValueError("input directory contains no artifacts")
 

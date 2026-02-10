@@ -36,7 +36,7 @@ import urllib.parse
 import wave
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 # When running as `python3 bin/eps.py`, Python prepends `bin/` to sys.path,
 # which would cause `import eps` to resolve to this file (bin/eps.py).
@@ -66,6 +66,193 @@ def safe_addstr(stdscr, y: int, x: int, s: str, attr: int = 0) -> None:
         stdscr.addstr(y, x, s, attr)
     except curses.error:
         return
+
+
+def _is_hidden_rel(rel_posix: str) -> bool:
+    parts = str(rel_posix).split("/")
+    return any(p.startswith(".") and p not in (".", "..") for p in parts)
+
+
+def _scan_artifacts_for_picker(input_dir: Path, *, include_hidden: bool) -> List[Tuple[str, int]]:
+    """
+    Deterministic file scan (path + size) without hashing, for interactive exclude selection.
+    Matches eps.manifest._iter_files traversal order.
+    """
+    input_dir = Path(input_dir).resolve()
+    out: List[Tuple[str, int]] = []
+    for dirpath, dirnames, filenames in os.walk(input_dir):
+        dirnames.sort()
+        filenames.sort()
+        base = Path(dirpath)
+        for name in filenames:
+            p = base / name
+            try:
+                rel = p.relative_to(input_dir).as_posix()
+            except Exception:
+                continue
+            if not include_hidden and _is_hidden_rel(rel):
+                continue
+            try:
+                if p.is_symlink() or (not p.is_file()):
+                    continue
+                size = int(p.stat().st_size)
+            except OSError:
+                continue
+            out.append((rel, size))
+    return out
+
+
+def _artifact_exclude_picker(stdscr, state: "AppState", *, input_dir: Path, include_hidden: bool) -> Optional[Set[str]]:
+    """
+    Overlay picker: select artifacts to exclude from the next stamp (non-destructive).
+
+    Keys:
+    - Up/Down: move
+    - Space: toggle exclude
+    - /: filter (substring)
+    - A: include all (clear excludes)
+    - X: exclude all (within filter if set, else all)
+    - Enter: done/apply
+    - Esc/q: cancel
+    """
+    rows, cols = stdscr.getmaxyx()
+    if rows < 24 or cols < 80:
+        # Contract minimum; don't attempt a complex overlay.
+        msg = "Terminal too small for artifact picker (need >= 80x24)."
+        stdscr.erase()
+        safe_addstr(stdscr, rows // 2, max(0, (cols - len(msg)) // 2), msg[:cols], curses.A_REVERSE)
+        safe_addstr(stdscr, min(rows - 2, rows // 2 + 2), max(0, (cols - 34) // 2), "Resize and try again. Press any key.", curses.A_REVERSE)
+        stdscr.refresh()
+        try:
+            stdscr.getch()
+        except curses.error:
+            pass
+        return None
+
+    items = _scan_artifacts_for_picker(Path(input_dir), include_hidden=bool(include_hidden))
+    total = len(items)
+    if total == 0:
+        return set()
+
+    excludes: Set[str] = set()
+    query = ""
+    sel = 0
+    top = 0
+
+    def _matches(rel: str) -> bool:
+        if not query:
+            return True
+        return query.lower() in rel.lower()
+
+    def _filtered_indices() -> List[int]:
+        return [i for i, (rel, _sz) in enumerate(items) if _matches(rel)]
+
+    filtered = _filtered_indices()
+
+    header_h = 4
+    footer_h = 2
+    list_top = header_h
+    list_h = max(1, rows - header_h - footer_h)
+
+    try:
+        stdscr.nodelay(False)
+        stdscr.timeout(-1)
+    except curses.error:
+        pass
+
+    while True:
+        stdscr.erase()
+        title = "ARTIFACTS // EXCLUDE FROM NEXT STAMP"
+        sub = f"input: {str(Path(input_dir).resolve())}"
+        stats = f"total={total}  match={len(filtered)}  excluded={len(excludes)}  hidden={'on' if include_hidden else 'off'}"
+        filt = f"filter: {query or '(none)'}   (press / to edit)"
+
+        attr_t = state.palette.header[0] if (state.insane and state.palette) else state.theme.header
+        attr = state.palette.text if (state.insane and state.palette) else state.theme.normal
+        safe_addstr(stdscr, 0, 0, title[:cols].ljust(cols), attr_t)
+        safe_addstr(stdscr, 1, 0, sub[:cols].ljust(cols), attr)
+        safe_addstr(stdscr, 2, 0, stats[:cols].ljust(cols), attr)
+        safe_addstr(stdscr, 3, 0, filt[:cols].ljust(cols), attr)
+
+        if filtered:
+            sel = max(0, min(sel, len(filtered) - 1))
+            if sel < top:
+                top = sel
+            if sel >= top + list_h:
+                top = max(0, sel - list_h + 1)
+
+            for row in range(list_h):
+                idx_in_filtered = top + row
+                y = list_top + row
+                if idx_in_filtered >= len(filtered) or y >= rows - footer_h:
+                    break
+                i = filtered[idx_in_filtered]
+                rel, sz = items[i]
+                selected = (idx_in_filtered == sel)
+                mark = ">" if selected else " "
+                chk = "X" if rel in excludes else " "
+                size_s = _fmt_bytes(int(sz)).rjust(9)
+                line = f"{mark} [{chk}] {size_s}  {rel}"
+                if selected:
+                    line_attr = (state.palette.menu_hot[0] if (state.insane and state.palette) else state.theme.reverse)
+                else:
+                    line_attr = attr
+                safe_addstr(stdscr, y, 0, line[:cols].ljust(cols), line_attr)
+        else:
+            safe_addstr(stdscr, list_top, 0, "No matches. Press / to change filter."[:cols].ljust(cols), attr)
+
+        legend = "Up/Down: move  Space: toggle  /: filter  A: include all  X: exclude all  Enter: done  Esc/q: cancel"
+        safe_addstr(stdscr, rows - 2, 0, legend[:cols].ljust(cols), attr)
+        safe_addstr(stdscr, rows - 1, 0, _divider_for_width(cols)[:cols].ljust(cols), attr)
+        stdscr.refresh()
+
+        try:
+            ch = stdscr.getch()
+        except curses.error:
+            ch = -1
+        if ch == -1:
+            continue
+        if ch in (27, ord("q"), ord("Q")):
+            return None
+        if ch in (10, 13, curses.KEY_ENTER):
+            return set(excludes)
+        if ch in (curses.KEY_UP, ord("k")):
+            sel = max(0, sel - 1)
+            continue
+        if ch in (curses.KEY_DOWN, ord("j")):
+            sel = min(max(0, len(filtered) - 1), sel + 1)
+            continue
+        if ch == curses.KEY_PPAGE:
+            sel = max(0, sel - 10)
+            continue
+        if ch == curses.KEY_NPAGE:
+            sel = min(max(0, len(filtered) - 1), sel + 10)
+            continue
+        if ch == ord(" "):
+            if filtered:
+                rel, _sz = items[filtered[sel]]
+                if rel in excludes:
+                    excludes.remove(rel)
+                else:
+                    excludes.add(rel)
+            continue
+        if ch == ord("/"):
+            q2 = _prompt_str_curses(stdscr, "(EPS) filter substring", default=query, max_len=200)
+            query = q2.strip()
+            filtered = _filtered_indices()
+            sel = 0
+            top = 0
+            continue
+        if ch in (ord("a"), ord("A")):
+            excludes.clear()
+            continue
+        if ch in (ord("x"), ord("X")):
+            if filtered and query:
+                for i in filtered:
+                    excludes.add(items[i][0])
+            else:
+                excludes = {rel for (rel, _sz) in items}
+            continue
 
 
 @dataclass
@@ -2361,6 +2548,9 @@ def _action_stamp(state: AppState, stdscr) -> None:
     notes_s = _prompt_str_curses(stdscr, "(EPS) notes (optional)", default="")
     created_at_s = _prompt_str_curses(stdscr, "(EPS) created_at_utc (optional)", default="")
     include_hidden = _prompt_bool_curses(stdscr, "(EPS) include hidden files", default=False)
+    exclude_picker = False
+    if input_s.strip() != "@sources":
+        exclude_picker = _prompt_bool_curses(stdscr, "(EPS) exclude artifacts before stamping (picker)", default=False)
     zip_pack = _prompt_bool_curses(stdscr, "(EPS) write entropy_pack.zip", default=True)
     derive_seed = _prompt_bool_curses(stdscr, "(EPS) derive seed_master (LOCKDOWN)", default=bool(state.insane))
     mix_sources = False
@@ -2398,6 +2588,7 @@ def _action_stamp(state: AppState, stdscr) -> None:
 
     tmp_payload_dir: Optional[Path] = None
     input_dir: Path
+    exclude_relpaths: Optional[Set[str]] = None
     if input_s.strip() == "@sources":
         if not state.entropy_sources:
             state.status = "Failed."
@@ -2407,6 +2598,13 @@ def _action_stamp(state: AppState, stdscr) -> None:
         input_dir = tmp_payload_dir
     else:
         input_dir = Path(input_s).expanduser()
+        if exclude_picker:
+            picked = _artifact_exclude_picker(stdscr, state, input_dir=input_dir, include_hidden=bool(include_hidden))
+            if picked is None:
+                state.status = "Ready."
+                state.log_lines = ["Artifact exclude picker cancelled."]
+                return
+            exclude_relpaths = set(picked)
     out_dir = Path(out_s).expanduser()
     pack_id = pack_id_s.strip() or None
     notes = notes_s.strip() or None
@@ -2420,6 +2618,7 @@ def _action_stamp(state: AppState, stdscr) -> None:
             notes=notes,
             created_at_utc=created_at,
             include_hidden=include_hidden,
+            exclude_relpaths=sorted(exclude_relpaths) if exclude_relpaths else None,
             zip_pack=zip_pack,
             derive_seed=derive_seed,
             entropy_sources_sha256=pool_sha if mix_sources else None,
@@ -2458,6 +2657,8 @@ def _action_stamp(state: AppState, stdscr) -> None:
         f"pack_dir: {res.pack_dir}",
         f"entropy_root_sha256: {res.root_sha256}",
     ]
+    if exclude_relpaths:
+        state.log_lines.append(f"excluded_artifacts: {len(exclude_relpaths)}")
     fp = res.receipt.get("seed_fingerprint_sha256")
     if isinstance(fp, str) and fp:
         state.log_lines.append(f"seed_fingerprint_sha256: {fp}")

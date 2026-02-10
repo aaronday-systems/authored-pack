@@ -48,14 +48,25 @@ def _iter_files(root: Path, *, include_hidden: bool) -> Iterable[Path]:
             yield p
 
 
-def collect_artifacts(input_dir: Path, *, include_hidden: bool = False) -> List[Dict[str, object]]:
+def collect_artifacts(
+    input_dir: Path,
+    *,
+    include_hidden: bool = False,
+    exclude_relpaths: Optional[Sequence[str]] = None,
+) -> List[Dict[str, object]]:
     input_dir = input_dir.resolve()
     if not input_dir.is_dir():
         raise ValueError(f"input_dir must be a directory: {input_dir}")
 
+    exclude: Optional[set[str]] = None
+    if exclude_relpaths:
+        exclude = {str(x) for x in exclude_relpaths if str(x).strip()}
+
     artifacts: List[Dict[str, object]] = []
     for path in _iter_files(input_dir, include_hidden=include_hidden):
         rel = path.relative_to(input_dir).as_posix()
+        if exclude is not None and rel in exclude:
+            continue
         if path.is_symlink():
             raise ValueError(f"refusing to include symlink artifact: {rel}")
         if not path.is_file():
