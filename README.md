@@ -27,11 +27,11 @@ No install required. Run with system Python 3.11+:
 
 ```bash
 python3 -m eps stamp \
-  --input /path/to/artifacts_dir \
-  --out /path/to/out_dir \
-  --pack-id my_pack \
+  --input "/ABSOLUTE/PATH/TO/ARTIFACTS_DIR" \
+  --out "./out" \
   --zip \
-  --derive-seed
+  --derive-seed \
+  --evidence-bundle
 ```
 
 Outputs are written under `--out`:
@@ -39,6 +39,7 @@ Outputs are written under `--out`:
 - `<pack_id-or-root>/entropy_root_sha256.txt`
 - `<pack_id-or-root>/receipt.json`
 - optional `<pack_id-or-root>/entropy_pack.zip`
+- optional `<pack_id-or-root>/eps_evidence_<root>.zip` + `.sha256`
 
 ### Verify a pack (dir or zip)
 

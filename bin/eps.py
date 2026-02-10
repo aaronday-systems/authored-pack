@@ -2352,7 +2352,27 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p.add_argument("--insane", action="store_true", help="Enable non-conforming neon TUI skin")
     p.add_argument("--godel-source", default=None, help="Path to a text/markdown file to sample header words from (insane mode)")
     ns = p.parse_args(list(argv) if argv is not None else None)
-    curses.wrapper(lambda stdscr: run_tui(stdscr, insane=bool(ns.insane), godel_source=ns.godel_source))
+
+    # The curses TUI must run in a real terminal/pty. When launched from an IDE
+    # or a non-interactive environment, curses will crash with setupterm errors.
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        print("eps-tui: error: no TTY detected (curses requires an interactive terminal).", file=sys.stderr)
+        print(
+            "hint: run from Terminal.app/iTerm2, or use the headless CLI: "
+            "`python3 -m eps stamp --input <dir> --out ./out`",
+            file=sys.stderr,
+        )
+        return 2
+
+    try:
+        curses.wrapper(lambda stdscr: run_tui(stdscr, insane=bool(ns.insane), godel_source=ns.godel_source))
+    except curses.error as exc:
+        # Keep failure mode readable (no traceback) for common terminal issues.
+        msg = str(exc).strip() or exc.__class__.__name__
+        print(f"eps-tui: error: {msg}", file=sys.stderr)
+        if "setupterm" in msg:
+            print("hint: ensure `TERM` is set (e.g. xterm-256color) and run inside a real terminal.", file=sys.stderr)
+        return 2
     return 0
 
 

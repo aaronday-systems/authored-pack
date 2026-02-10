@@ -129,7 +129,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if not hasattr(ns, "func"):
         parser.print_help()
         return 2
-    return int(ns.func(ns))
+    try:
+        return int(ns.func(ns))
+    except ValueError as exc:
+        # Keep CLI UX clean: most user-caused validation failures should not
+        # show a Python traceback.
+        msg = str(exc).strip() or exc.__class__.__name__
+        print(f"eps: error: {msg}", file=sys.stderr)
+        if "must be a directory" in msg and "--input" in msg:
+            print("hint: pass an existing directory path; on macOS you can drag a folder into the terminal to paste its absolute path.", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":
