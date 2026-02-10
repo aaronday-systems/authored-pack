@@ -1280,7 +1280,8 @@ def _start_supernova_sfx_best_effort() -> None:
 
     def _worker() -> None:
         try:
-            _write_modulated_sine_wav(wav_path)
+            # Keep audio shorter than visuals by default; avoids being too obnoxious.
+            _write_modulated_sine_wav(wav_path, duration_s=3.0, hold_hz=25.0, f_min_hz=100.0, f_max_hz=1000.0)
             p = subprocess.Popen(
                 ["afplay", str(wav_path)],
                 stdin=subprocess.DEVNULL,
@@ -1302,12 +1303,17 @@ def _start_supernova_sfx_best_effort() -> None:
     t = threading.Thread(target=_worker, name="eps_supernova_sfx", daemon=True)
     t.start()
 
-
-def _fx_supernova(stdscr, state: AppState, *, duration_s: float = 3.0, fps: int = 25) -> None:
+def _fx_kaleidoscope(
+    stdscr,
+    state: AppState,
+    *,
+    center_text: str,
+    duration_s: float,
+    fps: int = 25,
+    allow_skip: bool = True,
+) -> None:
     """
-    Stamp-complete visual: psychedelic kaleidoscopic supernova.
-
-    Intentional baseline violation; only runs in insane mode.
+    Psychedelic kaleidoscopic burst for a fixed duration.
     """
     if not state.insane or state.palette is None:
         return
@@ -1322,7 +1328,6 @@ def _fx_supernova(stdscr, state: AppState, *, duration_s: float = 3.0, fps: int 
     cy = rows // 2
     frames = max(1, int(round(float(duration_s) * int(fps))))
 
-    # Try not to permanently disturb the input mode.
     try:
         stdscr.nodelay(True)
         stdscr.timeout(0)
@@ -1334,18 +1339,14 @@ def _fx_supernova(stdscr, state: AppState, *, duration_s: float = 3.0, fps: int 
     if not colors:
         colors = [state.palette.text]
 
-    _start_supernova_sfx_best_effort()
-
     for f in range(frames):
         t = float(f) / float(max(1, frames - 1))
-        # Easing: slow start, explosive middle, then settle.
         e = (t * t) * (3.0 - 2.0 * t)
         r = int(e * max_r)
 
         stdscr.erase()
 
-        # Background sparkle field (kaleidoscope noise).
-        spark_n = 120 if cols >= 140 else 80
+        spark_n = 140 if cols >= 140 else 90
         for _ in range(spark_n):
             sx = int(rng.randrange(0, cols - 2))
             sy = int(rng.randrange(0, rows))
@@ -1355,9 +1356,8 @@ def _fx_supernova(stdscr, state: AppState, *, duration_s: float = 3.0, fps: int 
                 attr |= curses.A_BOLD
             safe_addstr(stdscr, sy, sx, ch[: max(0, cols - sx)], attr)
 
-        # Concentric "square rings" approximated on a circle, with 8-way symmetry.
-        rings = 4
-        pts = 52 if cols >= 140 else 40
+        rings = 5
+        pts = 64 if cols >= 140 else 48
         spin = (t * 2.0 * math.pi) * (1.0 + (rng.random() * 0.2))
         for ri in range(1, rings + 1):
             rr = int((r * ri) / rings)
@@ -1368,7 +1368,6 @@ def _fx_supernova(stdscr, state: AppState, *, duration_s: float = 3.0, fps: int 
                 a = (2.0 * math.pi * float(k) / float(pts)) + spin + jitter
                 dx = int(round(float(rr) * math.cos(a)))
                 dy = int(round(float(rr) * math.sin(a)))
-                # Kaleidoscope: reflect into 4 quadrants, plus axis swap.
                 for sx, sy in ((dx, dy), (-dx, dy), (dx, -dy), (-dx, -dy), (dy, dx), (-dy, dx), (dy, -dx), (-dy, -dx)):
                     x = cx + int(sx)
                     y = cy + int(sy)
@@ -1382,20 +1381,18 @@ def _fx_supernova(stdscr, state: AppState, *, duration_s: float = 3.0, fps: int 
                         attr |= curses.A_BLINK
                     safe_addstr(stdscr, y, x, ch[: max(0, cols - x)], attr)
 
-        # Hot core.
-        core = "SUPERNOVA"
         core_attr = colors[(f * 5) % len(colors)] | curses.A_BOLD
-        safe_addstr(stdscr, cy, max(0, cx - len(core) // 2), core[:cols], core_attr)
+        safe_addstr(stdscr, cy, max(0, cx - len(center_text) // 2), center_text[:cols], core_attr)
 
         stdscr.refresh()
 
-        # Allow skipping.
-        try:
-            ch = stdscr.getch()
-        except curses.error:
-            ch = -1
-        if ch in (27, ord("q")):
-            break
+        if allow_skip:
+            try:
+                ch = stdscr.getch()
+            except curses.error:
+                ch = -1
+            if ch in (27, ord("q")):
+                break
 
         time.sleep(max(0.0, (1.0 / float(fps))))
 
@@ -1404,6 +1401,130 @@ def _fx_supernova(stdscr, state: AppState, *, duration_s: float = 3.0, fps: int 
         stdscr.timeout(50 if state.insane else 100)
     except curses.error:
         pass
+
+
+def _fx_supernova(stdscr, state: AppState, *, duration_s: float = 3.0, fps: int = 25) -> None:
+    """
+    Stamp-complete visual: psychedelic kaleidoscopic supernova.
+
+    Intentional baseline violation; only runs in insane mode.
+    """
+    if not state.insane or state.palette is None:
+        return
+    _start_supernova_sfx_best_effort()
+    _fx_kaleidoscope(stdscr, state, center_text="STAMPING ENTROPY", duration_s=float(duration_s), fps=int(fps))
+
+
+def _stamp_with_insane_fx(stdscr, state: AppState, fn, *, min_stamping_s: float = 6.0, created_s: float = 5.0) -> object:
+    """
+    Run fn() (stamp) while showing a minimum-duration "STAMPING ENTROPY" kaleidoscope,
+    then show a fixed-duration "ENTROPY PACK CREATED" end burst.
+    """
+    holder: Dict[str, object] = {"res": None, "exc": None}
+
+    def _worker() -> None:
+        try:
+            holder["res"] = fn()
+        except Exception as exc:
+            holder["exc"] = exc
+
+    t0 = time.monotonic()
+    th = threading.Thread(target=_worker, name="eps_stamp_worker", daemon=True)
+    th.start()
+
+    # Phase 1: keep animating until stamp finishes AND we hit the minimum time.
+    _start_supernova_sfx_best_effort()
+    if state.palette is not None:
+        rows, cols = stdscr.getmaxyx()
+        rng = random.SystemRandom()
+        max_r = max(6, min(rows // 2 - 2, cols // 2 - 4))
+        cx = cols // 2
+        cy = rows // 2
+        chars = ["██", "▓▓", "▒▒", "░░", "##", "[]", "<>"]
+        colors = list(state.palette.bg) + list(state.palette.header) + list(state.palette.menu_hot)
+        if not colors:
+            colors = [state.palette.text]
+
+        try:
+            stdscr.nodelay(True)
+            stdscr.timeout(0)
+        except curses.error:
+            pass
+
+        fps_i = 25
+        cycle_s = 1.25
+        phase1_end = t0 + float(min_stamping_s)
+        frame = 0
+        while True:
+            now = time.monotonic()
+            elapsed = max(0.0, now - t0)
+            # Looping burst: expand to max repeatedly while stamping runs.
+            t_cycle = (elapsed % cycle_s) / cycle_s
+            e = (t_cycle * t_cycle) * (3.0 - 2.0 * t_cycle)
+            r = int(e * max_r)
+
+            stdscr.erase()
+
+            spark_n = 140 if cols >= 140 else 90
+            for _ in range(spark_n):
+                sx = int(rng.randrange(0, max(1, cols - 2)))
+                sy = int(rng.randrange(0, max(1, rows)))
+                ch = chars[int(rng.randrange(0, len(chars)))]
+                attr = colors[int(rng.randrange(0, len(colors)))]
+                if rng.randrange(0, 9) == 0:
+                    attr |= curses.A_BOLD
+                safe_addstr(stdscr, sy, sx, ch[: max(0, cols - sx)], attr)
+
+            rings = 5
+            pts = 64 if cols >= 140 else 48
+            spin = (elapsed * 2.0 * math.pi * 0.35) + (frame * 0.07)
+            for ri in range(1, rings + 1):
+                rr = int((r * ri) / rings)
+                if rr <= 0:
+                    continue
+                jitter = (rng.random() - 0.5) * 0.25
+                for k in range(pts):
+                    a = (2.0 * math.pi * float(k) / float(pts)) + spin + jitter
+                    dx = int(round(float(rr) * math.cos(a)))
+                    dy = int(round(float(rr) * math.sin(a)))
+                    for sx, sy in ((dx, dy), (-dx, dy), (dx, -dy), (-dx, -dy), (dy, dx), (-dy, dx), (dy, -dx), (-dy, -dx)):
+                        x = cx + int(sx)
+                        y = cy + int(sy)
+                        if y < 0 or y >= rows or x < 0 or x >= cols - 1:
+                            continue
+                        ch = chars[(k + ri + frame) % len(chars)]
+                        attr = colors[(k + ri * 7 + frame * 3) % len(colors)]
+                        if ((k + frame) % 11) == 0:
+                            attr |= curses.A_BOLD
+                        if ((k + ri + frame) % 17) == 0:
+                            attr |= curses.A_BLINK
+                        safe_addstr(stdscr, y, x, ch[: max(0, cols - x)], attr)
+
+            core_attr = colors[(frame * 5) % len(colors)] | curses.A_BOLD
+            safe_addstr(stdscr, cy, max(0, cx - len("STAMPING ENTROPY") // 2), "STAMPING ENTROPY"[:cols], core_attr)
+            stdscr.refresh()
+
+            done = not th.is_alive()
+            if done and now >= phase1_end:
+                break
+
+            time.sleep(max(0.0, (1.0 / float(fps_i))))
+            frame += 1
+
+        try:
+            stdscr.nodelay(False)
+            stdscr.timeout(50 if state.insane else 100)
+        except curses.error:
+            pass
+
+    th.join()
+    if holder.get("exc") is not None:
+        raise holder["exc"]  # type: ignore[misc]
+
+    # Phase 2: end burst.
+    _fx_kaleidoscope(stdscr, state, center_text="ENTROPY PACK CREATED", duration_s=float(created_s), fps=25, allow_skip=True)
+
+    return holder["res"]
 
 
 def _draw_insane_header(stdscr, state: AppState, cols: int) -> None:
@@ -2168,8 +2289,8 @@ def _action_stamp(state: AppState, stdscr) -> None:
     notes = notes_s.strip() or None
     created_at = created_at_s.strip() or None
 
-    try:
-        res = stamp_pack(
+    def _do_stamp() -> StampResult:
+        return stamp_pack(
             input_dir=input_dir,
             out_dir=out_dir,
             pack_id=pack_id,
@@ -2183,6 +2304,12 @@ def _action_stamp(state: AppState, stdscr) -> None:
             write_seed_files=write_seed,
             print_seed=False,  # never print to stdout from TUI
         )
+
+    try:
+        if state.insane:
+            res = _stamp_with_insane_fx(stdscr, state, _do_stamp, min_stamping_s=6.0, created_s=5.0)
+        else:
+            res = _do_stamp()
     except Exception as exc:
         state.log_lines = ["Stamp failed.", f"- {exc}"]
         state.status = "Failed."
@@ -2201,9 +2328,6 @@ def _action_stamp(state: AppState, stdscr) -> None:
 
     state.last_pack_dir = res.pack_dir
     state.last_out_dir = out_dir.resolve()
-    if state.insane:
-        # Stamp-complete payoff: run the kaleidoscopic supernova before we render the result log.
-        _fx_supernova(stdscr, state)
     state.log_lines = [
         "Stamp complete.",
         f"input_dir: {input_dir.resolve()}",
