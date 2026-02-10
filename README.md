@@ -10,6 +10,38 @@ It produces:
 - `entropy_root_sha256` (hex): `sha256(canonical_manifest_json)`
 - optional `seed_master` (32 bytes) derived via HKDF from the root
 
+## Why Agents Need "Entropy"
+
+Many agents are highly reproducible: given the same prompt, the same model, and the same inputs, you often get the same behavior.
+That is useful, but it breaks down when an agent needs **fresh, unpredictable bits** for things like:
+- generating keys/tokens/nonces
+- creating one-time secrets for downstream systems
+- preventing "replay" (the same run producing the same secret again)
+
+In most environments you should use the OS CSPRNG (for example, `/dev/urandom` via your language runtime).
+EPS exists for situations where you want **operator-provided entropy with auditability**: you can prove what bytes were used, and you can verify the resulting pack later.
+
+## Why "Seven" Sources
+
+EPS uses **seven entropy sources** as a practical safety margin. It is not "seven types"; it is seven *independent inputs* (files, text, or tap timing).
+
+Why multiple sources:
+- Any single source can be low quality (a blurry photo, repetitive text, a short tap sequence).
+- Mixing several sources makes it harder for one weak source to dominate the outcome.
+- Operationally, it encourages a repeatable checklist for humans and for agents.
+
+The TUI supports staging sources like photos, text, and tap timing. The headless `stamp-bin` mode consumes seven random files from an entropy bin.
+
+## What EPS "Analyzes" (Plain English)
+
+EPS treats each artifact as a **byte stream**:
+1. It walks the input directory deterministically.
+2. For each file, it computes `sha256(bytes)` and records `size_bytes`.
+3. It writes a canonical `manifest.json` (sorted, stable JSON).
+4. The pack identity is `entropy_root_sha256 = sha256(canonical_manifest_json)`.
+
+Optionally, EPS derives a 32-byte `seed_master` via HKDF from the root, and (when you choose to mix staged entropy sources) it also mixes the staged-sources hash into the HKDF salt so the derived seed changes if the sources change.
+
 Design goals:
 - **Deterministic root**: `entropy_root_sha256` is deterministic; operational metadata (e.g. `receipt.json:stamped_at_utc`) does not affect the root.
 - **No external deps**: stdlib-only Python.
