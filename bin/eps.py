@@ -1267,7 +1267,7 @@ def _write_modulated_sine_wav(
         wf.writeframes(out)
 
 
-def _start_supernova_sfx_best_effort() -> None:
+def _start_supernova_sfx_best_effort(*, duration_s: float = 5.0) -> None:
     """
     Best-effort audio effect for macOS (afplay). Non-fatal if unavailable.
     Runs async to avoid blocking the TUI.
@@ -1277,11 +1277,11 @@ def _start_supernova_sfx_best_effort() -> None:
 
     tmp_dir = Path(tempfile.gettempdir())
     wav_path = tmp_dir / f"eps_supernova_{os.getpid()}_{int(time.time())}.wav"
+    dur = max(0.5, min(float(duration_s), 10.0))
 
     def _worker() -> None:
         try:
-            # Keep audio shorter than visuals by default; avoids being too obnoxious.
-            _write_modulated_sine_wav(wav_path, duration_s=3.0, hold_hz=25.0, f_min_hz=100.0, f_max_hz=1000.0)
+            _write_modulated_sine_wav(wav_path, duration_s=dur, hold_hz=25.0, f_min_hz=100.0, f_max_hz=1000.0)
             p = subprocess.Popen(
                 ["afplay", str(wav_path)],
                 stdin=subprocess.DEVNULL,
@@ -1508,7 +1508,7 @@ def _fx_supernova(stdscr, state: AppState, *, duration_s: float = 3.0, fps: int 
     """
     if not state.insane or state.palette is None:
         return
-    _start_supernova_sfx_best_effort()
+    _start_supernova_sfx_best_effort(duration_s=float(duration_s))
     _fx_kaleidoscope(stdscr, state, center_text="STAMPING ENTROPY", duration_s=float(duration_s), fps=int(fps))
 
 
@@ -1529,8 +1529,8 @@ def _stamp_with_insane_fx(stdscr, state: AppState, fn, *, min_stamping_s: float 
     th = threading.Thread(target=_worker, name="eps_stamp_worker", daemon=True)
     th.start()
 
-    # Phase 1: keep animating until stamp finishes AND we hit the minimum time.
-    _start_supernova_sfx_best_effort()
+    # Phase 1: animate for a fixed minimum time. (Stamp may complete sooner or later.)
+    _start_supernova_sfx_best_effort(duration_s=float(min_stamping_s))
     if state.palette is not None:
         rows, cols = stdscr.getmaxyx()
         rng = random.SystemRandom()
@@ -1555,6 +1555,8 @@ def _stamp_with_insane_fx(stdscr, state: AppState, fn, *, min_stamping_s: float 
         while True:
             now = time.monotonic()
             elapsed = max(0.0, now - t0)
+            if now >= phase1_end:
+                break
             # Looping burst: expand to max repeatedly while stamping runs.
             t_cycle = (elapsed % cycle_s) / cycle_s
             e = (t_cycle * t_cycle) * (3.0 - 2.0 * t_cycle)
@@ -1601,8 +1603,7 @@ def _stamp_with_insane_fx(stdscr, state: AppState, fn, *, min_stamping_s: float 
             safe_addstr(stdscr, cy, max(0, cx - len("STAMPING ENTROPY") // 2), "STAMPING ENTROPY"[:cols], core_attr)
             stdscr.refresh()
 
-            done = not th.is_alive()
-            if done and now >= phase1_end:
+            if not th.is_alive() and holder.get("exc") is not None:
                 break
 
             time.sleep(max(0.0, (1.0 / float(fps_i))))
@@ -1613,6 +1614,23 @@ def _stamp_with_insane_fx(stdscr, state: AppState, fn, *, min_stamping_s: float 
             stdscr.timeout(50 if state.insane else 100)
         except curses.error:
             pass
+
+    # If stamping is still running after the fixed burst, show a calmer hold screen until completion.
+    if th.is_alive():
+        hold_frame = 0
+        while th.is_alive():
+            rows, cols = stdscr.getmaxyx()
+            stdscr.erase()
+            # Minimal but still loud.
+            msg = "STAMPING... (working)"
+            dots = "." * ((hold_frame // 5) % 4)
+            line = (msg + dots).strip()
+            attr = state.palette.warn if state.palette is not None else curses.A_REVERSE
+            safe_addstr(stdscr, rows // 2, max(0, (cols - len(line)) // 2), line[:cols], attr | curses.A_BOLD)
+            safe_addstr(stdscr, min(rows - 2, rows // 2 + 2), max(0, (cols - 34) // 2), "Tip: large input dirs can take time", attr)
+            stdscr.refresh()
+            time.sleep(0.1)
+            hold_frame += 1
 
     th.join()
     if holder.get("exc") is not None:
