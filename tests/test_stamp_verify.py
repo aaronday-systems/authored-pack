@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import tempfile
 import unittest
+import warnings
 import zipfile
 from pathlib import Path
 
@@ -176,9 +177,11 @@ class TestStampVerify(unittest.TestCase):
             zip_path = tmp_path / "dup.zip"
 
             # Write the same member name twice.
-            with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-                zf.writestr("manifest.json", '{"schema_version":"entropy.pack.v1","artifacts":[]}')
-                zf.writestr("manifest.json", '{"schema_version":"entropy.pack.v1","artifacts":[]}')
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", category=UserWarning)
+                with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                    zf.writestr("manifest.json", '{"schema_version":"entropy.pack.v1","artifacts":[]}')
+                    zf.writestr("manifest.json", '{"schema_version":"entropy.pack.v1","artifacts":[]}')
 
             res = verify_pack(zip_path)
             self.assertFalse(res.ok)
