@@ -2044,6 +2044,17 @@ def _action_stamp(state: AppState, stdscr) -> None:
             state.log_lines.append(f"evidence_bundle: {ev_path}")
             if ev_sha:
                 state.log_lines.append(f"evidence_bundle_sha256: {ev_sha}")
+            # Persist in receipt.json for agent consumption.
+            res.receipt["evidence_bundle_path"] = str(Path(ev_path).name)
+            if ev_sha:
+                res.receipt["evidence_bundle_sha256"] = str(ev_sha)
+            try:
+                (res.pack_dir / "receipt.json").write_text(
+                    json.dumps(res.receipt, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False) + "\n",
+                    encoding="utf-8",
+                )
+            except Exception:
+                pass
         except Exception as exc:
             state.log_lines.append(f"evidence_bundle failed: {exc}")
     if show_seed and res.seed_master is not None:

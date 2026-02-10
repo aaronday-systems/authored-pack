@@ -48,6 +48,10 @@ class TestStampVerify(unittest.TestCase):
 
             ev_zip = res.pack_dir / f"eps_evidence_{res.root_sha256}.zip"
             self.assertTrue(ev_zip.is_file())
+            # Receipt should expose evidence bundle identity fields for downstream agents.
+            receipt = (res.pack_dir / "receipt.json").read_text(encoding="utf-8")
+            self.assertIn("evidence_bundle_path", receipt)
+            self.assertIn("evidence_bundle_sha256", receipt)
             with zipfile.ZipFile(ev_zip, "r") as zf:
                 names = set(zf.namelist())
                 self.assertIn("manifest.json", names)

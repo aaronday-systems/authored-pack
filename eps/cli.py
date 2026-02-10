@@ -43,6 +43,7 @@ def _stamp(args: argparse.Namespace) -> int:
         include_hidden=bool(args.include_hidden),
         zip_pack=bool(args.zip),
         derive_seed=bool(args.derive_seed),
+        evidence_bundle=bool(args.evidence_bundle),
         write_seed_files=bool(args.write_seed),
         print_seed=bool(args.print_seed),
     )
@@ -109,6 +110,7 @@ def build_parser() -> argparse.ArgumentParser:
     stamp.add_argument("--derive-seed", action="store_true", help=f"Derive seed_master via HKDF ({DEFAULT_DERIVATION_VERSION})")
     stamp.add_argument("--write-seed", action="store_true", help="Write seed_master.{hex,b64} (chmod 600 best-effort)")
     stamp.add_argument("--print-seed", action="store_true", help="Print seed_master.{hex,b64} to stdout (no files)")
+    stamp.add_argument("--evidence-bundle", action="store_true", help="Write eps_evidence_<root>.zip + .sha256 (tamper-evident)")
 
     stamp.add_argument("--json", action="store_true", help="Emit receipt JSON to stdout")
     stamp.set_defaults(func=_stamp)
