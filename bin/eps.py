@@ -1303,6 +1303,103 @@ def _start_supernova_sfx_best_effort() -> None:
     t = threading.Thread(target=_worker, name="eps_supernova_sfx", daemon=True)
     t.start()
 
+
+def _fx_no_entropy(stdscr, state: AppState, *, duration_s: float = 5.0, fps: int = 25) -> None:
+    """
+    Error payoff: flash red with a skull/crossbones + admonition.
+    Only used in insane mode.
+    """
+    if not state.insane:
+        return
+
+    rows, cols = stdscr.getmaxyx()
+    if rows < 12 or cols < 50:
+        return
+
+    # Try to allocate a dedicated "panic red" pair.
+    attr_red = curses.A_REVERSE | curses.A_BOLD
+    if curses.has_colors():
+        try:
+            curses.start_color()
+            try:
+                curses.use_default_colors()
+            except curses.error:
+                pass
+            is_256 = getattr(curses, "COLORS", 0) >= 256
+            bg_red = 196 if is_256 else curses.COLOR_RED
+            fg = 231 if is_256 else curses.COLOR_WHITE
+            _init_pair_safe(70, int(fg), int(bg_red))
+            attr_red = curses.color_pair(70) | curses.A_BOLD
+        except curses.error:
+            pass
+
+    skull = [
+        r"      .-''''-.",
+        r"    .'  _  _  '.",
+        r"   /   (o)(o)   \ ",
+        r"  :             :",
+        r"  |    \___/    |",
+        r"  :   .'---'.   :",
+        r"   \  '-----'  / ",
+        r"    '.       .'",
+        r"      '-.__.-'",
+    ]
+    bones = [
+        r" \\/           \\/ ",
+        r" /\\           /\\ ",
+    ]
+    msg1 = "NO STAMPING WITHOUT ENTROPY"
+    msg2 = "Add entropy sources first (photos/text/tap or Drop Zone)."
+
+    frames = max(1, int(round(float(duration_s) * int(fps))))
+    cx = cols // 2
+    cy = rows // 2
+
+    try:
+        stdscr.nodelay(True)
+        stdscr.timeout(0)
+    except curses.error:
+        pass
+
+    for f in range(frames):
+        stdscr.erase()
+
+        # Flashing background (red / black-red).
+        flash = (f // 3) % 2 == 0
+        bg_attr = attr_red | (curses.A_BLINK if flash else 0)
+        for y in range(rows):
+            safe_addstr(stdscr, y, 0, (" " * cols), bg_attr)
+
+        # Draw bones behind skull.
+        by = max(0, cy - len(skull) // 2 - 1)
+        for i, line in enumerate(bones):
+            y = by + i
+            if 0 <= y < rows:
+                x = max(0, cx - len(line) // 2)
+                safe_addstr(stdscr, y, x, line[: max(0, cols - x)], bg_attr)
+
+        # Draw skull.
+        sy = max(0, cy - len(skull) // 2)
+        for i, line in enumerate(skull):
+            y = sy + i
+            if 0 <= y < rows:
+                x = max(0, cx - len(line) // 2)
+                safe_addstr(stdscr, y, x, line[: max(0, cols - x)], bg_attr)
+
+        # Messages.
+        safe_addstr(stdscr, min(rows - 2, sy + len(skull) + 1), max(0, cx - len(msg1) // 2), msg1[:cols], bg_attr | curses.A_BOLD)
+        safe_addstr(stdscr, min(rows - 1, sy + len(skull) + 2), max(0, cx - len(msg2) // 2), msg2[:cols], bg_attr)
+
+        stdscr.refresh()
+        time.sleep(max(0.0, 1.0 / float(fps)))
+
+    try:
+        stdscr.nodelay(False)
+        stdscr.timeout(50 if state.insane else 100)
+    except curses.error:
+        pass
+
+
 def _fx_kaleidoscope(
     stdscr,
     state: AppState,
@@ -2223,6 +2320,14 @@ def _write_entropy_sources_into_pack(pack_dir: Path, sources: Sequence[EntropySo
 
 def _action_stamp(state: AppState, stdscr) -> None:
     # In-curses prompt sequence (no dropping out of the UI).
+    if state.insane and not state.entropy_sources:
+        _fx_no_entropy(stdscr, state, duration_s=5.0, fps=25)
+        state.status = "Failed."
+        state.log_lines = ["Stamp blocked: no entropy sources staged.", "Go to Entropy Sources or Drop Zone and add some first."]
+        state.selected = 0  # Entropy Sources
+        state.focus = "entropy"
+        return
+
     state.status = "Stamp: configure..."
     state.log_lines = []
     rows, cols = stdscr.getmaxyx()
@@ -2307,7 +2412,7 @@ def _action_stamp(state: AppState, stdscr) -> None:
 
     try:
         if state.insane:
-            res = _stamp_with_insane_fx(stdscr, state, _do_stamp, min_stamping_s=6.0, created_s=5.0)
+            res = _stamp_with_insane_fx(stdscr, state, _do_stamp, min_stamping_s=5.0, created_s=5.0)
         else:
             res = _do_stamp()
     except Exception as exc:
