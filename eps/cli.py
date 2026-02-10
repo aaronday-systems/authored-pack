@@ -62,7 +62,8 @@ def _stamp(args: argparse.Namespace) -> int:
 
 
 def _verify(args: argparse.Namespace) -> int:
-    res = verify_pack(Path(args.pack))
+    max_manifest_bytes = int(args.max_manifest_mib) * 1024 * 1024
+    res = verify_pack(Path(args.pack), max_manifest_bytes=max_manifest_bytes)
     if args.json:
         payload = {
             "ok": res.ok,
@@ -70,6 +71,7 @@ def _verify(args: argparse.Namespace) -> int:
             "artifact_count_verified": res.file_count,
             "artifact_bytes_verified": res.total_bytes,
             "errors": list(res.errors),
+            "limits": {"max_manifest_mib": int(args.max_manifest_mib)},
         }
         print(stable_dumps(payload))
     else:
@@ -169,6 +171,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     verify = sub.add_parser("verify", help="Verify an EntropyPack directory or .zip")
     verify.add_argument("--pack", required=True, help="Path to pack dir or entropy_pack.zip")
+    verify.add_argument("--max-manifest-mib", type=int, default=4, help="Maximum manifest.json size to accept (default: 4)")
     verify.add_argument("--json", action="store_true", help="Emit verification JSON to stdout")
     verify.set_defaults(func=_verify)
 

@@ -51,7 +51,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from eps import __version__
-from eps.pack import stamp_pack, verify_pack, write_evidence_bundle
+from eps.pack import DEFAULT_MAX_MANIFEST_BYTES, stamp_pack, verify_pack, write_evidence_bundle
 
 
 APP_NAME = "ENTROPY PACK STAMPER"
@@ -2501,6 +2501,11 @@ def _action_verify(state: AppState, stdscr) -> None:
     default = str(state.last_pack_dir) if state.last_pack_dir is not None else (str(state.last_out_dir) if state.last_out_dir is not None else "./out")
     pack_s = _prompt_str_curses(stdscr, "(EPS) pack path (dir or .zip)", default=default)
     pack = Path(pack_s).expanduser()
+    allow_large_manifest = _prompt_bool_curses(
+        stdscr,
+        "(EPS) allow large manifest.json (32 MiB cap)",
+        default=bool(state.insane),
+    )
     if pack.is_dir() and not (pack / "manifest.json").is_file():
         # If the user pointed at an out/ directory, pick the most recent pack subdir.
         try:
@@ -2513,7 +2518,8 @@ def _action_verify(state: AppState, stdscr) -> None:
             state.log_lines = [f"Auto-selected pack dir: {picked}"]
             pack = picked
     try:
-        res = verify_pack(pack)
+        cap = (32 * 1024 * 1024) if allow_large_manifest else int(DEFAULT_MAX_MANIFEST_BYTES)
+        res = verify_pack(pack, max_manifest_bytes=int(cap))
     except Exception as exc:
         state.log_lines = ["Verify failed.", f"- {exc}"]
         state.status = "Failed."
@@ -2531,6 +2537,9 @@ def _action_verify(state: AppState, stdscr) -> None:
         if any("missing manifest.json" in e for e in res.errors):
             state.log_lines.append("")
             state.log_lines.append("Hint: verify expects a stamped pack dir (out/<root_sha256>/) or entropy_pack.zip.")
+        if any("manifest.json" in e and "file too large" in e for e in res.errors):
+            state.log_lines.append("")
+            state.log_lines.append("Hint: manifest.json is a file-list; very large packs need a larger cap (enable 'allow large manifest').")
         state.status = "Failed."
 
 
