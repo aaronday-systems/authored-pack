@@ -49,10 +49,7 @@ It randomly selects **7 files** from an entropy bin, **moves** (consumes) them, 
 ```bash
 python3 -m eps stamp-bin \
   --entropy-bin "/ABSOLUTE/PATH/TO/ENTROPY_BIN" \
-  --out "./out" \
-  --zip \
-  --derive-seed \
-  --evidence-bundle
+  --out "./out"
 ```
 
 By default, it refuses to run if it would leave fewer than **50 files** in the bin after consuming 7.

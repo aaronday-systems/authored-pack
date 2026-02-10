@@ -182,9 +182,20 @@ def build_parser() -> argparse.ArgumentParser:
     stamp_bin.add_argument("--no-recursive", dest="recursive", action="store_false", help="Only scan top-level of entropy bin")
     stamp_bin.set_defaults(recursive=True)
     stamp_bin.add_argument("--include-hidden", action="store_true", help="Include dotfiles while scanning entropy bin")
-    stamp_bin.add_argument("--zip", action="store_true", help="Write entropy_pack.zip alongside pack dir")
-    stamp_bin.add_argument("--derive-seed", action="store_true", help=f"Derive seed_master via HKDF ({DEFAULT_DERIVATION_VERSION})")
-    stamp_bin.add_argument("--evidence-bundle", action="store_true", help="Write eps_evidence_<root>.zip + .sha256 (tamper-evident)")
+    # Push-button defaults: on.
+    stamp_bin.add_argument("--zip", action=argparse.BooleanOptionalAction, default=True, help="Write entropy_pack.zip alongside pack dir (default: on)")
+    stamp_bin.add_argument(
+        "--derive-seed",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=f"Derive seed_master via HKDF ({DEFAULT_DERIVATION_VERSION}) (default: on)",
+    )
+    stamp_bin.add_argument(
+        "--evidence-bundle",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Write eps_evidence_<root>.zip + .sha256 (tamper-evident) (default: on)",
+    )
     stamp_bin.add_argument("--json", action="store_true", help="Emit JSON to stdout")
     stamp_bin.set_defaults(func=_stamp_bin)
 
