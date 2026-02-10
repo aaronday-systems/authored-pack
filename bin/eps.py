@@ -64,6 +64,17 @@ DIVIDER_NARROW = "-------+-------+-------+-------+-------+-------+-------+----"
 def safe_addstr(stdscr, y: int, x: int, s: str, attr: int = 0) -> None:
     try:
         stdscr.addstr(y, x, s, attr)
+    except UnicodeEncodeError:
+        # Some terminals / locales can choke on non-ASCII. Fall back to a safe
+        # representation instead of crashing the whole UI.
+        try:
+            safe = s.encode('ascii', errors='replace').decode('ascii')
+        except Exception:
+            safe = '?'
+        try:
+            stdscr.addstr(y, x, safe, attr)
+        except curses.error:
+            return
     except curses.error:
         return
 
@@ -809,9 +820,9 @@ def _dropzone_preview(state: AppState, *, width: int, height: int) -> List[str]:
     box_h = max(6, min(height - len(lines) - 1, 12))
     if box_h >= 6 and box_w >= 20:
         lines.append("")
-        top = "╔" + ("═" * (box_w - 2)) + "╗"
-        mid = "║" + (" " * (box_w - 2)) + "║"
-        bot = "╚" + ("═" * (box_w - 2)) + "╝"
+        top = "+" + ("-" * (box_w - 2)) + "+"
+        mid = "|" + (" " * (box_w - 2)) + "|"
+        bot = "+" + ("-" * (box_w - 2)) + "+"
         lines.append(top)
         for _ in range(box_h - 2):
             lines.append(mid)
@@ -819,7 +830,7 @@ def _dropzone_preview(state: AppState, *, width: int, height: int) -> List[str]:
         msg = "IMPORTED" if state.drop_flash_ticks > 0 else "DROP HERE (paste/drag)"
         if len(msg) < box_w - 2:
             pad = (box_w - 2 - len(msg)) // 2
-            msg_line = "║" + (" " * pad) + msg + (" " * (box_w - 2 - pad - len(msg))) + "║"
+            msg_line = "|" + (" " * pad) + msg + (" " * (box_w - 2 - pad - len(msg))) + "|"
             # Put message near the center.
             insert_at = len(lines) - (box_h // 2) - 1
             if 0 <= insert_at < len(lines):
