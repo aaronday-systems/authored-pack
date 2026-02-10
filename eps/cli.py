@@ -173,8 +173,16 @@ def build_parser() -> argparse.ArgumentParser:
     verify.set_defaults(func=_verify)
 
     stamp_bin = sub.add_parser("stamp-bin", help="Push-button mode: consume random files from an entropy bin and stamp them")
-    stamp_bin.add_argument("--entropy-bin", required=True, help="Directory containing entropy files to consume (moved, not copied)")
-    stamp_bin.add_argument("--out", required=True, help="Output directory for stamped pack (content-addressed)")
+    stamp_bin.add_argument(
+        "--entropy-bin",
+        default="./bins/entropy_bin",
+        help="Directory containing entropy files to consume (moved, not copied) (default: ./bins/entropy_bin)",
+    )
+    stamp_bin.add_argument(
+        "--out",
+        default="./bins/eps_out",
+        help="Output directory for stamped pack (content-addressed) (default: ./bins/eps_out)",
+    )
     stamp_bin.add_argument("--count", type=int, default=7, help="How many files to consume and stamp (default: 7)")
     stamp_bin.add_argument("--min-remaining", type=int, default=50, help="Refuse if remaining after consumption would be below this (default: 50)")
     stamp_bin.add_argument("--allow-low-bin", action="store_true", help="Proceed even if low-watermark would be violated (prints warning)")

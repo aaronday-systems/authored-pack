@@ -21,10 +21,7 @@ Context: This repo `/Users/aaronday/dev/entropy-pack-stamper` implements Entropy
 
 ```bash
 cd /Users/aaronday/dev/entropy-pack-stamper && \
-python3 -m eps stamp-bin \
-  --entropy-bin ./bins/entropy_bin \
-  --out ./bins/eps_out \
-  --json
+python3 -m eps stamp-bin --json
 ```
 
 The JSON includes `entropy_root_sha256`, pack path(s), and evidence bundle hash for downstream agent ingestion.

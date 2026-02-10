@@ -64,7 +64,7 @@ This repo includes pre-created bins (contents ignored by git):
 Quick run:
 
 ```bash
-python3 -m eps stamp-bin --entropy-bin ./bins/entropy_bin --out ./bins/eps_out --json
+python3 -m eps stamp-bin --json
 ```
 
 ### Verify a pack (dir or zip)
