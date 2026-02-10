@@ -41,6 +41,23 @@ Outputs are written under `--out`:
 - optional `<pack_id-or-root>/entropy_pack.zip`
 - optional `<pack_id-or-root>/eps_evidence_<root>.zip` + `.sha256`
 
+### Push-button mode: stamp from an entropy bin (subtractive)
+
+This mode is for agents/operators who do not want to manage inputs manually.
+It randomly selects **7 files** from an entropy bin, **moves** (consumes) them, and stamps them into a new pack.
+
+```bash
+python3 -m eps stamp-bin \
+  --entropy-bin "/ABSOLUTE/PATH/TO/ENTROPY_BIN" \
+  --out "./out" \
+  --zip \
+  --derive-seed \
+  --evidence-bundle
+```
+
+By default, it refuses to run if it would leave fewer than **50 files** in the bin after consuming 7.
+Use `--allow-low-bin` to proceed anyway (prints a warning).
+
 ### Verify a pack (dir or zip)
 
 ```bash

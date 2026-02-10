@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
+from .binmode import stamp_from_entropy_bin
 from .manifest import DEFAULT_DERIVATION_VERSION, stable_dumps
 from .pack import StampResult, stamp_pack, verify_pack
 
@@ -84,6 +85,57 @@ def _verify(args: argparse.Namespace) -> int:
     return 0 if res.ok else 1
 
 
+def _stamp_bin(args: argparse.Namespace) -> int:
+    res = stamp_from_entropy_bin(
+        entropy_bin=Path(args.entropy_bin),
+        out_dir=Path(args.out),
+        count=int(args.count),
+        min_remaining=int(args.min_remaining),
+        allow_low_bin=bool(args.allow_low_bin),
+        recursive=bool(args.recursive),
+        include_hidden=bool(args.include_hidden),
+        zip_pack=bool(args.zip),
+        derive_seed=bool(args.derive_seed),
+        evidence_bundle=bool(args.evidence_bundle),
+    )
+
+    if args.json:
+        payload = {
+            "mode": "entropy_bin",
+            "entropy_bin": str(res.entropy_bin),
+            "bin_files_before": int(res.bin_files_before),
+            "bin_files_after": int(res.bin_files_after),
+            "consumed_count": len(res.consumed),
+            "pack_dir": str(res.stamp.pack_dir),
+            "entropy_root_sha256": res.stamp.root_sha256,
+            "receipt": res.stamp.receipt,
+        }
+        print(stable_dumps(payload))
+        return 0
+
+    # Human-readable.
+    if (res.bin_files_before - int(args.count)) < int(args.min_remaining):
+        print(
+            f"warning: entropy bin low-watermark: {res.bin_files_before} files before, consuming {args.count}, "
+            f"min_remaining={args.min_remaining}",
+            file=sys.stderr,
+        )
+    print("mode: entropy_bin")
+    print(f"entropy_bin: {res.entropy_bin}")
+    print(f"bin_files_before: {res.bin_files_before}")
+    print(f"bin_files_after: {res.bin_files_after}")
+    print(f"consumed_count: {len(res.consumed)}")
+    print(f"pack_dir: {res.stamp.pack_dir}")
+    print(f"entropy_root_sha256: {res.stamp.root_sha256}")
+    fp = res.stamp.receipt.get("seed_fingerprint_sha256")
+    if isinstance(fp, str) and fp:
+        print(f"seed_fingerprint_sha256: {fp}")
+    ev = res.stamp.receipt.get("evidence_bundle_sha256")
+    if isinstance(ev, str) and ev:
+        print(f"evidence_bundle_sha256: {ev}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="eps", description="Entropy Pack Stamper (EPS)")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -119,6 +171,22 @@ def build_parser() -> argparse.ArgumentParser:
     verify.add_argument("--pack", required=True, help="Path to pack dir or entropy_pack.zip")
     verify.add_argument("--json", action="store_true", help="Emit verification JSON to stdout")
     verify.set_defaults(func=_verify)
+
+    stamp_bin = sub.add_parser("stamp-bin", help="Push-button mode: consume random files from an entropy bin and stamp them")
+    stamp_bin.add_argument("--entropy-bin", required=True, help="Directory containing entropy files to consume (moved, not copied)")
+    stamp_bin.add_argument("--out", required=True, help="Output directory for stamped pack (content-addressed)")
+    stamp_bin.add_argument("--count", type=int, default=7, help="How many files to consume and stamp (default: 7)")
+    stamp_bin.add_argument("--min-remaining", type=int, default=50, help="Refuse if remaining after consumption would be below this (default: 50)")
+    stamp_bin.add_argument("--allow-low-bin", action="store_true", help="Proceed even if low-watermark would be violated (prints warning)")
+    stamp_bin.add_argument("--recursive", action="store_true", help="Scan entropy bin recursively (default)")
+    stamp_bin.add_argument("--no-recursive", dest="recursive", action="store_false", help="Only scan top-level of entropy bin")
+    stamp_bin.set_defaults(recursive=True)
+    stamp_bin.add_argument("--include-hidden", action="store_true", help="Include dotfiles while scanning entropy bin")
+    stamp_bin.add_argument("--zip", action="store_true", help="Write entropy_pack.zip alongside pack dir")
+    stamp_bin.add_argument("--derive-seed", action="store_true", help=f"Derive seed_master via HKDF ({DEFAULT_DERIVATION_VERSION})")
+    stamp_bin.add_argument("--evidence-bundle", action="store_true", help="Write eps_evidence_<root>.zip + .sha256 (tamper-evident)")
+    stamp_bin.add_argument("--json", action="store_true", help="Emit JSON to stdout")
+    stamp_bin.set_defaults(func=_stamp_bin)
 
     return p
 
