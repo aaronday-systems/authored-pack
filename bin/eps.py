@@ -691,10 +691,10 @@ def _clean_dropped_path(s: str) -> str:
     return v.strip()
 
 
-def _split_drop_payload(s: str, *, max_paths: int = 7) -> List[str]:
+def _split_drop_payload(s: str) -> List[str]:
     """
     Some terminals paste multiple drop paths separated by whitespace (or newlines).
-    Return cleaned, non-empty entries, capped to `max_paths`.
+    Return cleaned, non-empty entries (no cap).
     """
     raw = (s or "").replace("\r\n", "\n").replace("\r", "\n").strip()
     if not raw:
@@ -711,18 +711,19 @@ def _split_drop_payload(s: str, *, max_paths: int = 7) -> List[str]:
         c = _clean_dropped_path(p)
         if c:
             out.append(c)
-        if len(out) >= int(max_paths):
-            break
     return out
 
 
-def _apply_drop_paths(state: AppState, paths: Sequence[str]) -> List[str]:
+def _apply_drop_paths(state: AppState, paths: Sequence[str], *, max_apply: Optional[int] = None) -> List[str]:
     """
     Apply dropped paths: set default input dir and/or import entropy sources.
     Returns log lines for what happened.
     """
     msgs: List[str] = []
-    for v in paths:
+    for idx, v in enumerate(paths):
+        if max_apply is not None and idx >= int(max_apply):
+            msgs.append(f"Rejected (limit {int(max_apply)} per burst): {v}")
+            continue
         p = Path(v).expanduser()
         if p.exists() and p.is_dir():
             state.last_input_dir = p.resolve()
@@ -785,7 +786,7 @@ def _dropzone_preview(state: AppState, *, width: int, height: int) -> List[str]:
     lines.append("1) Terminal drag-drop (best effort):")
     lines.append("   Press Enter to open a big path field, then drag a folder/file into the terminal.")
     lines.append("   Most macOS terminals will paste the absolute path for you.")
-    lines.append("   Supports dropping up to 7 paths per burst.")
+    lines.append("   First 7 paths per burst are processed; extras are rejected.")
     lines.append("")
     lines.append("2) Finder drop folder (deterministic):")
     lines.append(f"   Drop items into: {d.resolve() if d.exists() else d}")
@@ -885,6 +886,22 @@ def _poll_drop_dir(state: AppState) -> None:
             imported_this_poll += ok
             # Keep the UI responsive if the user drops a ton of files.
             if imported_this_poll >= 7:
+                # Reject the rest of this poll burst so they do not get processed on later ticks.
+                rejected = 0
+                for p2 in items:
+                    if p2.name in (".DS_Store",):
+                        continue
+                    try:
+                        key2 = str(p2.resolve())
+                    except Exception:
+                        key2 = str(p2)
+                    if key2 in state.drop_seen:
+                        continue
+                    state.drop_seen.add(key2)
+                    rejected += 1
+                if rejected > 0:
+                    state.drop_last_msgs = [f"Rejected extras (limit 7 per burst): {rejected}"]
+                    state.drop_last_msgs_ticks = 40
                 break
 
     if changed:
@@ -2771,6 +2788,9 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
         return True
 
     label = state.menu[state.selected] if 0 <= state.selected < len(state.menu) else ""
+    if label == "Drop Zone" and ch in (ord("q"), ord("Q"), curses.KEY_EXIT):
+        # Prevent accidental quit-jumps from high-volume paste/drop sequences.
+        return True
 
     # Back / quit semantics:
     # - Esc backs out of focus modes (and clears transient status), but does not hard-quit.
@@ -2818,32 +2838,38 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
                     return True
             # If we already have buffered paste, commit it immediately.
             if state.drop_paste_buf:
-                paths = _split_drop_payload(state.drop_paste_buf, max_paths=7)
+                paths = _split_drop_payload(state.drop_paste_buf)
                 state.drop_paste_buf = ""
                 state.drop_paste_last_ns = 0
                 if paths:
-                    msgs = _apply_drop_paths(state, paths)
+                    msgs = _apply_drop_paths(state, paths, max_apply=7)
                     ok = _count_drop_success(msgs)
                     if ok > 0:
                         state.drop_import_count += ok
-                        state.drop_last_msgs = msgs[:3]
+                        state.drop_last_msgs = msgs[:4]
                         state.drop_last_msgs_ticks = 40
                         state.drop_flash_ticks = 10
+                    else:
+                        state.drop_last_msgs = msgs[:4]
+                        state.drop_last_msgs_ticks = 40
                 return True
             # Provide a focused "landing zone" input. If the user drags a folder into the terminal,
             # many terminals will paste the path into this field.
             raw = _prompt_str_curses(stdscr, "(EPS) drop path(s)", default=str(state.last_input_dir or ""), max_len=4096)
-            paths = _split_drop_payload(raw, max_paths=7)
+            paths = _split_drop_payload(raw)
             if not paths:
                 state.status = "Ready."
                 return True
-            msgs = _apply_drop_paths(state, paths)
+            msgs = _apply_drop_paths(state, paths, max_apply=7)
             ok = _count_drop_success(msgs)
             if ok > 0:
                 state.drop_import_count += ok
-                state.drop_last_msgs = msgs[:3]
+                state.drop_last_msgs = msgs[:4]
                 state.drop_last_msgs_ticks = 40
                 state.drop_flash_ticks = 10
+            else:
+                state.drop_last_msgs = msgs[:4]
+                state.drop_last_msgs_ticks = 40
             return True
         # Do not swallow other keys; Up/Down should still navigate the menu.
 
@@ -2972,17 +2998,20 @@ def run_tui(stdscr, *, insane: bool = False, godel_source: Optional[str] = None)
         # stream. Auto-commit after a short idle gap.
         if state.drop_paste_buf and state.drop_paste_last_ns:
             if (time.monotonic_ns() - int(state.drop_paste_last_ns)) > 300_000_000:  # 300ms
-                paths = _split_drop_payload(state.drop_paste_buf, max_paths=7)
+                paths = _split_drop_payload(state.drop_paste_buf)
                 state.drop_paste_buf = ""
                 state.drop_paste_last_ns = 0
                 if paths:
-                    msgs = _apply_drop_paths(state, paths)
+                    msgs = _apply_drop_paths(state, paths, max_apply=7)
                     ok = _count_drop_success(msgs)
                     if ok > 0:
                         state.drop_import_count += ok
-                        state.drop_last_msgs = msgs[:3]
+                        state.drop_last_msgs = msgs[:4]
                         state.drop_last_msgs_ticks = 40
                         state.drop_flash_ticks = 10
+                    else:
+                        state.drop_last_msgs = msgs[:4]
+                        state.drop_last_msgs_ticks = 40
         # Poll the filesystem landing zone occasionally (not every tick) to stay cheap.
         if state.tick % 4 == 0:
             _poll_drop_dir(state)
