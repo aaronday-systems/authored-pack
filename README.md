@@ -55,6 +55,11 @@ No install required. Run with system Python 3.11+:
 - TUI (insane skin): `python3 -B bin/eps.py --insane`
 - CLI: `python3 -m eps --help`
 
+Insane-mode header words now come from the bundled file:
+- `assets/godel_words.txt`
+
+If you pass `--godel-source`, use text/markdown files. PDF runtime extraction is disabled.
+
 ## Commands
 
 ### Stamp a pack from a directory

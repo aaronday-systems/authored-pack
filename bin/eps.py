@@ -56,6 +56,7 @@ from eps.pack import DEFAULT_MAX_MANIFEST_BYTES, stamp_pack, verify_pack, write_
 
 APP_NAME = "ENTROPY PACK STAMPER"
 APP_VERSION = f"v{__version__}"
+BUNDLED_GODEL_WORDS = _REPO_ROOT / "assets" / "godel_words.txt"
 
 DIVIDER_WIDE = "-------+-------+-------+-------+-------+-------+-------+-------+-------+-------+"
 DIVIDER_NARROW = "-------+-------+-------+-------+-------+-------+-------+----"
@@ -1083,196 +1084,13 @@ def _filter_words_en_de(words: List[str]) -> List[str]:
 
 def _load_wordlist_from_source(path: Path, *, max_bytes: int = 5_000_000) -> List[str]:
     """
-    Load words from either text/markdown or PDF.
-
-    For PDFs we prefer `pdftotext` (if available) to extract readable words. If that fails,
-    fall back to scanning the raw bytes for Latin-ish tokens (may be noisy).
+    Load words from text/markdown sources.
+    PDF runtime extraction is intentionally disabled to avoid repeated OCR/PDF dependency.
     """
     suffix = path.suffix.lower()
     if suffix != ".pdf":
         return _load_wordlist_from_text_file(path, max_bytes=max_bytes)
-
-    # Cache: avoid re-OCR/parsing every run.
-    # Key is sha256 of the PDF bytes (small enough here; also robust against renames).
-    cache_dir = Path(tempfile.gettempdir()) / "eps_godel_cache"
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        pdf_bytes = path.read_bytes()
-    except Exception:
-        pdf_bytes = b""
-    cache_key = hashlib.sha256(pdf_bytes).hexdigest() if pdf_bytes else ""
-    cache_txt = cache_dir / f"{cache_key}.txt" if cache_key else None
-    # Versioned words cache so we can tighten filters without getting stuck on old noisy caches.
-    cache_words = cache_dir / f"{cache_key}.words.v2.txt" if cache_key else None
-    if cache_words is not None and cache_words.is_file():
-        try:
-            cached = [ln.strip() for ln in cache_words.read_text(encoding="utf-8", errors="ignore").splitlines()]
-            cached = [w for w in cached if w]
-            if len(cached) >= 10:
-                return cached
-        except Exception:
-            pass
-    if cache_txt is not None and cache_txt.is_file():
-        words = _load_wordlist_from_text_file(cache_txt, max_bytes=max_bytes)
-        words = _filter_words_en_de(words)
-        if len(words) >= 10:
-            if cache_words is not None:
-                try:
-                    cache_words.write_text("\n".join(words[:5000]) + "\n", encoding="utf-8")
-                except Exception:
-                    pass
-            return words
-
-    pdftotext = shutil.which("pdftotext")
-    if pdftotext:
-        fd, out_path_s = tempfile.mkstemp(prefix="eps_godel_", suffix=".txt")
-        try:
-            try:
-                # Close the fd; pdftotext will write by path.
-                import os as _os
-
-                _os.close(fd)
-            except Exception:
-                pass
-            out_path = Path(out_path_s)
-            # Extract first 100 pages max (user asked "100 pages is fine").
-            proc = subprocess.run(
-                [pdftotext, "-f", "1", "-l", "100", "-enc", "UTF-8", str(path), str(out_path)],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False,
-                timeout=60,
-            )
-            if proc.returncode == 0 and out_path.is_file():
-                words = _load_wordlist_from_text_file(out_path, max_bytes=max_bytes)
-                # Some PDFs have sparse text layers; we only need a small bank of usable tokens.
-                words = _filter_words_en_de(words)
-                if len(words) >= 10:
-                    if cache_txt is not None:
-                        try:
-                            cache_txt.write_text(out_path.read_text(encoding="utf-8", errors="ignore"), encoding="utf-8")
-                        except Exception:
-                            pass
-                    if cache_words is not None and words:
-                        try:
-                            cache_words.write_text("\n".join(words[:5000]) + "\n", encoding="utf-8")
-                        except Exception:
-                            pass
-                    return words
-        except Exception:
-            pass
-        finally:
-            try:
-                Path(out_path_s).unlink(missing_ok=True)
-            except Exception:
-                pass
-
-    # If the PDF has no text layer (common for scans), fall back to OCR.
-    pdftoppm = shutil.which("pdftoppm")
-    tesseract = shutil.which("tesseract")
-    magick = shutil.which("magick")
-    if pdftoppm and tesseract:
-        try:
-            langs = "eng"
-            try:
-                out = subprocess.run([tesseract, "--list-langs"], capture_output=True, text=True, timeout=10, check=False)
-                available = set((out.stdout or "").split())
-                if "deu" in available and "eng" in available:
-                    langs = "deu+eng"
-            except Exception:
-                pass
-
-            with tempfile.TemporaryDirectory(prefix="eps_godel_ocr_") as td:
-                out_prefix = str(Path(td) / "page")
-                # Heavier first-run OCR is ok since we cache results.
-                pages = 12
-                dpi = 300
-                subprocess.run(
-                    [pdftoppm, "-f", "1", "-l", str(pages), "-r", str(dpi), "-png", str(path), out_prefix],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    check=False,
-                    timeout=90,
-                )
-                words: List[str] = []
-                ocr_text_parts: List[str] = []
-                for img in sorted(Path(td).glob("page-*.png")):
-                    try:
-                        img_for_ocr = img
-                        # Optional preprocessing: improves OCR on scans (grayscale + normalize + threshold).
-                        if magick:
-                            pre = img.with_name(img.stem + ".pre.png")
-                            subprocess.run(
-                                [
-                                    magick,
-                                    str(img),
-                                    "-colorspace",
-                                    "Gray",
-                                    "-auto-level",
-                                    "-contrast-stretch",
-                                    "0.5%x0.5%",
-                                    "-sharpen",
-                                    "0x1",
-                                    "-threshold",
-                                    "60%",
-                                    str(pre),
-                                ],
-                                stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL,
-                                check=False,
-                                timeout=20,
-                            )
-                            if pre.is_file():
-                                img_for_ocr = pre
-                        proc = subprocess.run(
-                            [tesseract, str(img_for_ocr), "stdout", "-l", langs, "--oem", "1", "--psm", "6"],
-                            capture_output=True,
-                            text=True,
-                            check=False,
-                            timeout=45,
-                        )
-                        if proc.returncode != 0:
-                            continue
-                        ocr_text = proc.stdout or ""
-                        if ocr_text:
-                            ocr_text_parts.append(ocr_text)
-                        chunk_words = re.findall(r"[A-Za-zÀ-ÖØ-öø-ÿ]+", ocr_text)
-                        words.extend(
-                            [
-                                w
-                                for w in chunk_words
-                                if 3 <= len(w) <= 22 and any(c in "aeiouyäöüAEIOUYÄÖÜ" for c in w)
-                            ]
-                        )
-                        if len(words) >= 800:
-                            break
-                    except Exception:
-                        continue
-                if cache_txt is not None and ocr_text_parts:
-                    try:
-                        cache_txt.write_text("\n".join(ocr_text_parts), encoding="utf-8")
-                    except Exception:
-                        pass
-                words = _filter_words_en_de(words)
-                if cache_words is not None and words:
-                    try:
-                        cache_words.write_text("\n".join(words[:5000]) + "\n", encoding="utf-8")
-                    except Exception:
-                        pass
-                if len(words) >= 10:
-                    return words
-        except Exception:
-            pass
-
-    # Fallback: brute scan PDF bytes (often low quality, but better than nothing).
-    data = pdf_bytes
-    if not data:
-        return []
-    if len(data) > int(max_bytes):
-        data = data[: int(max_bytes)]
-    text = data.decode("latin-1", errors="ignore")
-    words = re.findall(r"[A-Za-zÀ-ÖØ-öø-ÿ]+", text)
-    return [w for w in words if 3 <= len(w) <= 22 and any(c in "aeiouyäöüAEIOUYÄÖÜ" for c in w)]
+    return []
 
 
 def _resolve_godel_source(path_s: str) -> Optional[Path]:
@@ -1334,6 +1152,25 @@ def _resolve_godel_source(path_s: str) -> Optional[Path]:
 
     candidates.sort(key=score, reverse=True)
     return candidates[0]
+
+
+def _load_bundled_godel_words() -> List[str]:
+    try:
+        p = Path(BUNDLED_GODEL_WORDS)
+        if not p.is_file():
+            return []
+    except OSError:
+        return []
+    words = _load_wordlist_from_text_file(Path(BUNDLED_GODEL_WORDS), max_bytes=1_000_000)
+    out: List[str] = []
+    seen: set[str] = set()
+    for w in words:
+        wl = str(w).strip().lower()
+        if not wl or wl in seen:
+            continue
+        seen.add(wl)
+        out.append(wl)
+    return out
 
 
 def _update_godel_phrase(state: AppState, *, min_interval_ticks: int = 6) -> None:
@@ -2966,19 +2803,29 @@ def run_tui(stdscr, *, insane: bool = False, godel_source: Optional[str] = None)
     pal = init_insane_palette() if insane else None
     state = AppState(theme=theme, insane=bool(insane), palette=pal, tick=0)
     if insane:
+        # Default: use bundled Gödel word bank from repo assets (no runtime PDF/OCR dependency).
+        words: List[str] = _load_bundled_godel_words()
         src_s = (godel_source or "").strip()
         if src_s:
             src = _resolve_godel_source(src_s)
             if src is None:
-                # Make misconfiguration visible; don't silently fall back.
                 state.godel_phrase = "NO GODEL SOURCE"
             else:
-                words = _load_wordlist_from_source(src, max_bytes=5_000_000)
-                state.godel_words = words
-                if words:
-                    _update_godel_phrase(state, min_interval_ticks=0)
+                if src.suffix.lower() == ".pdf":
+                    # Intentionally skip PDF runtime extraction; keep bundled words.
+                    if not words:
+                        state.godel_phrase = "PDF SOURCE DISABLED"
                 else:
-                    state.godel_phrase = "GODEL OCR TOO NOISY" if src.suffix.lower() == ".pdf" else "EMPTY GODEL TEXT"
+                    src_words = _load_wordlist_from_source(src, max_bytes=5_000_000)
+                    if src_words:
+                        words = src_words
+                    elif not words:
+                        state.godel_phrase = "EMPTY GODEL TEXT"
+        state.godel_words = words
+        if words:
+            _update_godel_phrase(state, min_interval_ticks=0)
+        elif not state.godel_phrase:
+            state.godel_phrase = "EMPTY GODEL WORDS"
 
     stdscr.keypad(True)
     stdscr.nodelay(False)
@@ -3030,7 +2877,11 @@ def run_tui(stdscr, *, insane: bool = False, godel_source: Optional[str] = None)
 def main(argv: Optional[Sequence[str]] = None) -> int:
     p = argparse.ArgumentParser(prog="eps-tui")
     p.add_argument("--insane", action="store_true", help="Enable non-conforming neon TUI skin")
-    p.add_argument("--godel-source", default=None, help="Path to a text/markdown file to sample header words from (insane mode)")
+    p.add_argument(
+        "--godel-source",
+        default=None,
+        help="Optional text/markdown path for header words (insane mode). PDFs are ignored; bundled words are used.",
+    )
     ns = p.parse_args(list(argv) if argv is not None else None)
 
     # The curses TUI must run in a real terminal/pty. When launched from an IDE
