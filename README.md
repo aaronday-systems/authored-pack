@@ -1,6 +1,6 @@
 # Entropy Pack Stamper (EPS)
 
-Current release: `v0.1.1` (git tag). Runtime version: `python3 -c 'from eps import __version__; print(__version__)'`.
+Current release: `v0.1.2` (git tag). Runtime version: `python3 -c 'from eps import __version__; print(__version__)'`.
 
 EPS stamps and verifies **EntropyPacks**: a directory (or `.zip`) containing:
 - `manifest.json` (canonical, deterministic JSON)
