@@ -1362,8 +1362,10 @@ def _write_drop_triangle_wav(
 ) -> None:
     """
     Drop-import cue:
-    - 3 triangle oscillators, each a major second apart
-    - sample-and-hold pitch modulation with +/- major-fourth span
+    - 3 primary oscillators, each a major second apart
+    - plus 3 pulse-modulated square oscillators spanning one octave (low->high)
+    - square layer is mixed at half amplitude of the primary layer
+    - sample-and-hold modulation on pitch (all voices) and PWM width (square voices)
     - 8Hz LFO on pitch
     - upward fifth ramp over the full cue
     """
@@ -1371,16 +1373,25 @@ def _write_drop_triangle_wav(
     sr = int(sample_rate)
     n = max(1, int(dur * sr))
     hold_n = max(1, int(sr / max(1.0, float(hold_hz))))
-    voice_semi = [0.0, 2.0, 4.0]  # each voice separated by a major second
+    primary_voice_semi = [0.0, 2.0, 4.0]  # major-second spread
+    square_voice_semi = [0.0, 6.0, 12.0]  # full-octave spread (low -> high)
     base_hz = 220.0
+    square_base_hz = 110.0
     major_fourth = 5.0
     ramp_fifth = 7.0
     rng = random.SystemRandom()
     amp = 0.14
+    square_layer_gain = 0.5
+    primary_run_detune = float(rng.uniform(-0.25, 0.25))
+    square_run_detune = float(rng.uniform(-0.35, 0.35))
 
-    def tri(phase: float) -> float:
+    def saw(phase: float) -> float:
         frac = (phase / (2.0 * math.pi)) % 1.0
-        return (4.0 * abs(frac - 0.5)) - 1.0
+        return (2.0 * frac) - 1.0
+
+    def square_pwm(phase: float, width: float) -> float:
+        frac = (phase / (2.0 * math.pi)) % 1.0
+        return 1.0 if frac < width else -1.0
 
     wav_path.parent.mkdir(parents=True, exist_ok=True)
     with wave.open(str(wav_path), "wb") as wf:
@@ -1388,29 +1399,46 @@ def _write_drop_triangle_wav(
         wf.setsampwidth(2)
         wf.setframerate(sr)
 
-        phase = [0.0, 0.0, 0.0]
-        sh_semi = 0.0
+        phase_primary = [0.0, 0.0, 0.0]
+        phase_square = [0.0, 0.0, 0.0]
+        sh_primary_semi = 0.0
+        sh_square_semi = [0.0, 0.0, 0.0]
+        sh_square_pw = [0.25, 0.30, 0.35]
         out = bytearray()
         for i in range(n):
             if i % hold_n == 0:
-                sh_semi = float(rng.uniform(-major_fourth, major_fourth))
+                sh_primary_semi = float(rng.uniform(-major_fourth, major_fourth))
+                sh_square_semi = [float(rng.uniform(-major_fourth, major_fourth)) for _ in square_voice_semi]
+                # Random PWM target per hold (clamped to <= 50%).
+                sh_square_pw = [float(rng.uniform(0.08, 0.50)) for _ in square_voice_semi]
             t = float(i) / float(sr)
             prog = float(i) / float(max(1, n - 1))
             lfo_semi = major_fourth * math.sin((2.0 * math.pi * float(lfo_hz) * t))
             ramp_semi = ramp_fifth * prog
-            mix = 0.0
-            for vi, vsemi in enumerate(voice_semi):
-                total_semi = float(vsemi) + sh_semi + lfo_semi + ramp_semi
+            mix_primary = 0.0
+            for vi, vsemi in enumerate(primary_voice_semi):
+                total_semi = float(vsemi) + primary_run_detune + sh_primary_semi + lfo_semi + ramp_semi
                 freq = float(base_hz) * (2.0 ** (total_semi / 12.0))
-                phase[vi] += (2.0 * math.pi * freq) / float(sr)
-                mix += tri(phase[vi])
-            mix /= float(len(voice_semi))
+                phase_primary[vi] += (2.0 * math.pi * freq) / float(sr)
+                mix_primary += saw(phase_primary[vi])
+            mix_primary /= float(len(primary_voice_semi))
+
+            mix_square = 0.0
+            for vi, vsemi in enumerate(square_voice_semi):
+                lfo_local = math.sin((2.0 * math.pi * float(lfo_hz) * t) + (vi * 0.9))
+                total_semi = float(vsemi) + square_run_detune + sh_square_semi[vi] + (0.75 * lfo_semi) + (0.5 * ramp_semi)
+                freq = float(square_base_hz) * (2.0 ** (total_semi / 12.0))
+                phase_square[vi] += (2.0 * math.pi * freq) / float(sr)
+                pw = max(0.05, min(0.50, float(sh_square_pw[vi]) + (0.10 * lfo_local)))
+                mix_square += square_pwm(phase_square[vi], pw)
+            mix_square /= float(len(square_voice_semi))
 
             # Pinball envelope: quick attack with a short release tail.
             a = min(1.0, t / 0.035)
             r = min(1.0, max(0.0, (dur - t) / 0.20))
             env = a * r
 
+            mix = mix_primary + (square_layer_gain * mix_square)
             s = max(-1.0, min(1.0, mix * env))
             si = int(max(-32767, min(32767, s * (32767.0 * amp))))
             out += int(si).to_bytes(2, "little", signed=True)
