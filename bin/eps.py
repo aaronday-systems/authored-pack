@@ -482,6 +482,7 @@ class AppState:
     drop_last_count: int = 0
     drop_last_names: List[str] = field(default_factory=list)
     drop_flash_ticks: int = 0
+    interaction_flash_ticks: int = 0
     drop_paste_buf: str = ""
     drop_paste_last_ns: int = 0
     drop_import_count: int = 0
@@ -778,6 +779,33 @@ def _count_drop_success(msgs: Sequence[str]) -> int:
     return n
 
 
+def _trigger_interaction_flash(state: AppState, *, drop_zone: bool = False) -> None:
+    """
+    Shared visual pulse for entropy-input interactions.
+    """
+    state.interaction_flash_ticks = max(int(state.interaction_flash_ticks), 18 if drop_zone else 12)
+    state.reward_ticks = max(int(state.reward_ticks), 8)
+    if drop_zone:
+        state.drop_flash_ticks = max(int(state.drop_flash_ticks), 12)
+
+
+def _apply_drop_feedback(state: AppState, msgs: Sequence[str], *, play_sfx: bool = True) -> int:
+    """
+    Apply consistent post-import feedback for a drop burst.
+    Returns number of successful imports/updates.
+    """
+    out = list(msgs)
+    ok = _count_drop_success(out)
+    state.drop_last_msgs = out[:4]
+    state.drop_last_msgs_ticks = 40
+    if ok > 0:
+        state.drop_import_count += int(ok)
+        _trigger_interaction_flash(state, drop_zone=True)
+        if play_sfx:
+            _start_drop_import_sfx_best_effort(duration_s=1.3)
+    return ok
+
+
 def _dropzone_preview(state: AppState, *, width: int, height: int) -> List[str]:
     d = state.drop_dir
     have = len(state.drop_seen)
@@ -879,10 +907,7 @@ def _poll_drop_dir(state: AppState) -> None:
         msgs = _apply_drop_paths(state, [str(p)])
         ok = _count_drop_success(msgs)
         if ok > 0:
-            state.drop_import_count += ok
-            state.drop_last_msgs = msgs[:3]
-            state.drop_last_msgs_ticks = 40
-            state.drop_flash_ticks = 10
+            _apply_drop_feedback(state, msgs, play_sfx=False)
             changed = True
             imported_this_poll += ok
             # Keep the UI responsive if the user drops a ton of files.
@@ -906,6 +931,7 @@ def _poll_drop_dir(state: AppState) -> None:
                 break
 
     if changed:
+        _start_drop_import_sfx_best_effort(duration_s=1.3)
         # Keep selection in bounds if list grew/shrank.
         if state.entropy_sources:
             state.entropy_selected = max(0, min(state.entropy_selected, len(state.entropy_sources) - 1))
@@ -1209,7 +1235,8 @@ def close_viewer(state: AppState) -> None:
 
 
 def _draw_header(stdscr, state: AppState, cols: int) -> None:
-    safe_addstr(stdscr, 0, 0, f" {APP_NAME} {APP_VERSION}"[:cols].ljust(cols), state.theme.header)
+    head_attr = state.theme.header | (curses.A_REVERSE if state.interaction_flash_ticks > 0 else 0)
+    safe_addstr(stdscr, 0, 0, f" {APP_NAME} {APP_VERSION}"[:cols].ljust(cols), head_attr)
 
     # Keep semantics simple and monotone-safe.
     mode = "offline"
@@ -1222,7 +1249,8 @@ def _draw_header(stdscr, state: AppState, cols: int) -> None:
         risk = "INFO"
     action = "none"
     status_line = f"MODE: {mode}  RISK: {risk}  ACTION: {action}"
-    safe_addstr(stdscr, 1, 0, status_line[:cols].ljust(cols), state.theme.normal)
+    status_attr = state.theme.normal | (curses.A_REVERSE if state.interaction_flash_ticks > 0 else 0)
+    safe_addstr(stdscr, 1, 0, status_line[:cols].ljust(cols), status_attr)
 
     divider = _divider_for_width(cols)
     safe_addstr(stdscr, 2, 0, divider[:cols].ljust(cols), state.theme.normal)
@@ -1242,6 +1270,7 @@ def _draw_insane_background(stdscr, state: AppState, rows: int, cols: int) -> No
     ch_bank = [" ", "░", "▒", "▓"]
     reward = state.reward_ticks > 0
     drop_flash = state.drop_flash_ticks > 0
+    interaction_flash = state.interaction_flash_ticks > 0
 
     for y in range(rows):
         # Big horizontal banding (moves up/down over time).
@@ -1259,9 +1288,13 @@ def _draw_insane_background(stdscr, state: AppState, rows: int, cols: int) -> No
             ch = ch_bank[(row_seed >> (x % 17)) & 0x3]
             if reward and ((row_seed >> (x % 11)) & 0x7) == 0:
                 ch = "█"
+            attr = bg[idx]
             if drop_flash and (y % 11 == 0) and (x % 19 == 0):
                 ch = " "
-            safe_addstr(stdscr, y, x, (ch * run), bg[idx])
+            if interaction_flash and ((row_seed + x + y + state.tick) % 13 == 0):
+                ch = "█"
+                attr = _cycle(state.palette.menu_hot, state.tick + x + y, speed=1, default=attr) | curses.A_BOLD
+            safe_addstr(stdscr, y, x, (ch * run), attr)
             x += run
 
         # Occasional tear bars.
@@ -1317,6 +1350,106 @@ def _write_modulated_sine_wav(
                 s = int(amp * 32767.0 * math.sin(phase))
                 out += int(s).to_bytes(2, "little", signed=True)
         wf.writeframes(out)
+
+
+def _write_drop_triangle_wav(
+    wav_path: Path,
+    *,
+    duration_s: float = 1.3,
+    hold_hz: float = 25.0,
+    lfo_hz: float = 8.0,
+    sample_rate: int = 44100,
+) -> None:
+    """
+    Drop-import cue:
+    - 3 triangle oscillators, each a major second apart
+    - sample-and-hold pitch modulation with +/- major-fourth span
+    - 8Hz LFO on pitch
+    - upward fifth ramp over the full cue
+    """
+    dur = max(0.2, min(float(duration_s), 3.0))
+    sr = int(sample_rate)
+    n = max(1, int(dur * sr))
+    hold_n = max(1, int(sr / max(1.0, float(hold_hz))))
+    voice_semi = [0.0, 2.0, 4.0]  # each voice separated by a major second
+    base_hz = 220.0
+    major_fourth = 5.0
+    ramp_fifth = 7.0
+    rng = random.SystemRandom()
+    amp = 0.14
+
+    def tri(phase: float) -> float:
+        frac = (phase / (2.0 * math.pi)) % 1.0
+        return (4.0 * abs(frac - 0.5)) - 1.0
+
+    wav_path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(wav_path), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sr)
+
+        phase = [0.0, 0.0, 0.0]
+        sh_semi = 0.0
+        out = bytearray()
+        for i in range(n):
+            if i % hold_n == 0:
+                sh_semi = float(rng.uniform(-major_fourth, major_fourth))
+            t = float(i) / float(sr)
+            prog = float(i) / float(max(1, n - 1))
+            lfo_semi = major_fourth * math.sin((2.0 * math.pi * float(lfo_hz) * t))
+            ramp_semi = ramp_fifth * prog
+            mix = 0.0
+            for vi, vsemi in enumerate(voice_semi):
+                total_semi = float(vsemi) + sh_semi + lfo_semi + ramp_semi
+                freq = float(base_hz) * (2.0 ** (total_semi / 12.0))
+                phase[vi] += (2.0 * math.pi * freq) / float(sr)
+                mix += tri(phase[vi])
+            mix /= float(len(voice_semi))
+
+            # Pinball envelope: quick attack with a short release tail.
+            a = min(1.0, t / 0.035)
+            r = min(1.0, max(0.0, (dur - t) / 0.20))
+            env = a * r
+
+            s = max(-1.0, min(1.0, mix * env))
+            si = int(max(-32767, min(32767, s * (32767.0 * amp))))
+            out += int(si).to_bytes(2, "little", signed=True)
+        wf.writeframes(out)
+
+
+def _start_drop_import_sfx_best_effort(*, duration_s: float = 1.3) -> None:
+    """
+    Best-effort drop cue for macOS (afplay). Non-fatal if unavailable.
+    """
+    if shutil.which("afplay") is None:
+        return
+
+    tmp_dir = Path(tempfile.gettempdir())
+    wav_path = tmp_dir / f"eps_drop_{os.getpid()}_{int(time.time() * 1000)}.wav"
+
+    def _worker() -> None:
+        try:
+            _write_drop_triangle_wav(wav_path, duration_s=float(duration_s), hold_hz=25.0, lfo_hz=8.0)
+            p = subprocess.Popen(
+                ["afplay", str(wav_path)],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            try:
+                p.wait(timeout=5)
+            except Exception:
+                pass
+        except Exception:
+            pass
+        finally:
+            try:
+                wav_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+    t = threading.Thread(target=_worker, name="eps_drop_sfx", daemon=True)
+    t.start()
 
 
 def _start_supernova_sfx_best_effort(*, duration_s: float = 5.0) -> None:
@@ -1864,6 +1997,8 @@ def _draw_insane_right_pane(stdscr, state: AppState, top: int, left_w: int, cols
                 attr = state.palette.ok | curses.A_BOLD
             else:
                 attr = state.palette.text
+            if state.interaction_flash_ticks > 0 and ("Last import:" in line or line.strip().startswith("- ")):
+                attr = _cycle(state.palette.menu_hot, state.tick + i, speed=1, default=attr) | curses.A_BOLD
         else:
             attr = state.palette.text if i % 2 == 0 else _cycle(state.palette.bg, state.tick + i, speed=4, default=state.palette.text)
         safe_addstr(stdscr, y, right_x, line[:right_w].ljust(right_w), attr)
@@ -2154,6 +2289,7 @@ def _action_entropy_add_photos(state: AppState, stdscr) -> None:
         added += 1
 
     if added:
+        _trigger_interaction_flash(state, drop_zone=False)
         state.status = "Done."
         state.log_lines = [f"Added {added} photo source(s)."]
     else:
@@ -2169,6 +2305,7 @@ def _action_entropy_add_text(state: AppState, stdscr) -> None:
     state.entropy_sources.append(
         EntropySource(kind="text", name=label.strip() or "note", sha256=sha, size_bytes=len(raw), text=text)
     )
+    _trigger_interaction_flash(state, drop_zone=False)
     state.status = "Done."
     state.log_lines = [f"Added text source: {label.strip() or 'note'} ({_fmt_bytes(len(raw))})."]
 
@@ -2231,7 +2368,8 @@ def _action_entropy_tap(state: AppState, stdscr) -> None:
     # size_bytes is the conceptual size of the captured stream.
     state.entropy_sources.append(EntropySource(kind="tap", name="tap", sha256=digest, size_bytes=target * 8, meta=meta))
     # Reward hook: stub out where we will play a sound effect later.
-    state.reward_ticks = 18
+    _trigger_interaction_flash(state, drop_zone=False)
+    state.reward_ticks = max(state.reward_ticks, 18)
     state.status = "Entropy collected."
     state.log_lines = [
         f"Entropy collected: tap events={count}",
@@ -2680,15 +2818,7 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
                 state.drop_paste_last_ns = 0
                 if paths:
                     msgs = _apply_drop_paths(state, paths, max_apply=7)
-                    ok = _count_drop_success(msgs)
-                    if ok > 0:
-                        state.drop_import_count += ok
-                        state.drop_last_msgs = msgs[:4]
-                        state.drop_last_msgs_ticks = 40
-                        state.drop_flash_ticks = 10
-                    else:
-                        state.drop_last_msgs = msgs[:4]
-                        state.drop_last_msgs_ticks = 40
+                    _apply_drop_feedback(state, msgs, play_sfx=True)
                 return True
             # Provide a focused "landing zone" input. If the user drags a folder into the terminal,
             # many terminals will paste the path into this field.
@@ -2698,15 +2828,7 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
                 state.status = "Ready."
                 return True
             msgs = _apply_drop_paths(state, paths, max_apply=7)
-            ok = _count_drop_success(msgs)
-            if ok > 0:
-                state.drop_import_count += ok
-                state.drop_last_msgs = msgs[:4]
-                state.drop_last_msgs_ticks = 40
-                state.drop_flash_ticks = 10
-            else:
-                state.drop_last_msgs = msgs[:4]
-                state.drop_last_msgs_ticks = 40
+            _apply_drop_feedback(state, msgs, play_sfx=True)
             return True
         # Do not swallow other keys; Up/Down should still navigate the menu.
 
@@ -2837,6 +2959,8 @@ def run_tui(stdscr, *, insane: bool = False, godel_source: Optional[str] = None)
             state.reward_ticks -= 1
         if state.drop_flash_ticks > 0:
             state.drop_flash_ticks -= 1
+        if state.interaction_flash_ticks > 0:
+            state.interaction_flash_ticks -= 1
         if state.drop_last_msgs_ticks > 0:
             state.drop_last_msgs_ticks -= 1
             if state.drop_last_msgs_ticks == 0:
@@ -2850,15 +2974,7 @@ def run_tui(stdscr, *, insane: bool = False, godel_source: Optional[str] = None)
                 state.drop_paste_last_ns = 0
                 if paths:
                     msgs = _apply_drop_paths(state, paths, max_apply=7)
-                    ok = _count_drop_success(msgs)
-                    if ok > 0:
-                        state.drop_import_count += ok
-                        state.drop_last_msgs = msgs[:4]
-                        state.drop_last_msgs_ticks = 40
-                        state.drop_flash_ticks = 10
-                    else:
-                        state.drop_last_msgs = msgs[:4]
-                        state.drop_last_msgs_ticks = 40
+                    _apply_drop_feedback(state, msgs, play_sfx=True)
         # Poll the filesystem landing zone occasionally (not every tick) to stay cheap.
         if state.tick % 4 == 0:
             _poll_drop_dir(state)
