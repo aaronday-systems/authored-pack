@@ -1363,9 +1363,9 @@ def _write_drop_triangle_wav(
     """
     Drop-import cue:
     - 3 primary oscillators, each a major second apart
-    - plus 3 pulse-modulated square oscillators spanning one octave (low->high)
-    - square layer is mixed at half amplitude of the primary layer
-    - sample-and-hold modulation on pitch (all voices) and PWM width (square voices)
+    - plus 3 pointillistic sine "sparkle" oscillators spanning one octave (low->high)
+    - sparkle layer is mixed at half amplitude of the primary layer
+    - sample-and-hold modulation on pitch (all voices) and burst timing (sparkle voices)
     - 8Hz LFO on pitch
     - upward fifth ramp over the full cue
     """
@@ -1374,24 +1374,20 @@ def _write_drop_triangle_wav(
     n = max(1, int(dur * sr))
     hold_n = max(1, int(sr / max(1.0, float(hold_hz))))
     primary_voice_semi = [0.0, 2.0, 4.0]  # major-second spread
-    square_voice_semi = [0.0, 6.0, 12.0]  # full-octave spread (low -> high)
+    sparkle_voice_semi = [0.0, 6.0, 12.0]  # full-octave spread (low -> high)
     base_hz = 220.0
-    square_base_hz = 110.0
+    sparkle_base_hz = 330.0
     major_fourth = 5.0
     ramp_fifth = 7.0
     rng = random.SystemRandom()
     amp = 0.14
-    square_layer_gain = 0.5
+    sparkle_layer_gain = 0.5
     primary_run_detune = float(rng.uniform(-0.25, 0.25))
-    square_run_detune = float(rng.uniform(-0.35, 0.35))
+    sparkle_run_detune = float(rng.uniform(-0.35, 0.35))
 
     def saw(phase: float) -> float:
         frac = (phase / (2.0 * math.pi)) % 1.0
         return (2.0 * frac) - 1.0
-
-    def square_pwm(phase: float, width: float) -> float:
-        frac = (phase / (2.0 * math.pi)) % 1.0
-        return 1.0 if frac < width else -1.0
 
     wav_path.parent.mkdir(parents=True, exist_ok=True)
     with wave.open(str(wav_path), "wb") as wf:
@@ -1400,17 +1396,28 @@ def _write_drop_triangle_wav(
         wf.setframerate(sr)
 
         phase_primary = [0.0, 0.0, 0.0]
-        phase_square = [0.0, 0.0, 0.0]
+        phase_sparkle = [0.0, 0.0, 0.0]
         sh_primary_semi = 0.0
-        sh_square_semi = [0.0, 0.0, 0.0]
-        sh_square_pw = [0.25, 0.30, 0.35]
+        sh_sparkle_semi = [0.0, 0.0, 0.0]
+        sparkle_rem = [0, 0, 0]
+        sparkle_len = [1, 1, 1]
+        sparkle_amp = [0.0, 0.0, 0.0]
         out = bytearray()
         for i in range(n):
             if i % hold_n == 0:
                 sh_primary_semi = float(rng.uniform(-major_fourth, major_fourth))
-                sh_square_semi = [float(rng.uniform(-major_fourth, major_fourth)) for _ in square_voice_semi]
-                # Random PWM target per hold (clamped to <= 50%).
-                sh_square_pw = [float(rng.uniform(0.08, 0.50)) for _ in square_voice_semi]
+                sh_sparkle_semi = [float(rng.uniform(-major_fourth, major_fourth)) for _ in sparkle_voice_semi]
+                # Pointillistic burst triggers: random short pings per hold frame.
+                for vi in range(len(sparkle_voice_semi)):
+                    if rng.random() < 0.72:
+                        slen = int(max(1, sr * float(rng.uniform(0.010, 0.040))))
+                        sparkle_len[vi] = slen
+                        sparkle_rem[vi] = slen
+                        sparkle_amp[vi] = float(rng.uniform(0.45, 1.0))
+                    else:
+                        sparkle_rem[vi] = 0
+                        sparkle_len[vi] = 1
+                        sparkle_amp[vi] = 0.0
             t = float(i) / float(sr)
             prog = float(i) / float(max(1, n - 1))
             lfo_semi = major_fourth * math.sin((2.0 * math.pi * float(lfo_hz) * t))
@@ -1423,22 +1430,29 @@ def _write_drop_triangle_wav(
                 mix_primary += saw(phase_primary[vi])
             mix_primary /= float(len(primary_voice_semi))
 
-            mix_square = 0.0
-            for vi, vsemi in enumerate(square_voice_semi):
-                lfo_local = math.sin((2.0 * math.pi * float(lfo_hz) * t) + (vi * 0.9))
-                total_semi = float(vsemi) + square_run_detune + sh_square_semi[vi] + (0.75 * lfo_semi) + (0.5 * ramp_semi)
-                freq = float(square_base_hz) * (2.0 ** (total_semi / 12.0))
-                phase_square[vi] += (2.0 * math.pi * freq) / float(sr)
-                pw = max(0.05, min(0.50, float(sh_square_pw[vi]) + (0.10 * lfo_local)))
-                mix_square += square_pwm(phase_square[vi], pw)
-            mix_square /= float(len(square_voice_semi))
+            mix_sparkle = 0.0
+            active = 0
+            for vi, vsemi in enumerate(sparkle_voice_semi):
+                if sparkle_rem[vi] <= 0:
+                    continue
+                total_semi = float(vsemi) + sparkle_run_detune + sh_sparkle_semi[vi] + (0.75 * lfo_semi) + (0.5 * ramp_semi)
+                freq = float(sparkle_base_hz) * (2.0 ** (total_semi / 12.0))
+                phase_sparkle[vi] += (2.0 * math.pi * freq) / float(sr)
+                # Fast-decay per-burst envelope for pointillistic "sparkle" pings.
+                pos = 1.0 - (float(sparkle_rem[vi]) / float(max(1, sparkle_len[vi])))
+                burst_env = (1.0 - pos) * (1.0 - pos)
+                mix_sparkle += math.sin(phase_sparkle[vi]) * float(sparkle_amp[vi]) * burst_env
+                sparkle_rem[vi] -= 1
+                active += 1
+            if active > 0:
+                mix_sparkle /= float(active)
 
             # Pinball envelope: quick attack with a short release tail.
             a = min(1.0, t / 0.035)
             r = min(1.0, max(0.0, (dur - t) / 0.20))
             env = a * r
 
-            mix = mix_primary + (square_layer_gain * mix_square)
+            mix = mix_primary + (sparkle_layer_gain * mix_sparkle)
             s = max(-1.0, min(1.0, mix * env))
             si = int(max(-32767, min(32767, s * (32767.0 * amp))))
             out += int(si).to_bytes(2, "little", signed=True)
