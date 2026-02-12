@@ -61,6 +61,9 @@ BUNDLED_GODEL_WORDS = _REPO_ROOT / "assets" / "godel_words.txt"
 DIVIDER_WIDE = "-------+-------+-------+-------+-------+-------+-------+-------+-------+-------+"
 DIVIDER_NARROW = "-------+-------+-------+-------+-------+-------+-------+----"
 
+_UI_SFX_LOCK = threading.Lock()
+_UI_SFX_CACHE: Dict[str, Path] = {}
+
 
 def safe_addstr(stdscr, y: int, x: int, s: str, attr: int = 0) -> None:
     try:
@@ -1313,6 +1316,111 @@ def _draw_insane_background(stdscr, state: AppState, rows: int, cols: int) -> No
             for sx in range((row_seed >> 5) % step, cols, step):
                 attr = bg[(band + (sx // step) + ((row_seed >> 11) & 0x7)) % len(bg)]
                 safe_addstr(stdscr, y, sx, " ", attr | (curses.A_BOLD if (row_seed >> (sx % 9)) & 1 else 0))
+
+
+def _triangle_wave(phase: float) -> float:
+    frac = (phase / (2.0 * math.pi)) % 1.0
+    return (4.0 * abs(frac - 0.5)) - 1.0
+
+
+def _play_wav_async_best_effort(wav_path: Path, *, timeout_s: float = 2.0, thread_name: str = "eps_sfx") -> None:
+    if shutil.which("afplay") is None:
+        return
+
+    def _worker() -> None:
+        try:
+            p = subprocess.Popen(
+                ["afplay", str(wav_path)],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            try:
+                p.wait(timeout=max(0.2, float(timeout_s)))
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    t = threading.Thread(target=_worker, name=str(thread_name), daemon=True)
+    t.start()
+
+
+def _write_triangle_chord_wav(
+    wav_path: Path,
+    *,
+    duration_s: float,
+    freqs_hz: Sequence[float],
+    sample_rate: int = 44100,
+    amp: float = 0.22,
+) -> None:
+    dur = max(0.01, min(float(duration_s), 1.0))
+    sr = int(sample_rate)
+    n = max(1, int(dur * sr))
+    phases = [0.0 for _ in freqs_hz]
+    f_list = [max(20.0, float(f)) for f in freqs_hz]
+
+    wav_path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(wav_path), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sr)
+        out = bytearray()
+        for i in range(n):
+            t = float(i) / float(sr)
+            # Clicky attack with fast decay for UI affordance.
+            attack = min(1.0, t / 0.004)
+            decay = math.exp(-t / max(0.001, dur * 0.24))
+            env = attack * decay
+            s = 0.0
+            for vi, f in enumerate(f_list):
+                phases[vi] += (2.0 * math.pi * f) / float(sr)
+                s += _triangle_wave(phases[vi])
+            if f_list:
+                s /= float(len(f_list))
+            s *= env
+            si = int(max(-32767, min(32767, s * (32767.0 * float(amp)))))
+            out += int(si).to_bytes(2, "little", signed=True)
+        wf.writeframes(out)
+
+
+def _ui_sfx_path(kind: str) -> Path:
+    k = str(kind).strip().lower()
+    with _UI_SFX_LOCK:
+        p = _UI_SFX_CACHE.get(k)
+        if p is not None and p.is_file():
+            return p
+
+        tmp_dir = Path(tempfile.gettempdir())
+        p = tmp_dir / f"eps_ui_{os.getpid()}_{k}.wav"
+        if k == "move":
+            _write_triangle_chord_wav(p, duration_s=0.040, freqs_hz=[600.0], amp=0.20)
+        elif k == "select":
+            root = 420.0
+            fourth = root * (2.0 ** (5.0 / 12.0))
+            seventh = root * (2.0 ** (10.0 / 12.0))
+            _write_triangle_chord_wav(p, duration_s=0.100, freqs_hz=[root, 880.0, fourth, seventh], amp=0.20)
+        else:
+            _write_triangle_chord_wav(p, duration_s=0.040, freqs_hz=[640.0], amp=0.18)
+
+        _UI_SFX_CACHE[k] = p
+        return p
+
+
+def _start_ui_move_sfx_best_effort() -> None:
+    try:
+        p = _ui_sfx_path("move")
+        _play_wav_async_best_effort(p, timeout_s=0.35, thread_name="eps_ui_move_sfx")
+    except Exception:
+        pass
+
+
+def _start_ui_select_sfx_best_effort() -> None:
+    try:
+        p = _ui_sfx_path("select")
+        _play_wav_async_best_effort(p, timeout_s=0.5, thread_name="eps_ui_select_sfx")
+    except Exception:
+        pass
 
 
 def _write_modulated_sine_wav(
@@ -2853,6 +2961,7 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
                     state.drop_paste_buf += "\n"
                     state.drop_paste_last_ns = now
                     return True
+            _start_ui_select_sfx_best_effort()
             # If we already have buffered paste, commit it immediately.
             if state.drop_paste_buf:
                 paths = _split_drop_payload(state.drop_paste_buf)
@@ -2900,18 +3009,25 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
             _action_entropy_clear(state)
             return True
         if ch in (curses.KEY_ENTER, 10, 13) and state.focus == "entropy":
+            _start_ui_select_sfx_best_effort()
             _action_entropy_preview(state)
             return True
 
     if ch in (curses.KEY_UP, ord("k")):
+        old = int(state.selected)
         state.selected = max(0, state.selected - 1)
+        if state.selected != old:
+            _start_ui_move_sfx_best_effort()
         label2 = state.menu[state.selected] if 0 <= state.selected < len(state.menu) else ""
         state.focus = "entropy" if label2 == "Entropy Sources" else "menu"
         state.status = "Ready."
         state.log_lines = []
         return True
     if ch in (curses.KEY_DOWN, ord("j")):
+        old = int(state.selected)
         state.selected = min(len(state.menu) - 1, state.selected + 1)
+        if state.selected != old:
+            _start_ui_move_sfx_best_effort()
         label2 = state.menu[state.selected] if 0 <= state.selected < len(state.menu) else ""
         state.focus = "entropy" if label2 == "Entropy Sources" else "menu"
         state.status = "Ready."
@@ -2919,6 +3035,7 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
         return True
 
     if ch in (curses.KEY_ENTER, 10, 13):
+        _start_ui_select_sfx_best_effort()
         if label == "Stamp Pack":
             _action_stamp(state, stdscr)
             return True
