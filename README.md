@@ -42,6 +42,13 @@ EPS treats each artifact as a **byte stream**:
 
 Optionally, EPS derives a 32-byte `seed_master` via HKDF from the root, and (when you choose to mix staged entropy sources) it also mixes the staged-sources hash into the HKDF salt so the derived seed changes if the sources change.
 
+### Seed Secrecy Model
+
+`seed_master` is deterministic from pack identity (`entropy_root_sha256`), and optionally the staged-sources hash when mixing is enabled.
+This means secrecy depends on what you disclose:
+- If someone can reconstruct your pack inputs/manifest (and mixed source hash when used), they can reproduce the same seed.
+- Treat seed confidentiality as an operational trust boundary, not automatic cryptographic secrecy.
+
 Design goals:
 - **Deterministic root**: `entropy_root_sha256` is deterministic; operational metadata (e.g. `receipt.json:stamped_at_utc`) does not affect the root.
 - **No external deps**: stdlib-only Python.

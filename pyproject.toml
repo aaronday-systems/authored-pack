@@ -1,6 +1,6 @@
 [project]
 name = "entropy-pack-stamper"
-version = "0.1.0"
+version = "0.1.2"
 description = "Stamp and verify deterministic EntropyPacks (manifest + root hash + optional seed derivation)."
 readme = "README.md"
 license = { file = "LICENSE" }

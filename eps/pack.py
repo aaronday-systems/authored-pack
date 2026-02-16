@@ -175,10 +175,13 @@ def derive_seed_master(
     info = derivation_version.encode("utf-8")
     salt = b"EPS-SALT-v1"
     if entropy_sources_sha256_hex:
+        src_raw = str(entropy_sources_sha256_hex)
         try:
-            src = bytes.fromhex(str(entropy_sources_sha256_hex))
-        except Exception:
-            src = b""
+            src = bytes.fromhex(src_raw)
+        except Exception as exc:
+            raise ValueError("invalid entropy_sources_sha256_hex") from exc
+        if len(src) != 32:
+            raise ValueError("entropy_sources_sha256_hex must decode to 32 bytes")
         # Salt-mixing keeps root as the IKM, and makes the additional sources explicit.
         salt = b"EPS-SALT-v2" + src
     return hkdf_sha256(ikm=root_bytes, length=32, salt=salt, info=info)
