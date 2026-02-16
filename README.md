@@ -62,6 +62,12 @@ If you pass `--godel-source`, use text/markdown files. PDF runtime extraction is
 
 ## Commands
 
+### Run tests (canonical)
+
+```bash
+pytest -q
+```
+
 ### Stamp a pack from a directory
 
 ```bash
