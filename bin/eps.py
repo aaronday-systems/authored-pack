@@ -85,6 +85,25 @@ def safe_addstr(stdscr, y: int, x: int, s: str, attr: int = 0) -> None:
         return
 
 
+def build_header_identity_line(
+    app_name: str,
+    tui_title: str,
+    tui_version: str,
+    width: int,
+    context_suffix: str = "",
+) -> str:
+    w = max(0, int(width or 0))
+    if w <= 0:
+        return ""
+    ctx = f" :: {context_suffix}" if context_suffix.strip() else ""
+    left = f" {app_name} :: {tui_title}{ctx}"
+    version = f" {tui_version} "
+    if len(version) >= w:
+        return version[-w:]
+    left_w = max(0, w - len(version))
+    return left[:left_w].ljust(left_w) + version
+
+
 def _is_hidden_rel(rel_posix: str) -> bool:
     parts = str(rel_posix).split("/")
     return any(p.startswith(".") and p not in (".", "..") for p in parts)
@@ -1241,8 +1260,8 @@ def close_viewer(state: AppState) -> None:
 
 def _draw_header(stdscr, state: AppState, cols: int) -> None:
     head_attr = state.theme.header | (curses.A_REVERSE if state.interaction_flash_ticks > 0 else 0)
-    header_identity = f"{APP_NAME} :: {EPS_TUI_TITLE} {EPS_TUI_VERSION}"
-    safe_addstr(stdscr, 0, 0, f" {header_identity}"[:cols].ljust(cols), head_attr)
+    header_identity = build_header_identity_line(APP_NAME, EPS_TUI_TITLE, EPS_TUI_VERSION, cols)
+    safe_addstr(stdscr, 0, 0, header_identity[:cols].ljust(cols), head_attr)
 
     # Keep semantics simple and monotone-safe.
     mode = "offline"
@@ -1992,14 +2011,14 @@ def _draw_insane_header(stdscr, state: AppState, cols: int) -> None:
     fallback = ["NEON", "RAVE", "GLITCH", "HOT"][phase]
     left_tag = state.godel_phrase or fallback
 
-    left = f" {left_tag} "
-    right = f"{APP_NAME} :: {EPS_TUI_TITLE} {EPS_TUI_VERSION}"
-    # Draw right first so it never gets overwritten by a long left phrase.
-    rx = max(0, cols - len(right))
-    safe_addstr(stdscr, 0, rx, right[: max(0, cols - rx)], head_attr)
-    # If overlap, truncate left so it cannot collide with the right identity.
-    max_left = max(0, rx - 1)
-    safe_addstr(stdscr, 0, 0, left[:max_left].ljust(max_left), head_attr)
+    header_identity = build_header_identity_line(
+        APP_NAME,
+        EPS_TUI_TITLE,
+        EPS_TUI_VERSION,
+        cols,
+        context_suffix=left_tag,
+    )
+    safe_addstr(stdscr, 0, 0, header_identity[:cols].ljust(cols), head_attr)
 
     s = (state.status or "").strip()
     s_l = s.lower()

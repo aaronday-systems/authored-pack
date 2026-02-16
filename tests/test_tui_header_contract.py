@@ -20,7 +20,28 @@ def test_eps_tui_header_contract() -> None:
     app_version_expr = _const("APP_VERSION", source)
     assert "v" in app_version_expr
     assert "__version__" in app_version_expr
-    assert ":: {EPS_TUI_TITLE} {EPS_TUI_VERSION}" in source
+    assert "build_header_identity_line(" in source
+
+
+def test_eps_header_helper_right_justifies_version() -> None:
+    import importlib.util
+    import sys
+
+    spec = importlib.util.spec_from_file_location("eps_tui", ROOT / "bin" / "eps.py")
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+
+    line = module.build_header_identity_line(
+        module.APP_NAME,
+        module.EPS_TUI_TITLE,
+        "v9.9.9",
+        80,
+        context_suffix="NEON",
+    )
+    assert line.endswith(" v9.9.9 ")
+    assert "ENTROPY PACK STAMPER :: Main TUI :: NEON" in line
 
 
 def test_eps_package_version_is_semver() -> None:
