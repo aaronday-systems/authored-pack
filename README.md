@@ -134,3 +134,6 @@ Pinned references (copied from Control Plane):
 ## License
 
 See `LICENSE`.
+
+## UI Header Conformance
+- Interactive terminal UIs must render header line 1 as `<App Name> :: <TUI Name> <SemVer>` for screenshot traceability.

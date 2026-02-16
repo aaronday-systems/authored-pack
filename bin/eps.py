@@ -56,6 +56,8 @@ from eps.pack import DEFAULT_MAX_MANIFEST_BYTES, stamp_pack, verify_pack, write_
 
 APP_NAME = "ENTROPY PACK STAMPER"
 APP_VERSION = f"v{__version__}"
+EPS_TUI_TITLE = "Main TUI"
+EPS_TUI_VERSION = APP_VERSION
 BUNDLED_GODEL_WORDS = _REPO_ROOT / "assets" / "godel_words.txt"
 
 DIVIDER_WIDE = "-------+-------+-------+-------+-------+-------+-------+-------+-------+-------+"
@@ -1239,7 +1241,8 @@ def close_viewer(state: AppState) -> None:
 
 def _draw_header(stdscr, state: AppState, cols: int) -> None:
     head_attr = state.theme.header | (curses.A_REVERSE if state.interaction_flash_ticks > 0 else 0)
-    safe_addstr(stdscr, 0, 0, f" {APP_NAME} {APP_VERSION}"[:cols].ljust(cols), head_attr)
+    header_identity = f"{APP_NAME} :: {EPS_TUI_TITLE} {EPS_TUI_VERSION}"
+    safe_addstr(stdscr, 0, 0, f" {header_identity}"[:cols].ljust(cols), head_attr)
 
     # Keep semantics simple and monotone-safe.
     mode = "offline"
@@ -1990,7 +1993,7 @@ def _draw_insane_header(stdscr, state: AppState, cols: int) -> None:
     left_tag = state.godel_phrase or fallback
 
     left = f" {left_tag} "
-    right = f"{APP_NAME} {APP_VERSION}"
+    right = f"{APP_NAME} :: {EPS_TUI_TITLE} {EPS_TUI_VERSION}"
     # Draw right first so it never gets overwritten by a long left phrase.
     rx = max(0, cols - len(right))
     safe_addstr(stdscr, 0, rx, right[: max(0, cols - rx)], head_attr)
