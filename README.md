@@ -144,3 +144,6 @@ See `LICENSE`.
 
 ## UI Header Conformance
 - Interactive terminal UIs must render header line 1 as `<App Name> :: <TUI Name> <SemVer>` for screenshot traceability.
+
+## Legal
+- IP ownership notice (interim): see [`IP_OWNERSHIP_NOTICE.md`](IP_OWNERSHIP_NOTICE.md).
