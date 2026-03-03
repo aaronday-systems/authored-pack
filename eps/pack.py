@@ -3,9 +3,9 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-import os
 import shutil
 import stat
+import tempfile
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -377,11 +377,8 @@ def stamp_pack(
     if not raw_artifacts:
         raise ValueError("input directory contains no artifacts")
 
-    # Create a temp pack dir to avoid partially-written packs.
-    tmp_dir = out_dir / f".eps_tmp_{os.getpid()}_{int(datetime.now().timestamp())}"
-    if tmp_dir.exists():
-        shutil.rmtree(tmp_dir)
-    tmp_dir.mkdir(parents=True, exist_ok=True)
+    # Create a unique temp pack dir to avoid partially-written packs and timestamp collisions.
+    tmp_dir = Path(tempfile.mkdtemp(prefix=".eps_tmp_", dir=str(out_dir)))
 
     try:
         artifact_entries = _copy_payload_files(input_dir=input_dir, pack_dir=tmp_dir, artifacts=raw_artifacts)
@@ -650,8 +647,8 @@ def write_evidence_bundle(pack_dir: Path) -> Tuple[Path, Optional[str]]:
     # Store a sidecar hash for the zip bytes (useful when publishing the bundle).
     zip_sha: Optional[str] = None
     try:
-        zip_bytes = zip_path.read_bytes()
-        zip_sha = hashlib.sha256(zip_bytes).hexdigest()
+        with zip_path.open("rb") as handle:
+            zip_sha, _n = _sha256_hex_stream(handle)
         _safe_write_text(pack_dir / f"{zip_name}.sha256", zip_sha + "\n")
     except Exception:
         zip_sha = None
