@@ -10,7 +10,7 @@ import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from . import __version__ as EPS_VERSION
 from .hkdf import hkdf_sha256
@@ -137,6 +137,117 @@ def _payload_relpaths_in_zip(zf: zipfile.ZipFile) -> List[str]:
         if name == "payload" or name.startswith("payload/"):
             out.append(name)
     return out
+
+
+def _append_unexpected_payload_errors(errors: List[str], *, expected: Set[str], actual: Sequence[str]) -> None:
+    extra_payload_relpaths = sorted(set(actual) - expected)
+    if extra_payload_relpaths:
+        preview = ", ".join(extra_payload_relpaths[:5])
+        suffix = f" (+{len(extra_payload_relpaths) - 5} more)" if len(extra_payload_relpaths) > 5 else ""
+        errors.append(f"unexpected payload files present: {preview}{suffix}")
+
+
+def _verify_one_artifact_in_dir(pack_dir: Path, *, idx: int, rel_s: str, size: int, sha: str) -> Optional[str]:
+    rel_path = Path(rel_s)
+    target = pack_dir / rel_path
+    # Guard against path traversal and symlink escapes.
+    try:
+        resolved = target.resolve()
+    except Exception:
+        resolved = target
+    if not resolved.is_relative_to(pack_dir):
+        return f"artifact[{idx}] path escapes pack dir: {rel_s}"
+    if target.is_symlink():
+        return f"artifact[{idx}] is a symlink (refusing): {rel_s}"
+    if not target.is_file():
+        return f"missing artifact file: {rel_s}"
+    actual_size = target.stat().st_size
+    if actual_size != size:
+        return f"size mismatch: {rel_s} expected={size} actual={actual_size}"
+    try:
+        with target.open("rb") as handle:
+            actual_sha, n = _sha256_hex_stream(handle, max_bytes=size)
+    except Exception as exc:
+        return f"failed to read artifact: {rel_s}: {exc}"
+    if n != size:
+        return f"size mismatch: {rel_s} expected={size} actual={n}"
+    if actual_sha != sha:
+        return f"sha256 mismatch: {rel_s}"
+    return None
+
+
+def _verify_one_artifact_in_zip(zf: zipfile.ZipFile, *, idx: int, rel_s: str, size: int, sha: str) -> Optional[str]:
+    try:
+        info = zf.getinfo(rel_s)
+    except KeyError:
+        return f"missing artifact file in zip: {rel_s}"
+    if info.is_dir():
+        return f"artifact[{idx}] is a directory in zip: {rel_s}"
+    zip_size = int(getattr(info, "file_size", -1))
+    if zip_size != size:
+        return f"size mismatch: {rel_s} expected={size} actual={zip_size}"
+    try:
+        with zf.open(info, "r") as handle:
+            actual_sha, n = _sha256_hex_stream(handle, max_bytes=size)
+    except Exception as exc:
+        return f"failed to read artifact in zip: {rel_s}: {exc}"
+    if n != size:
+        return f"size mismatch: {rel_s} expected={size} actual={n}"
+    if actual_sha != sha:
+        return f"sha256 mismatch: {rel_s}"
+    return None
+
+
+def _verify_manifest_artifacts(
+    artifacts: object,
+    *,
+    max_artifact_bytes: int,
+    max_total_bytes: int,
+    verify_one: Callable[[int, str, int, str], Optional[str]],
+) -> Tuple[int, int, Set[str], List[str]]:
+    errors: List[str] = []
+    file_count = 0
+    total_bytes = 0
+    expected_payload_relpaths: Set[str] = set()
+
+    if not isinstance(artifacts, list) or not artifacts:
+        errors.append("manifest.artifacts missing or empty")
+        return file_count, total_bytes, expected_payload_relpaths, errors
+
+    for i, a in enumerate(artifacts):
+        if not isinstance(a, dict):
+            errors.append(f"artifact[{i}] not an object")
+            continue
+        rel_path = _validate_artifact_relpath(a.get("path"))
+        sha = a.get("sha256")
+        size = a.get("size_bytes")
+        if rel_path is None:
+            errors.append(f"artifact[{i}].path invalid")
+            continue
+        rel_s = rel_path.as_posix()
+        expected_payload_relpaths.add(rel_s)
+        if not isinstance(sha, str) or len(sha) != 64:
+            errors.append(f"artifact[{i}].sha256 invalid")
+            continue
+        if not isinstance(size, int) or size < 0:
+            errors.append(f"artifact[{i}].size_bytes invalid")
+            continue
+        if size > max_artifact_bytes:
+            errors.append(f"artifact[{i}] too large: {rel_s} size_bytes={size} cap={max_artifact_bytes}")
+            continue
+        if total_bytes + int(size) > max_total_bytes:
+            errors.append(f"pack too large (cap exceeded): cap={max_total_bytes}")
+            continue
+
+        err = verify_one(i, rel_s, int(size), str(sha))
+        if err is not None:
+            errors.append(err)
+            continue
+
+        file_count += 1
+        total_bytes += int(size)
+
+    return file_count, total_bytes, expected_payload_relpaths, errors
 
 
 def _ensure_parent(path: Path) -> None:
@@ -592,75 +703,23 @@ def verify_pack(
                 errors.append("entropy_root_sha256.txt does not match manifest root")
 
         artifacts = manifest.get("artifacts")
-        if not isinstance(artifacts, list) or not artifacts:
-            errors.append("manifest.artifacts missing or empty")
+        file_count, total_bytes, expected_payload_relpaths, artifact_errors = _verify_manifest_artifacts(
+            artifacts,
+            max_artifact_bytes=max_artifact_bytes,
+            max_total_bytes=max_total_bytes,
+            verify_one=lambda idx, rel_s, size, sha: _verify_one_artifact_in_dir(
+                pack_path, idx=idx, rel_s=rel_s, size=size, sha=sha
+            ),
+        )
+        errors.extend(artifact_errors)
+        if "manifest.artifacts missing or empty" in artifact_errors:
             return VerificationResult(ok=False, root_sha256=root_sha, file_count=0, total_bytes=0, errors=errors)
 
-        expected_payload_relpaths: set[str] = set()
-        for i, a in enumerate(artifacts):
-            if not isinstance(a, dict):
-                errors.append(f"artifact[{i}] not an object")
-                continue
-            rel_path = _validate_artifact_relpath(a.get("path"))
-            sha = a.get("sha256")
-            size = a.get("size_bytes")
-            if rel_path is None:
-                errors.append(f"artifact[{i}].path invalid")
-                continue
-            rel_s = rel_path.as_posix()
-            expected_payload_relpaths.add(rel_s)
-            if not isinstance(sha, str) or len(sha) != 64:
-                errors.append(f"artifact[{i}].sha256 invalid")
-                continue
-            if not isinstance(size, int) or size < 0:
-                errors.append(f"artifact[{i}].size_bytes invalid")
-                continue
-            if size > max_artifact_bytes:
-                errors.append(f"artifact[{i}] too large: {rel_s} size_bytes={size} cap={max_artifact_bytes}")
-                continue
-            if total_bytes + int(size) > max_total_bytes:
-                errors.append(f"pack too large (cap exceeded): cap={max_total_bytes}")
-                continue
-            target = pack_path / rel_path
-            # Guard against path traversal and symlink escapes.
-            try:
-                resolved = target.resolve()
-            except Exception:
-                resolved = target
-            if not resolved.is_relative_to(pack_path):
-                errors.append(f"artifact[{i}] path escapes pack dir: {rel_path.as_posix()}")
-                continue
-            if target.is_symlink():
-                errors.append(f"artifact[{i}] is a symlink (refusing): {rel_path.as_posix()}")
-                continue
-            if not target.is_file():
-                errors.append(f"missing artifact file: {rel_path.as_posix()}")
-                continue
-            actual_size = target.stat().st_size
-            if actual_size != size:
-                errors.append(f"size mismatch: {rel_path.as_posix()} expected={size} actual={actual_size}")
-                continue
-            try:
-                with target.open("rb") as handle:
-                    actual_sha, n = _sha256_hex_stream(handle, max_bytes=size)
-            except Exception as exc:
-                errors.append(f"failed to read artifact: {rel_s}: {exc}")
-                continue
-            if n != size:
-                errors.append(f"size mismatch: {rel_s} expected={size} actual={n}")
-                continue
-            if actual_sha != sha:
-                errors.append(f"sha256 mismatch: {rel_s}")
-                continue
-            file_count += 1
-            total_bytes += int(size)
-
-        actual_payload_relpaths = set(_payload_relpaths_in_dir(pack_path))
-        extra_payload_relpaths = sorted(actual_payload_relpaths - expected_payload_relpaths)
-        if extra_payload_relpaths:
-            preview = ", ".join(extra_payload_relpaths[:5])
-            suffix = f" (+{len(extra_payload_relpaths) - 5} more)" if len(extra_payload_relpaths) > 5 else ""
-            errors.append(f"unexpected payload files present: {preview}{suffix}")
+        _append_unexpected_payload_errors(
+            errors,
+            expected=expected_payload_relpaths,
+            actual=_payload_relpaths_in_dir(pack_path),
+        )
 
         return VerificationResult(ok=not errors, root_sha256=root_sha, file_count=file_count, total_bytes=total_bytes, errors=errors)
 
@@ -693,68 +752,23 @@ def verify_pack(
                     pass
 
                 artifacts = manifest.get("artifacts")
-                if not isinstance(artifacts, list) or not artifacts:
-                    errors.append("manifest.artifacts missing or empty")
+                file_count, total_bytes, expected_payload_relpaths, artifact_errors = _verify_manifest_artifacts(
+                    artifacts,
+                    max_artifact_bytes=max_artifact_bytes,
+                    max_total_bytes=max_total_bytes,
+                    verify_one=lambda idx, rel_s, size, sha: _verify_one_artifact_in_zip(
+                        zf, idx=idx, rel_s=rel_s, size=size, sha=sha
+                    ),
+                )
+                errors.extend(artifact_errors)
+                if "manifest.artifacts missing or empty" in artifact_errors:
                     return VerificationResult(ok=False, root_sha256=root_sha, file_count=0, total_bytes=0, errors=errors)
 
-                expected_payload_relpaths: set[str] = set()
-                for i, a in enumerate(artifacts):
-                    if not isinstance(a, dict):
-                        errors.append(f"artifact[{i}] not an object")
-                        continue
-                    rel_path = _validate_artifact_relpath(a.get("path"))
-                    sha = a.get("sha256")
-                    size = a.get("size_bytes")
-                    if rel_path is None:
-                        errors.append(f"artifact[{i}].path invalid")
-                        continue
-                    rel_s = rel_path.as_posix()
-                    expected_payload_relpaths.add(rel_s)
-                    if not isinstance(sha, str) or len(sha) != 64:
-                        errors.append(f"artifact[{i}].sha256 invalid")
-                        continue
-                    if not isinstance(size, int) or size < 0:
-                        errors.append(f"artifact[{i}].size_bytes invalid")
-                        continue
-                    if size > max_artifact_bytes:
-                        errors.append(f"artifact[{i}] too large: {rel_s} size_bytes={size} cap={max_artifact_bytes}")
-                        continue
-                    if total_bytes + int(size) > max_total_bytes:
-                        errors.append(f"pack too large (cap exceeded): cap={max_total_bytes}")
-                        continue
-                    try:
-                        info = zf.getinfo(rel_s)
-                    except KeyError:
-                        errors.append(f"missing artifact file in zip: {rel_s}")
-                        continue
-                    if info.is_dir():
-                        errors.append(f"artifact[{i}] is a directory in zip: {rel_s}")
-                        continue
-                    zip_size = int(getattr(info, "file_size", -1))
-                    if zip_size != size:
-                        errors.append(f"size mismatch: {rel_s} expected={size} actual={zip_size}")
-                        continue
-                    try:
-                        with zf.open(info, "r") as handle:
-                            actual_sha, n = _sha256_hex_stream(handle, max_bytes=size)
-                    except Exception as exc:
-                        errors.append(f"failed to read artifact in zip: {rel_s}: {exc}")
-                        continue
-                    if n != size:
-                        errors.append(f"size mismatch: {rel_s} expected={size} actual={n}")
-                        continue
-                    if actual_sha != sha:
-                        errors.append(f"sha256 mismatch: {rel_s}")
-                        continue
-                    file_count += 1
-                    total_bytes += int(size)
-
-                actual_payload_relpaths = set(_payload_relpaths_in_zip(zf))
-                extra_payload_relpaths = sorted(actual_payload_relpaths - expected_payload_relpaths)
-                if extra_payload_relpaths:
-                    preview = ", ".join(extra_payload_relpaths[:5])
-                    suffix = f" (+{len(extra_payload_relpaths) - 5} more)" if len(extra_payload_relpaths) > 5 else ""
-                    errors.append(f"unexpected payload files present: {preview}{suffix}")
+                _append_unexpected_payload_errors(
+                    errors,
+                    expected=expected_payload_relpaths,
+                    actual=_payload_relpaths_in_zip(zf),
+                )
 
                 return VerificationResult(ok=not errors, root_sha256=root_sha, file_count=file_count, total_bytes=total_bytes, errors=errors)
         except zipfile.BadZipFile as exc:
