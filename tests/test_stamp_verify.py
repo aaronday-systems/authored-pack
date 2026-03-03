@@ -210,6 +210,48 @@ class TestStampVerify(unittest.TestCase):
             self.assertFalse(r2.ok)
             self.assertTrue(any("invalid manifest.json" in e for e in r2.errors), msg=f"errors: {r2.errors}")
 
+    def test_verify_rejects_extra_payload_file_in_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            res = stamp_pack(
+                input_dir=input_dir,
+                out_dir=out_dir,
+                zip_pack=False,
+                derive_seed=False,
+            )
+            (res.pack_dir / "payload" / "evil.sh").write_text("echo pwn\n", encoding="utf-8")
+
+            vr = verify_pack(res.pack_dir)
+            self.assertFalse(vr.ok, msg=f"errors: {vr.errors}")
+            self.assertTrue(any("unexpected payload files present" in e for e in vr.errors), msg=f"errors: {vr.errors}")
+
+    def test_verify_rejects_extra_payload_file_in_zip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            res = stamp_pack(
+                input_dir=input_dir,
+                out_dir=out_dir,
+                zip_pack=True,
+                derive_seed=False,
+            )
+            zip_path = res.pack_dir / "entropy_pack.zip"
+            with zipfile.ZipFile(zip_path, "a", compression=zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr("payload/evil.sh", "echo pwn\n")
+
+            vr = verify_pack(zip_path)
+            self.assertFalse(vr.ok, msg=f"errors: {vr.errors}")
+            self.assertTrue(any("unexpected payload files present" in e for e in vr.errors), msg=f"errors: {vr.errors}")
+
 
 if __name__ == "__main__":
     unittest.main()
