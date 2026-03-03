@@ -252,6 +252,34 @@ class TestStampVerify(unittest.TestCase):
             self.assertFalse(vr.ok, msg=f"errors: {vr.errors}")
             self.assertTrue(any("unexpected payload files present" in e for e in vr.errors), msg=f"errors: {vr.errors}")
 
+    def test_verify_dir_and_zip_emit_identical_errors_for_same_malformed_pack(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            pack_dir = tmp_path / "malformed_pack"
+            payload_dir = pack_dir / "payload"
+            payload_dir.mkdir(parents=True)
+
+            bad_manifest = (
+                '{"schema_version":"entropy.pack.v1","artifacts":['
+                '{"path":"../outside.txt","sha256":"%s","size_bytes":1},'
+                '{"path":"payload/a.txt","sha256":"bad","size_bytes":1}'
+                "]}"
+            ) % ("0" * 64)
+            (pack_dir / "manifest.json").write_text(bad_manifest, encoding="utf-8")
+            (payload_dir / "extra.txt").write_text("extra", encoding="utf-8")
+
+            zip_path = tmp_path / "malformed_pack.zip"
+            with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr("manifest.json", bad_manifest)
+                zf.writestr("payload/extra.txt", "extra")
+
+            dir_result = verify_pack(pack_dir)
+            zip_result = verify_pack(zip_path)
+
+            self.assertFalse(dir_result.ok, msg=f"errors: {dir_result.errors}")
+            self.assertFalse(zip_result.ok, msg=f"errors: {zip_result.errors}")
+            self.assertEqual(zip_result.errors, dir_result.errors)
+
 
 if __name__ == "__main__":
     unittest.main()
