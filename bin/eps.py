@@ -65,6 +65,7 @@ DIVIDER_NARROW = "-------+-------+-------+-------+-------+-------+-------+----"
 
 _UI_SFX_LOCK = threading.Lock()
 _UI_SFX_CACHE: Dict[str, Path] = {}
+LOCKDOWN_MIN_TAP_EVENTS = 16
 
 
 def safe_addstr(stdscr, y: int, x: int, s: str, attr: int = 0) -> None:
@@ -587,6 +588,42 @@ def _entropy_pool_sha256(sources: Sequence["EntropySource"]) -> str:
         h.update(p)
         h.update(b"\n")
     return h.hexdigest()
+
+
+def _entropy_source_identity(s: "EntropySource") -> str:
+    return f"{s.kind}:{s.sha256}:{int(s.size_bytes)}"
+
+
+def _is_hex_sha256(s: str) -> bool:
+    v = str(s or "")
+    return len(v) == 64 and all(c in "0123456789abcdef" for c in v.lower())
+
+
+def _entropy_source_is_lockdown_eligible(s: "EntropySource") -> bool:
+    if not _is_hex_sha256(s.sha256):
+        return False
+    if int(s.size_bytes) <= 0:
+        return False
+    if s.kind == "tap":
+        events = s.meta.get("events")
+        if not isinstance(events, int):
+            return False
+        return int(events) >= int(LOCKDOWN_MIN_TAP_EVENTS)
+    return True
+
+
+def _lockdown_eligible_sources(sources: Sequence["EntropySource"]) -> List["EntropySource"]:
+    out: List[EntropySource] = []
+    seen: set[str] = set()
+    for s in sources:
+        if not _entropy_source_is_lockdown_eligible(s):
+            continue
+        sid = _entropy_source_identity(s)
+        if sid in seen:
+            continue
+        seen.add(sid)
+        out.append(s)
+    return out
 
 
 _IMG_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".webp", ".heic"}
@@ -2082,8 +2119,10 @@ def _entropy_sources_preview(state: AppState, *, width: int, height: int) -> Lis
     """
     min_n = int(state.entropy_min_sources)
     n = len(state.entropy_sources)
-    pool = _entropy_pool_sha256(state.entropy_sources)[:16] if state.entropy_sources else "none"
-    header = f"ENTROPY SOURCES // {n}/{min_n} required for LOCKDOWN seed  pool={pool}"
+    eligible = _lockdown_eligible_sources(state.entropy_sources)
+    n_eligible = len(eligible)
+    pool = _entropy_pool_sha256(eligible)[:16] if eligible else "none"
+    header = f"ENTROPY SOURCES // staged={n} eligible={n_eligible}/{min_n} for LOCKDOWN seed  pool={pool}"
     lines: List[str] = [header, ""]
     focus = "LIST" if state.focus == "entropy" else "MENU"
     lines.append(f"FOCUS={focus}  Tab=toggle focus")
@@ -2094,8 +2133,14 @@ def _entropy_sources_preview(state: AppState, *, width: int, height: int) -> Lis
         lines.append("No sources staged.")
         lines.append("Add at least 7 sources, then enable derive seed in Stamp Pack.")
         return lines[:height]
+    if n_eligible < min_n:
+        need = max(0, min_n - n_eligible)
+        lines.append(f"LOCKDOWN gate: need {need} more eligible unique source(s).")
+        lines.append(f"Tap sources need >= {LOCKDOWN_MIN_TAP_EVENTS} events.")
+        lines.append("")
 
     sel = max(0, min(int(state.entropy_selected), len(state.entropy_sources) - 1))
+    seen_ids: set[str] = set()
     for i, s in enumerate(state.entropy_sources[: max(0, height - 6)]):
         mark = ">>" if i == sel else "  "
         meta_bits: List[str] = []
@@ -2107,6 +2152,12 @@ def _entropy_sources_preview(state: AppState, *, width: int, height: int) -> Lis
             cnt = s.meta.get("events")
             if isinstance(cnt, int):
                 meta_bits.append(f"events={cnt}")
+                if int(cnt) < int(LOCKDOWN_MIN_TAP_EVENTS):
+                    meta_bits.append("low-events")
+        sid = _entropy_source_identity(s)
+        if sid in seen_ids:
+            meta_bits.append("dupe")
+        seen_ids.add(sid)
         meta = (" " + " ".join(meta_bits)) if meta_bits else ""
         short = s.sha256[:10]
         lines.append(f"{mark} [{s.kind}] {s.name}  {_fmt_bytes(s.size_bytes)}  sha={short}{meta}")
@@ -2536,9 +2587,16 @@ def _action_entropy_tap(state: AppState, stdscr) -> None:
             pass
 
     digest = h.hexdigest()
+    if count < int(LOCKDOWN_MIN_TAP_EVENTS):
+        state.status = "Failed."
+        state.log_lines = [
+            "Tap entropy rejected: insufficient events.",
+            f"Need >= {LOCKDOWN_MIN_TAP_EVENTS}, got {count}.",
+        ]
+        return
     meta: Dict[str, object] = {"events": int(count), "sample": sample_events[:16]}
-    # size_bytes is the conceptual size of the captured stream.
-    state.entropy_sources.append(EntropySource(kind="tap", name="tap", sha256=digest, size_bytes=target * 8, meta=meta))
+    # size_bytes tracks the conceptual size of the captured timing/code stream.
+    state.entropy_sources.append(EntropySource(kind="tap", name="tap", sha256=digest, size_bytes=count * 8, meta=meta))
     # Reward hook: stub out where we will play a sound effect later.
     _trigger_interaction_flash(state, drop_zone=False)
     state.reward_ticks = max(state.reward_ticks, 18)
@@ -2625,9 +2683,11 @@ def _build_sources_payload_dir(sources: Sequence[EntropySource]) -> Path:
             dst = td / "photos" / f"{i:03d}_{s.path.name}"
             try:
                 shutil.copy2(s.path, dst)
-            except Exception:
-                pass
+            except Exception as exc:
+                raise ValueError(f"failed to materialize photo source '{s.name}': {exc}") from exc
             entry["path"] = str(Path("photos") / dst.name)
+        elif s.kind == "photo":
+            raise ValueError(f"photo source missing or unreadable: {s.name}")
         elif s.kind == "text" and s.text is not None:
             dst = td / "text" / f"{i:03d}_{re.sub(r'[^A-Za-z0-9._-]+', '_', s.name)[:40] or 'note'}.txt"
             dst.write_text(s.text, encoding="utf-8", errors="ignore")
@@ -2636,6 +2696,8 @@ def _build_sources_payload_dir(sources: Sequence[EntropySource]) -> Path:
             except OSError:
                 pass
             entry["path"] = str(Path("text") / dst.name)
+        elif s.kind == "text":
+            raise ValueError(f"text source missing content: {s.name}")
         elif s.kind == "tap":
             dst = td / "tap" / f"{i:03d}_tap.json"
             dst.write_text(json.dumps(entry, sort_keys=True, indent=2) + "\n", encoding="utf-8")
@@ -2644,6 +2706,8 @@ def _build_sources_payload_dir(sources: Sequence[EntropySource]) -> Path:
             except OSError:
                 pass
             entry["path"] = str(Path("tap") / dst.name)
+        else:
+            raise ValueError(f"unsupported entropy source kind: {s.kind}")
         index.append(entry)
 
     (td / "sources.json").write_text(json.dumps(index, sort_keys=True, indent=2) + "\n", encoding="utf-8")
@@ -2730,22 +2794,26 @@ def _action_stamp(state: AppState, stdscr) -> None:
     derive_seed = _prompt_bool_curses(stdscr, "(EPS) derive seed_master (LOCKDOWN)", default=bool(state.insane))
     mix_sources = False
     pool_sha = None
+    mixed_sources: List[EntropySource] = []
     if derive_seed and state.entropy_sources:
         mix_sources = _prompt_bool_curses(stdscr, "(EPS) mix staged entropy sources into seed", default=True)
         if mix_sources:
-            if len(state.entropy_sources) < int(state.entropy_min_sources):
-                need_more = int(state.entropy_min_sources) - len(state.entropy_sources)
+            mixed_sources = _lockdown_eligible_sources(state.entropy_sources)
+            if len(mixed_sources) < int(state.entropy_min_sources):
+                need_more = int(state.entropy_min_sources) - len(mixed_sources)
                 state.status = "Failed."
                 state.log_lines = [
                     "Stamp blocked: not enough entropy sources.",
-                    f"Need {state.entropy_min_sources}, have {len(state.entropy_sources)}.",
+                    f"Need {state.entropy_min_sources} eligible unique sources, have {len(mixed_sources)}.",
+                    f"Staged sources total: {len(state.entropy_sources)}.",
+                    f"Tap sources require >= {LOCKDOWN_MIN_TAP_EVENTS} events.",
                     f"Add {need_more} more (photos/text/tap), then try again.",
                 ]
                 # Guide the user back to the deterministic path: go stage more sources now.
                 state.selected = 0  # Entropy Sources
                 state.focus = "entropy"
                 return
-            pool_sha = _entropy_pool_sha256(state.entropy_sources)
+            pool_sha = _entropy_pool_sha256(mixed_sources)
     write_seed = _prompt_bool_curses(stdscr, "(EPS) write seed files (chmod 600)", default=False) if derive_seed else False
     show_seed = _prompt_bool_curses(stdscr, "(EPS) show seed in UI", default=False) if derive_seed else False
     write_sources_default = bool(mix_sources)  # if sources affect the seed, default to auditing them
@@ -2838,10 +2906,12 @@ def _action_stamp(state: AppState, stdscr) -> None:
     if isinstance(fp, str) and fp:
         state.log_lines.append(f"seed_fingerprint_sha256: {fp}")
     if mix_sources and pool_sha:
-        state.log_lines.append(f"entropy_sources_count: {len(state.entropy_sources)}")
+        state.log_lines.append(f"entropy_sources_staged_count: {len(state.entropy_sources)}")
+        state.log_lines.append(f"entropy_sources_eligible_count: {len(mixed_sources)}")
         state.log_lines.append(f"entropy_sources_sha256: {pool_sha}")
-    if write_sources and derive_seed and state.entropy_sources:
-        p = _write_entropy_sources_into_pack(res.pack_dir, state.entropy_sources)
+    sources_for_audit: Sequence[EntropySource] = mixed_sources if mix_sources else state.entropy_sources
+    if write_sources and derive_seed and sources_for_audit:
+        p = _write_entropy_sources_into_pack(res.pack_dir, sources_for_audit)
         if p is not None:
             state.log_lines.append(f"entropy_sources_dir: {p}")
     if evidence_bundle:
