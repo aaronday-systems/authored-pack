@@ -840,6 +840,14 @@ def _count_drop_success(msgs: Sequence[str]) -> int:
     return n
 
 
+def _drop_result_is_terminal(msgs: Sequence[str]) -> bool:
+    for m in msgs:
+        ml = (m or "").lower()
+        if ml.startswith("not usable:") or ml.startswith("rejected (limit"):
+            return True
+    return False
+
+
 def _trigger_interaction_flash(state: AppState, *, drop_zone: bool = False) -> None:
     """
     Shared visual pulse for entropy-input interactions.
@@ -963,11 +971,10 @@ def _poll_drop_dir(state: AppState) -> None:
             key = str(p)
         if key in state.drop_seen:
             continue
-        state.drop_seen.add(key)
-
         msgs = _apply_drop_paths(state, [str(p)])
         ok = _count_drop_success(msgs)
         if ok > 0:
+            state.drop_seen.add(key)
             _apply_drop_feedback(state, msgs, play_sfx=False)
             changed = True
             imported_this_poll += ok
@@ -990,6 +997,14 @@ def _poll_drop_dir(state: AppState) -> None:
                     state.drop_last_msgs = [f"Rejected extras (limit 7 per burst): {rejected}"]
                     state.drop_last_msgs_ticks = 40
                 break
+        elif _drop_result_is_terminal(msgs):
+            state.drop_seen.add(key)
+            state.drop_last_msgs = list(msgs)[:4]
+            state.drop_last_msgs_ticks = 40
+        else:
+            # Transient failure: keep it eligible for a later retry.
+            state.drop_last_msgs = list(msgs)[:4]
+            state.drop_last_msgs_ticks = 40
 
     if changed:
         _start_drop_import_sfx_best_effort(duration_s=1.3)
@@ -2659,107 +2674,163 @@ def _prompt_bool(label: str, default: bool = False) -> bool:
     return raw in ("y", "yes", "true", "1")
 
 
+def _validated_photo_source_path(s: EntropySource, *, max_bytes: int = 100 * 1024 * 1024) -> Path:
+    if s.path is None or not s.path.is_file():
+        raise ValueError(f"photo source missing or unreadable: {s.name}")
+    sha, size = _sha256_hex_path(s.path, max_bytes=max_bytes)
+    if sha != s.sha256 or int(size) != int(s.size_bytes):
+        raise ValueError(f"photo source drift detected: {s.name}")
+    return s.path
+
+
 def _build_sources_payload_dir(sources: Sequence[EntropySource]) -> Path:
     """
     Materialize staged entropy sources into a real directory so they can be stamped as artifacts.
     Photos are copied; text/tap become files. The caller owns cleanup.
     """
     td = Path(tempfile.mkdtemp(prefix="eps_payload_sources_"))
-    (td / "photos").mkdir(parents=True, exist_ok=True)
-    (td / "text").mkdir(parents=True, exist_ok=True)
-    (td / "tap").mkdir(parents=True, exist_ok=True)
+    try:
+        (td / "photos").mkdir(parents=True, exist_ok=True)
+        (td / "text").mkdir(parents=True, exist_ok=True)
+        (td / "tap").mkdir(parents=True, exist_ok=True)
 
-    index: List[Dict[str, object]] = []
-    for i, s in enumerate(sources, start=1):
-        entry: Dict[str, object] = {
-            "i": int(i),
-            "kind": s.kind,
-            "name": s.name,
-            "sha256": s.sha256,
-            "size_bytes": int(s.size_bytes),
-            "meta": dict(s.meta or {}),
-        }
-        if s.kind == "photo" and s.path is not None and s.path.is_file():
-            dst = td / "photos" / f"{i:03d}_{s.path.name}"
-            try:
-                shutil.copy2(s.path, dst)
-            except Exception as exc:
-                raise ValueError(f"failed to materialize photo source '{s.name}': {exc}") from exc
-            entry["path"] = str(Path("photos") / dst.name)
-        elif s.kind == "photo":
-            raise ValueError(f"photo source missing or unreadable: {s.name}")
-        elif s.kind == "text" and s.text is not None:
-            dst = td / "text" / f"{i:03d}_{re.sub(r'[^A-Za-z0-9._-]+', '_', s.name)[:40] or 'note'}.txt"
-            dst.write_text(s.text, encoding="utf-8", errors="ignore")
-            try:
-                dst.chmod(stat.S_IRUSR | stat.S_IWUSR)
-            except OSError:
-                pass
-            entry["path"] = str(Path("text") / dst.name)
-        elif s.kind == "text":
-            raise ValueError(f"text source missing content: {s.name}")
-        elif s.kind == "tap":
-            dst = td / "tap" / f"{i:03d}_tap.json"
-            dst.write_text(json.dumps(entry, sort_keys=True, indent=2) + "\n", encoding="utf-8")
-            try:
-                dst.chmod(stat.S_IRUSR | stat.S_IWUSR)
-            except OSError:
-                pass
-            entry["path"] = str(Path("tap") / dst.name)
-        else:
-            raise ValueError(f"unsupported entropy source kind: {s.kind}")
-        index.append(entry)
+        index: List[Dict[str, object]] = []
+        for i, s in enumerate(sources, start=1):
+            entry: Dict[str, object] = {
+                "i": int(i),
+                "kind": s.kind,
+                "name": s.name,
+                "sha256": s.sha256,
+                "size_bytes": int(s.size_bytes),
+                "meta": dict(s.meta or {}),
+            }
+            if s.kind == "photo" and s.path is not None and s.path.is_file():
+                try:
+                    src = _validated_photo_source_path(s)
+                    dst = td / "photos" / f"{i:03d}_{src.name}"
+                    shutil.copy2(src, dst)
+                except Exception as exc:
+                    raise ValueError(f"failed to materialize photo source '{s.name}': {exc}") from exc
+                entry["path"] = str(Path("photos") / dst.name)
+            elif s.kind == "photo":
+                raise ValueError(f"photo source missing or unreadable: {s.name}")
+            elif s.kind == "text" and s.text is not None:
+                dst = td / "text" / f"{i:03d}_{re.sub(r'[^A-Za-z0-9._-]+', '_', s.name)[:40] or 'note'}.txt"
+                dst.write_text(s.text, encoding="utf-8", errors="ignore")
+                try:
+                    dst.chmod(stat.S_IRUSR | stat.S_IWUSR)
+                except OSError:
+                    pass
+                entry["path"] = str(Path("text") / dst.name)
+            elif s.kind == "text":
+                raise ValueError(f"text source missing content: {s.name}")
+            elif s.kind == "tap":
+                dst = td / "tap" / f"{i:03d}_tap.json"
+                dst.write_text(json.dumps(entry, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+                try:
+                    dst.chmod(stat.S_IRUSR | stat.S_IWUSR)
+                except OSError:
+                    pass
+                entry["path"] = str(Path("tap") / dst.name)
+            else:
+                raise ValueError(f"unsupported entropy source kind: {s.kind}")
+            index.append(entry)
 
-    (td / "sources.json").write_text(json.dumps(index, sort_keys=True, indent=2) + "\n", encoding="utf-8")
-    return td
+        (td / "sources.json").write_text(json.dumps(index, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+        return td
+    except Exception:
+        try:
+            shutil.rmtree(td)
+        except Exception:
+            pass
+        raise
 
 
-def _write_entropy_sources_into_pack(pack_dir: Path, sources: Sequence[EntropySource]) -> Optional[Path]:
+def _write_entropy_sources_into_pack(pack_dir: Path, sources: Sequence[EntropySource]) -> Tuple[Optional[Path], List[str]]:
     """
     Persist staged sources into the pack directory (outside payload/) for audit.
     These files are excluded from entropy_pack.zip.
     """
+    warnings: List[str] = []
     out = pack_dir / "entropy_sources"
+    tmp_out: Optional[Path] = None
     try:
         out.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        return None
-    index: List[Dict[str, object]] = []
-    for i, s in enumerate(sources, start=1):
-        entry: Dict[str, object] = {
-            "i": int(i),
-            "kind": s.kind,
-            "name": s.name,
-            "sha256": s.sha256,
-            "size_bytes": int(s.size_bytes),
-            "meta": dict(s.meta or {}),
-        }
-        if s.kind == "photo" and s.path is not None and s.path.is_file():
-            dst = out / f"{i:03d}_{s.path.name}"
+        tmp_out = Path(tempfile.mkdtemp(prefix=".eps_entropy_sources_", dir=str(pack_dir)))
+        index: List[Dict[str, object]] = []
+        for i, s in enumerate(sources, start=1):
+            entry: Dict[str, object] = {
+                "i": int(i),
+                "kind": s.kind,
+                "name": s.name,
+                "sha256": s.sha256,
+                "size_bytes": int(s.size_bytes),
+                "meta": dict(s.meta or {}),
+            }
+            if s.kind == "photo":
+                try:
+                    src = _validated_photo_source_path(s)
+                    dst = tmp_out / f"{i:03d}_{src.name}"
+                    shutil.copy2(src, dst)
+                except Exception as exc:
+                    warnings.append(f"skipped photo source '{s.name}': {exc}")
+                    continue
+                entry["path"] = dst.name
+            elif s.kind == "text" and s.text is not None:
+                dst = tmp_out / f"{i:03d}_{re.sub(r'[^A-Za-z0-9._-]+', '_', s.name)[:40] or 'note'}.txt"
+                try:
+                    dst.write_text(s.text, encoding="utf-8", errors="ignore")
+                except Exception as exc:
+                    warnings.append(f"skipped text source '{s.name}': {exc}")
+                    continue
+                try:
+                    dst.chmod(stat.S_IRUSR | stat.S_IWUSR)
+                except OSError:
+                    pass
+                entry["path"] = dst.name
+            elif s.kind == "tap":
+                dst = tmp_out / f"{i:03d}_tap.json"
+                try:
+                    dst.write_text(json.dumps(entry, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+                except Exception as exc:
+                    warnings.append(f"skipped tap source '{s.name}': {exc}")
+                    continue
+                try:
+                    dst.chmod(stat.S_IRUSR | stat.S_IWUSR)
+                except OSError:
+                    pass
+                entry["path"] = dst.name
+            else:
+                warnings.append(f"skipped unsupported entropy source kind '{s.kind}': {s.name}")
+                continue
+            index.append(entry)
+
+        if not index:
+            warnings.append("entropy_sources audit produced no materialized entries")
+            return None, warnings
+
+        (tmp_out / "sources.index.json").write_text(json.dumps(index, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+        if out.exists():
             try:
-                shutil.copy2(s.path, dst)
+                if out.is_dir():
+                    shutil.rmtree(out)
+                else:
+                    out.unlink()
+            except Exception as exc:
+                warnings.append(f"could not replace existing entropy_sources audit dir: {exc}")
+                return None, warnings
+        tmp_out.replace(out)
+        tmp_out = None
+        return out, warnings
+    except Exception as exc:
+        warnings.append(f"entropy_sources audit failed: {exc}")
+        return None, warnings
+    finally:
+        if tmp_out is not None:
+            try:
+                shutil.rmtree(tmp_out)
             except Exception:
                 pass
-            entry["path"] = dst.name
-        elif s.kind == "text" and s.text is not None:
-            dst = out / f"{i:03d}_{re.sub(r'[^A-Za-z0-9._-]+', '_', s.name)[:40] or 'note'}.txt"
-            dst.write_text(s.text, encoding="utf-8", errors="ignore")
-            try:
-                dst.chmod(stat.S_IRUSR | stat.S_IWUSR)
-            except OSError:
-                pass
-            entry["path"] = dst.name
-        elif s.kind == "tap":
-            dst = out / f"{i:03d}_tap.json"
-            dst.write_text(json.dumps(entry, sort_keys=True, indent=2) + "\n", encoding="utf-8")
-            try:
-                dst.chmod(stat.S_IRUSR | stat.S_IWUSR)
-            except OSError:
-                pass
-            entry["path"] = dst.name
-        index.append(entry)
-    (out / "sources.index.json").write_text(json.dumps(index, sort_keys=True, indent=2) + "\n", encoding="utf-8")
-    return out
 
 
 def _action_stamp(state: AppState, stdscr) -> None:
@@ -2830,47 +2901,47 @@ def _action_stamp(state: AppState, stdscr) -> None:
     evidence_bundle = _prompt_bool_curses(stdscr, "(EPS) write evidence bundle zip (tamper-evident)", default=evidence_default)
 
     tmp_payload_dir: Optional[Path] = None
-    input_dir: Path
-    exclude_relpaths: Optional[Set[str]] = None
-    if input_s.strip() == "@sources":
-        if not state.entropy_sources:
-            state.status = "Failed."
-            state.log_lines = ["@sources selected, but no entropy sources are staged."]
-            return
-        tmp_payload_dir = _build_sources_payload_dir(state.entropy_sources)
-        input_dir = tmp_payload_dir
-    else:
-        input_dir = Path(input_s).expanduser()
-        if exclude_picker:
-            picked = _artifact_exclude_picker(stdscr, state, input_dir=input_dir, include_hidden=bool(include_hidden))
-            if picked is None:
-                state.status = "Ready."
-                state.log_lines = ["Artifact exclude picker cancelled."]
-                return
-            exclude_relpaths = set(picked)
-    out_dir = Path(out_s).expanduser()
-    pack_id = pack_id_s.strip() or None
-    notes = notes_s.strip() or None
-    created_at = created_at_s.strip() or None
-
-    def _do_stamp() -> StampResult:
-        return stamp_pack(
-            input_dir=input_dir,
-            out_dir=out_dir,
-            pack_id=pack_id,
-            notes=notes,
-            created_at_utc=created_at,
-            include_hidden=include_hidden,
-            exclude_relpaths=sorted(exclude_relpaths) if exclude_relpaths else None,
-            zip_pack=zip_pack,
-            derive_seed=derive_seed,
-            entropy_sources_sha256=pool_sha if mix_sources else None,
-            evidence_bundle=False,  # do this post-stamp so it can include entropy_sources if we choose to write them
-            write_seed_files=write_seed,
-            print_seed=False,  # never print to stdout from TUI
-        )
-
     try:
+        input_dir: Path
+        exclude_relpaths: Optional[Set[str]] = None
+        if input_s.strip() == "@sources":
+            if not state.entropy_sources:
+                state.status = "Failed."
+                state.log_lines = ["@sources selected, but no entropy sources are staged."]
+                return
+            tmp_payload_dir = _build_sources_payload_dir(state.entropy_sources)
+            input_dir = tmp_payload_dir
+        else:
+            input_dir = Path(input_s).expanduser()
+            if exclude_picker:
+                picked = _artifact_exclude_picker(stdscr, state, input_dir=input_dir, include_hidden=bool(include_hidden))
+                if picked is None:
+                    state.status = "Ready."
+                    state.log_lines = ["Artifact exclude picker cancelled."]
+                    return
+                exclude_relpaths = set(picked)
+        out_dir = Path(out_s).expanduser()
+        pack_id = pack_id_s.strip() or None
+        notes = notes_s.strip() or None
+        created_at = created_at_s.strip() or None
+
+        def _do_stamp() -> StampResult:
+            return stamp_pack(
+                input_dir=input_dir,
+                out_dir=out_dir,
+                pack_id=pack_id,
+                notes=notes,
+                created_at_utc=created_at,
+                include_hidden=include_hidden,
+                exclude_relpaths=sorted(exclude_relpaths) if exclude_relpaths else None,
+                zip_pack=zip_pack,
+                derive_seed=derive_seed,
+                entropy_sources_sha256=pool_sha if mix_sources else None,
+                evidence_bundle=False,  # do this post-stamp so it can include entropy_sources if we choose to write them
+                write_seed_files=write_seed,
+                print_seed=False,  # never print to stdout from TUI
+            )
+
         if state.insane:
             res = _stamp_with_insane_fx(stdscr, state, _do_stamp, min_stamping_s=5.0, created_s=5.0)
         else:
@@ -2878,11 +2949,6 @@ def _action_stamp(state: AppState, stdscr) -> None:
     except Exception as exc:
         state.log_lines = ["Stamp failed.", f"- {exc}"]
         state.status = "Failed."
-        if tmp_payload_dir is not None:
-            try:
-                shutil.rmtree(tmp_payload_dir)
-            except Exception:
-                pass
         return
     finally:
         if tmp_payload_dir is not None:
@@ -2911,7 +2977,9 @@ def _action_stamp(state: AppState, stdscr) -> None:
         state.log_lines.append(f"entropy_sources_sha256: {pool_sha}")
     sources_for_audit: Sequence[EntropySource] = mixed_sources if mix_sources else state.entropy_sources
     if write_sources and derive_seed and sources_for_audit:
-        p = _write_entropy_sources_into_pack(res.pack_dir, sources_for_audit)
+        p, warnings = _write_entropy_sources_into_pack(res.pack_dir, sources_for_audit)
+        for w in warnings:
+            state.log_lines.append(f"warning: entropy_sources audit: {w}")
         if p is not None:
             state.log_lines.append(f"entropy_sources_dir: {p}")
     if evidence_bundle:

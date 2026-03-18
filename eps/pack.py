@@ -84,6 +84,8 @@ def _sha256_hex_stream(handle, *, max_bytes: Optional[int] = None) -> Tuple[str,
 
 
 def _read_file_bytes_limited(path: Path, *, max_bytes: int) -> bytes:
+    if path.is_symlink():
+        raise ValueError(f"refusing to read symlink file: {path}")
     try:
         size = int(path.stat().st_size)
         if size > int(max_bytes):
@@ -139,12 +141,37 @@ def _payload_relpaths_in_zip(zf: zipfile.ZipFile) -> List[str]:
     return out
 
 
+def _iter_pack_archive_files(
+    pack_dir: Path,
+    *,
+    exclude_names: Set[str],
+    skip_nested_zips: bool,
+) -> List[Path]:
+    include: List[Path] = []
+    for p in sorted(pack_dir.rglob("*")):
+        rel = p.relative_to(pack_dir).as_posix()
+        if rel in exclude_names:
+            continue
+        if p.is_symlink():
+            raise ValueError(f"refusing to archive symlink file: {rel}")
+        if p.is_dir():
+            continue
+        if skip_nested_zips and rel.endswith(".zip"):
+            continue
+        include.append(p)
+    return include
+
+
 def _append_unexpected_payload_errors(errors: List[str], *, expected: Set[str], actual: Sequence[str]) -> None:
     extra_payload_relpaths = sorted(set(actual) - expected)
     if extra_payload_relpaths:
         preview = ", ".join(extra_payload_relpaths[:5])
         suffix = f" (+{len(extra_payload_relpaths) - 5} more)" if len(extra_payload_relpaths) > 5 else ""
         errors.append(f"unexpected payload files present: {preview}{suffix}")
+
+
+def _output_would_self_ingest_input(input_dir: Path, out_dir: Path) -> bool:
+    return input_dir == out_dir or out_dir.is_relative_to(input_dir)
 
 
 def _verify_one_artifact_in_dir(pack_dir: Path, *, idx: int, rel_s: str, size: int, sha: str) -> Optional[str]:
@@ -277,6 +304,8 @@ def _copy_payload_files(
         if not src_rel:
             raise ValueError("artifact missing source_relpath")
         src = input_dir / Path(src_rel)
+        if src.is_symlink():
+            raise ValueError(f"artifact source became symlink: {src}")
         if not src.is_file():
             raise ValueError(f"artifact source missing: {src}")
 
@@ -286,11 +315,18 @@ def _copy_payload_files(
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)
 
+        expected_sha = str(a.get("sha256", ""))
+        expected_size = int(a.get("size_bytes", 0))
+        with dst.open("rb") as handle:
+            actual_sha, actual_size = _sha256_hex_stream(handle)
+        if actual_sha != expected_sha or actual_size != expected_size:
+            raise ValueError(f"artifact copy diverged from source bytes: {src_rel}")
+
         out.append(
             {
                 "path": dst_rel.as_posix(),
-                "sha256": str(a.get("sha256", "")),
-                "size_bytes": int(a.get("size_bytes", 0)),
+                "sha256": expected_sha,
+                "size_bytes": expected_size,
             }
         )
     out.sort(key=lambda d: str(d.get("path", "")))
@@ -371,6 +407,8 @@ def stamp_pack(
     out_dir = Path(out_dir).resolve()
     if not input_dir.is_dir():
         raise ValueError(f"--input must be a directory: {input_dir}")
+    if _output_would_self_ingest_input(input_dir, out_dir):
+        raise ValueError("--input and --out must not overlap")
     out_dir.mkdir(parents=True, exist_ok=True)
 
     raw_artifacts = collect_artifacts(input_dir, include_hidden=include_hidden, exclude_relpaths=exclude_relpaths)
@@ -399,51 +437,68 @@ def stamp_pack(
             # Idempotent behavior: if the existing pack matches the manifest root, reuse it.
             existing_manifest = pack_dir / "manifest.json"
             if existing_manifest.is_file():
+                existing = None
                 try:
                     raw = _read_file_bytes_limited(existing_manifest, max_bytes=DEFAULT_MAX_MANIFEST_BYTES)
                     existing = json.loads(raw.decode("utf-8"))
-                    if isinstance(existing, dict) and manifest_root_sha256(existing) == root_sha:
-                        seed_master: Optional[bytes] = None
-                        if derive_seed:
-                            seed_master = derive_seed_master(
-                                root_sha256_hex=root_sha,
-                                entropy_sources_sha256_hex=entropy_sources_sha256,
-                            )
-                        # Best-effort: ensure requested derived outputs exist when reusing a pack.
-                        if zip_pack and not (pack_dir / "entropy_pack.zip").is_file():
-                            _write_zip(pack_dir, pack_dir / "entropy_pack.zip")
-                        if derive_seed and write_seed_files and seed_master is not None:
-                            seed_hex = seed_master.hex()
-                            seed_b64 = base64.b64encode(seed_master).decode("ascii")
-                            _safe_write_text(pack_dir / "seed_master.hex", seed_hex + "\n")
-                            _safe_write_text(pack_dir / "seed_master.b64", seed_b64 + "\n")
-                            _chmod_600(pack_dir / "seed_master.hex")
-                            _chmod_600(pack_dir / "seed_master.b64")
-                        # receipt.json is operational metadata; keep it aligned with the most recent stamp call.
-                        receipt = _build_receipt(
-                            root_sha256=root_sha,
-                            pack_id=pack_id,
-                            artifact_entries=artifact_entries,
-                            zip_path=Path("entropy_pack.zip") if zip_pack else None,
-                            derivation_version=deriv_version,
-                            entropy_sources_sha256=entropy_sources_sha256,
-                            seed_master=seed_master,
-                        )
-                        if evidence_bundle:
-                            ev_path, ev_sha = write_evidence_bundle(pack_dir)
-                            receipt["evidence_bundle_path"] = str(ev_path.name)
-                            if ev_sha:
-                                receipt["evidence_bundle_sha256"] = str(ev_sha)
-                        _safe_write_json(pack_dir / "receipt.json", receipt)
-                        if print_seed and seed_master is not None:
-                            _print_seed_material(seed_master)
-                        try:
-                            shutil.rmtree(tmp_dir)
-                        except Exception:
-                            pass
-                        return StampResult(pack_dir=pack_dir, root_sha256=root_sha, receipt=receipt, seed_master=seed_master)
                 except Exception:
-                    pass
+                    existing = None
+                if isinstance(existing, dict) and manifest_root_sha256(existing) == root_sha:
+                    strict = verify_pack(pack_dir)
+                    if not strict.ok:
+                        raise ValueError(
+                            "existing pack failed verification: "
+                            + (strict.errors[0] if strict.errors else "unknown error")
+                        )
+                    zip_path = pack_dir / "entropy_pack.zip"
+                    if zip_path.is_file():
+                        if zip_path.is_symlink():
+                            raise ValueError("existing entropy_pack.zip is a symlink")
+                        zip_res = verify_pack(zip_path)
+                        if not zip_res.ok:
+                            raise ValueError(
+                                "existing entropy_pack.zip failed verification: "
+                                + (zip_res.errors[0] if zip_res.errors else "unknown error")
+                            )
+                    seed_master: Optional[bytes] = None
+                    if derive_seed:
+                        seed_master = derive_seed_master(
+                            root_sha256_hex=root_sha,
+                            entropy_sources_sha256_hex=entropy_sources_sha256,
+                        )
+                    # Best-effort: ensure requested derived outputs exist when reusing a pack.
+                    if zip_pack and not (pack_dir / "entropy_pack.zip").is_file():
+                        _write_zip(pack_dir, pack_dir / "entropy_pack.zip")
+                    if derive_seed and write_seed_files and seed_master is not None:
+                        seed_hex = seed_master.hex()
+                        seed_b64 = base64.b64encode(seed_master).decode("ascii")
+                        _safe_write_text(pack_dir / "seed_master.hex", seed_hex + "\n")
+                        _safe_write_text(pack_dir / "seed_master.b64", seed_b64 + "\n")
+                        _chmod_600(pack_dir / "seed_master.hex")
+                        _chmod_600(pack_dir / "seed_master.b64")
+                    # receipt.json is operational metadata; keep it aligned with the most recent stamp call.
+                    receipt = _build_receipt(
+                        root_sha256=root_sha,
+                        pack_id=pack_id,
+                        artifact_entries=artifact_entries,
+                        zip_path=Path("entropy_pack.zip") if zip_pack else None,
+                        derivation_version=deriv_version,
+                        entropy_sources_sha256=entropy_sources_sha256,
+                        seed_master=seed_master,
+                    )
+                    if evidence_bundle:
+                        ev_path, ev_sha = write_evidence_bundle(pack_dir)
+                        receipt["evidence_bundle_path"] = str(ev_path.name)
+                        if ev_sha:
+                            receipt["evidence_bundle_sha256"] = str(ev_sha)
+                    _safe_write_json(pack_dir / "receipt.json", receipt)
+                    if print_seed and seed_master is not None:
+                        _print_seed_material(seed_master)
+                    try:
+                        shutil.rmtree(tmp_dir)
+                    except Exception:
+                        pass
+                    return StampResult(pack_dir=pack_dir, root_sha256=root_sha, receipt=receipt, seed_master=seed_master)
             raise FileExistsError(f"pack already exists with different contents: {pack_dir}")
 
         # Write pack contents into temp dir first.
@@ -547,13 +602,9 @@ def _write_zip(pack_dir: Path, zip_path: Path) -> None:
     # Avoid including seed files by default. They are sensitive and should be injected per-run.
     exclude = {"seed_master.hex", "seed_master.b64", zip_path.name}
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for path in sorted(pack_dir.rglob("*")):
-            if path.is_dir():
-                continue
+        for path in _iter_pack_archive_files(pack_dir, exclude_names=exclude, skip_nested_zips=False):
             rel = path.relative_to(pack_dir).as_posix()
             if rel.startswith("entropy_sources/") or rel.startswith("entropy_sources\\"):
-                continue
-            if rel in exclude:
                 continue
             zf.write(path, arcname=rel)
 
@@ -587,17 +638,7 @@ def write_evidence_bundle(pack_dir: Path) -> Tuple[Path, Optional[str]]:
     }
 
     # Collect files to include (deterministic order).
-    include: List[Path] = []
-    for p in sorted(pack_dir.rglob("*")):
-        if p.is_dir():
-            continue
-        rel = p.relative_to(pack_dir).as_posix()
-        if rel in exclude_names:
-            continue
-        # Always exclude nested zips; evidence should be canonical, not recursively bundled.
-        if rel.endswith(".zip"):
-            continue
-        include.append(p)
+    include = _iter_pack_archive_files(pack_dir, exclude_names=exclude_names, skip_nested_zips=True)
 
     # Stream files into zip with fixed timestamps to keep bundles stable across runs.
     fixed_dt = (1980, 1, 1, 0, 0, 0)
@@ -690,7 +731,9 @@ def verify_pack(
         root_sha = manifest_root_sha256(manifest)
 
         expected_path = pack_path / "entropy_root_sha256.txt"
-        if expected_path.is_file():
+        if expected_path.is_symlink():
+            errors.append("entropy_root_sha256.txt is a symlink")
+        elif expected_path.is_file():
             try:
                 raw_expected = _read_file_bytes_limited(expected_path, max_bytes=256)
                 expected = raw_expected.decode("utf-8").strip()

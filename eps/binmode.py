@@ -10,6 +10,12 @@ from typing import Iterable, List, Optional, Sequence, Tuple
 from .pack import StampResult, stamp_pack
 
 
+def _paths_overlap(a: Path, b: Path) -> bool:
+    ra = Path(a).expanduser().resolve()
+    rb = Path(b).expanduser().resolve()
+    return ra == rb or ra.is_relative_to(rb) or rb.is_relative_to(ra)
+
+
 _DEFAULT_EXCLUDE_DIRS = {
     ".eps_failed",
     ".eps_stage",
@@ -116,6 +122,8 @@ def stamp_from_entropy_bin(
     out_dir = Path(out_dir).expanduser().resolve()
     if not entropy_bin.is_dir():
         raise ValueError(f"--entropy-bin must be a directory: {entropy_bin}")
+    if _paths_overlap(entropy_bin, out_dir):
+        raise ValueError("--entropy-bin and --out must not overlap")
     if count <= 0:
         raise ValueError(f"--count must be > 0, got: {count}")
     if min_remaining < 0:

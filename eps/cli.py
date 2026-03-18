@@ -10,6 +10,12 @@ from .manifest import DEFAULT_DERIVATION_VERSION, stable_dumps
 from .pack import StampResult, stamp_pack, verify_pack
 
 
+def _paths_overlap(a: Path, b: Path) -> bool:
+    ra = Path(a).expanduser().resolve()
+    rb = Path(b).expanduser().resolve()
+    return ra == rb or ra.is_relative_to(rb) or rb.is_relative_to(ra)
+
+
 def _parse_dice(items: Sequence[str]) -> List[Tuple[str, int]]:
     out: List[Tuple[str, int]] = []
     for raw in items:
@@ -33,10 +39,17 @@ def _stamp(args: argparse.Namespace) -> int:
     dice = None
     if args.dice:
         dice = _parse_dice(args.dice)
+    if args.json and args.print_seed:
+        raise ValueError("--json cannot be combined with --print-seed")
+
+    input_dir = Path(args.input)
+    out_dir = Path(args.out)
+    if _paths_overlap(input_dir, out_dir):
+        raise ValueError("--input and --out must not overlap")
 
     res: StampResult = stamp_pack(
-        input_dir=Path(args.input),
-        out_dir=Path(args.out),
+        input_dir=input_dir,
+        out_dir=out_dir,
         pack_id=args.pack_id,
         notes=args.notes,
         created_at_utc=args.created_at_utc,
@@ -163,7 +176,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     stamp.add_argument("--derive-seed", action="store_true", help=f"Derive seed_master via HKDF ({DEFAULT_DERIVATION_VERSION})")
     stamp.add_argument("--write-seed", action="store_true", help="Write seed_master.{hex,b64} (chmod 600 best-effort)")
-    stamp.add_argument("--print-seed", action="store_true", help="Print seed_master.{hex,b64} to stdout (no files)")
+    stamp.add_argument("--print-seed", action="store_true", help="Print seed_master.{hex,b64} to stdout (no files, incompatible with --json)")
     stamp.add_argument("--evidence-bundle", action="store_true", help="Write eps_evidence_<root>.zip + .sha256 (tamper-evident)")
 
     stamp.add_argument("--json", action="store_true", help="Emit receipt JSON to stdout")
