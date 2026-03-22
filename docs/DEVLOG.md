@@ -93,6 +93,23 @@ Do not rewrite, reorder, or prune previous entries.
   - The main contract is now split cleanly: rooted facts in `manifest.json`, operational facts in `receipt.json`, and local-only audit adjuncts outside the canonical public zip.
   - If future work adds signatures or peppers, do it as a new versioned derivation/receipt contract. Do not smuggle new semantics into `v2`.
 
+## 2026-03-22T20:02:45Z
+
+- CLI and docs wording cleanup to match the actual semantics of EPS.
+- What changed and why:
+  - `eps/cli.py` now describes EPS as deterministic packaging and verification of operator-supplied entropy-bearing inputs, with reproducible derived seed material, rather than "entropy provenance tooling" that sounds like an RNG.
+    - Why: the public help text should tell the honest story in one sentence and not invite misuse by implying EPS synthesizes randomness.
+  - `README.md` now says EPS does not create entropy, renames the explanatory sections around "Why EPS Exists" and "Why Seven Inputs," and calls out the deterministic derived seed model explicitly.
+    - Why: future Aaron should not have to infer the trust boundary from scattered prose; the README should make the packaging/verification model obvious.
+  - `docs/RELEASE_NOTES_v0.2.0.md` now states the release as deterministic packaging and verification of operator-supplied entropy-bearing inputs, not an RNG.
+    - Why: release notes are part of the contract and should not overclaim.
+  - `docs/CROSS_AGENT_CONTROL_PLANE_PROMPT.md` now says the headless mode is deterministic packaging and verification, and warns that omitting `seed_master.*` from the public zip is not a secrecy control.
+    - Why: downstream agents need the correct mental model before they consume EPS outputs.
+- Verification status after this wording pass:
+  - CLI contract tests were not rerun yet in this entry; the next check is `pytest -q tests/test_cli_contract.py tests/test_cli_binmode_guards.py`.
+- Future-self note:
+  - The naming drift risk here is semantic, not mechanical. If docs ever start implying EPS generates entropy, the product will be easier to misuse even if the code is correct.
+
 ## 2026-03-22T15:50:33Z
 
 - Runtime hardening landed for the public-release `v0.2.0` pass.
@@ -119,3 +136,22 @@ Do not rewrite, reorder, or prune previous entries.
 - Operational insight for future me:
   - The risky seams in EPS are still the cross-module contracts: manifest schema, receipt schema, and TUI orchestration. Change them together or not at all.
   - The fastest way to break public trust here is to let docs drift away from the actual JSON and zip contracts. Treat the tests as the executable version of the release notes.
+
+## 2026-03-22T20:27:08Z
+
+- Public artifact lifecycle and identity cleanup landed after the initial v0.2.0 hardening wave.
+- What changed and why:
+  - `eps/pack.py` now uses one authoritative finalize path for `receipt.json`, `entropy_pack.zip`, and the evidence bundle.
+    - Why: the previous flow could leave zip and evidence artifacts carrying stale receipt state relative to the on-disk pack directory.
+  - Evidence bundle metadata is no longer written back into `receipt.json`.
+    - Why: receipt -> evidence -> receipt was a cycle. Breaking that cycle is the simplest way to make the evidence bundle reflect final pack state.
+  - New stamps now emit both `pack_root_sha256.txt` and legacy alias `entropy_root_sha256.txt`, and receipts/results now expose both `pack_root_sha256` and `payload_root_sha256`.
+    - Why: one hash was carrying too many meanings. Future-Aaron needs a clean split between the full pack commitment and payload equivalence.
+  - The TUI now feeds source-audit fields into the core finalization path instead of patching `receipt.json` after publication.
+    - Why: the TUI was the easiest place for zip/receipt drift to recur if finalization stayed split across layers.
+  - CLI and README wording now prefer `pack_root_sha256`, `payload_root_sha256`, and "derived seed material" while keeping legacy aliases for compatibility.
+    - Why: the semantics need to read honestly without forcing an immediate flag-day on old automation.
+- Verification status after this cleanup wave:
+  - Focused pack/CLI/TUI regression suite passed after the contract updates.
+- Future-self note:
+  - If you change receipt fields, zip contents, or evidence composition, treat them as one seam. Splitting them again will reintroduce stale-artifact bugs immediately.

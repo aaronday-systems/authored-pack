@@ -51,14 +51,16 @@ class TestStampVerify(unittest.TestCase):
 
             ev_zip = res.pack_dir / f"eps_evidence_{res.root_sha256}.zip"
             self.assertTrue(ev_zip.is_file())
-            # Receipt should expose evidence bundle identity fields for downstream agents.
-            receipt = (res.pack_dir / "receipt.json").read_text(encoding="utf-8")
-            self.assertIn("evidence_bundle_path", receipt)
-            self.assertIn("evidence_bundle_sha256", receipt)
+            self.assertEqual(res.evidence_bundle_path, ev_zip)
+            self.assertTrue(bool(res.evidence_bundle_sha256))
+            receipt = json.loads((res.pack_dir / "receipt.json").read_text(encoding="utf-8"))
+            self.assertNotIn("evidence_bundle_path", receipt)
+            self.assertNotIn("evidence_bundle_sha256", receipt)
             with zipfile.ZipFile(ev_zip, "r") as zf:
                 names = set(zf.namelist())
                 self.assertIn("manifest.json", names)
                 self.assertIn("receipt.json", names)
+                self.assertIn("pack_root_sha256.txt", names)
                 self.assertIn("entropy_root_sha256.txt", names)
                 self.assertIn("evidence_manifest.json", names)
                 self.assertIn("evidence_manifest_sha256.txt", names)
@@ -79,6 +81,8 @@ class TestStampVerify(unittest.TestCase):
             receipt_obj = json.loads((res.pack_dir / "receipt.json").read_text(encoding="utf-8"))
             self.assertEqual(receipt_obj["schema_version"], "eps.receipt.v2")
             self.assertEqual(receipt_obj["entropy_schema_version"], "entropy.pack.v2")
+            self.assertEqual(receipt_obj["pack_root_sha256"], res.root_sha256)
+            self.assertEqual(receipt_obj["payload_root_sha256"], res.payload_root_sha256)
 
     def test_manifest_root_changes_when_derivation_metadata_changes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -248,6 +252,7 @@ class TestStampVerify(unittest.TestCase):
             with zipfile.ZipFile(zip_path, "r") as zf:
                 names = set(zf.namelist())
                 self.assertIn("manifest.json", names)
+                self.assertIn("pack_root_sha256.txt", names)
                 self.assertIn("entropy_root_sha256.txt", names)
                 self.assertIn("receipt.json", names)
                 self.assertIn("payload/a.txt", names)
@@ -257,6 +262,75 @@ class TestStampVerify(unittest.TestCase):
                 self.assertFalse(any(name.endswith(".sha256") for name in names))
                 zipped_receipt = json.loads(zf.read("receipt.json").decode("utf-8"))
                 self.assertEqual(zipped_receipt, on_disk_receipt)
+
+    def test_v2_evidence_bundle_receipt_matches_final_pack_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            res = stamp_pack(
+                input_dir=input_dir,
+                out_dir=out_dir,
+                zip_pack=True,
+                derive_seed=True,
+                evidence_bundle=True,
+                write_seed_files=True,
+            )
+
+            on_disk_receipt = json.loads((res.pack_dir / "receipt.json").read_text(encoding="utf-8"))
+            self.assertNotIn("evidence_bundle_path", on_disk_receipt)
+            self.assertNotIn("evidence_bundle_sha256", on_disk_receipt)
+            self.assertIsNotNone(res.evidence_bundle_path)
+            self.assertTrue(bool(res.evidence_bundle_sha256))
+
+            ev_zip = res.pack_dir / f"eps_evidence_{res.root_sha256}.zip"
+            self.assertTrue(ev_zip.is_file())
+            with zipfile.ZipFile(ev_zip, "r") as zf:
+                zipped_receipt = json.loads(zf.read("receipt.json").decode("utf-8"))
+
+            self.assertEqual(
+                zipped_receipt,
+                on_disk_receipt,
+                msg="evidence bundle should reflect the final receipt state, not a stale intermediate receipt",
+            )
+
+    def test_manifest_root_separates_payload_identity_from_pack_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            alpha = stamp_pack(
+                input_dir=input_dir,
+                out_dir=out_dir,
+                pack_id="alpha",
+                zip_pack=False,
+                derive_seed=False,
+            )
+            beta = stamp_pack(
+                input_dir=input_dir,
+                out_dir=out_dir,
+                pack_id="beta",
+                zip_pack=False,
+                derive_seed=False,
+            )
+
+            self.assertNotEqual(alpha.root_sha256, beta.root_sha256)
+
+            alpha_manifest = json.loads((alpha.pack_dir / "manifest.json").read_text(encoding="utf-8"))
+            beta_manifest = json.loads((beta.pack_dir / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(alpha_manifest["artifacts"], beta_manifest["artifacts"])
+
+            alpha_verify = verify_pack(alpha.pack_dir)
+            beta_verify = verify_pack(beta.pack_dir)
+            self.assertTrue(alpha_verify.ok, msg=f"errors: {alpha_verify.errors}")
+            self.assertTrue(beta_verify.ok, msg=f"errors: {beta_verify.errors}")
+            self.assertEqual(alpha_verify.file_count, beta_verify.file_count)
 
     def test_verify_rejects_path_traversal_and_symlinks(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

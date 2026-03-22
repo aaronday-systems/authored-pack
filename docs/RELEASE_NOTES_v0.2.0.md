@@ -8,8 +8,9 @@ Date: 2026-03-22
 - New receipts now emit `eps.receipt.v2`.
 - `receipt.json` is part of the public pack contract for v2 packs and canonical public zips.
 - `entropy_pack.zip` is now the canonical public artifact projection:
-  - includes `manifest.json`, `entropy_root_sha256.txt`, `receipt.json`, and `payload/**`
+  - includes `manifest.json`, `pack_root_sha256.txt`, legacy alias `entropy_root_sha256.txt`, `receipt.json`, and `payload/**`
   - excludes `seed_master.*`, `entropy_sources/`, evidence zips, and `*.sha256`
+- New stamps now also emit `payload_root_sha256` so payload equivalence can be tracked independently of pack-level metadata.
 
 ## Security and integrity changes
 
@@ -46,4 +47,6 @@ Date: 2026-03-22
 
 ## Operational note
 
-- `seed_master` remains deterministic. Published packs reproduce the same derived seed material. Treat seed disclosure as an operator trust-boundary decision, not as automatic secrecy.
+- `seed_master` remains deterministic. Published packs reproduce the same derived seed material. Treat it as reproducible operator data, not automatic secrecy.
+- EPS is deterministic packaging and verification of operator-supplied entropy-bearing inputs, not an RNG.
+- Evidence bundle metadata is now returned by the caller surface instead of being written back into `receipt.json`, which breaks the stale receipt/evidence cycle and keeps the bundle aligned with final pack state.

@@ -2,15 +2,20 @@
 """
 Minimal curses TUI for Entropy Pack Stamper (EPS).
 
-Baseline: copy the Control Plane interaction posture:
+Profiles:
+- Calm (default): workflow-first, quiet, and readable for busy or nervous humans.
+- Noisy (optional): louder ceremony cues and motion with the same pack/seed outputs.
+
+Baseline posture:
 - 3-line header band (identity + status + divider)
 - left menu + right preview/log
 - action execution runs outside curses (prompt -> run -> return)
 
-ASCII-first: no box-drawing or emoji. Color is optional.
+ASCII-first: no box-drawing or emoji in calm mode. Color is optional.
 
-To intentionally break the baseline TUI rules (loud palette, unicode dividers),
-run: `python3 -B bin/eps.py --insane`
+To start directly in the louder profile, run:
+- `python3 -B bin/eps.py --noisy`
+- `python3 -B bin/eps.py --insane` (legacy alias)
 """
 
 from __future__ import annotations
@@ -51,7 +56,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from eps import __version__
-from eps.pack import DEFAULT_MAX_MANIFEST_BYTES, stamp_pack, verify_pack, write_evidence_bundle
+from eps.pack import DEFAULT_MAX_MANIFEST_BYTES, stamp_pack, verify_pack
 
 
 APP_NAME = "ENTROPY PACK STAMPER"
@@ -492,6 +497,7 @@ class AppState:
     insane: bool = False
     palette: Optional[InsanePalette] = None
     tick: int = 0
+    godel_source_arg: Optional[str] = None
     godel_words: List[str] = field(default_factory=list)
     godel_phrase: str = ""
     godel_last_tick: int = 0
@@ -517,6 +523,8 @@ class AppState:
     reward_ticks: int = 0
     menu: List[str] = field(
         default_factory=lambda: [
+            "90-Second Start",
+            "Experience Mode",
             "Entropy Sources",
             "Drop Zone",
             "Stamp Pack",
@@ -879,7 +887,9 @@ def _dropzone_preview(state: AppState, *, width: int, height: int) -> List[str]:
     d = state.drop_dir
     have = len(state.drop_seen)
     lines: List[str] = []
-    lines.append("DROP ZONE // human affordances for a chaotic TUI")
+    lines.append("DROP ZONE // calm intake for files and folders")
+    lines.append("")
+    lines.append("Use this when you do not want to type paths.")
     lines.append("")
     lines.append("1) Terminal drag-drop (best effort):")
     lines.append("   Press Enter to open a big path field, then drag a folder/file into the terminal.")
@@ -1007,7 +1017,8 @@ def _poll_drop_dir(state: AppState) -> None:
             state.drop_last_msgs_ticks = 40
 
     if changed:
-        _start_drop_import_sfx_best_effort(duration_s=1.3)
+        if state.insane:
+            _start_drop_import_sfx_best_effort(duration_s=1.3)
         # Keep selection in bounds if list grew/shrank.
         if state.entropy_sources:
             state.entropy_selected = max(0, min(state.entropy_selected, len(state.entropy_sources) - 1))
@@ -1310,8 +1321,8 @@ def _seed_reveal_lines(seed_master: bytes) -> List[str]:
     seed_b64 = base64.b64encode(seed_master).decode("ascii")
     return [
         "Derived seed material:",
-        f"seed_master.hex: {seed_hex}",
-        f"seed_master.b64: {seed_b64}",
+        f"derived_seed.hex: {seed_hex}",
+        f"derived_seed.b64: {seed_b64}",
         "",
         "Press Enter, Esc, or q to dismiss.",
     ]
@@ -1340,6 +1351,126 @@ def close_viewer(state: AppState) -> None:
     state.status = "Ready."
 
 
+def _ui_profile_name(state: AppState) -> str:
+    return "Noisy" if state.insane else "Calm"
+
+
+def _header_action_for_label(label: str) -> str:
+    actions = {
+        "90-Second Start": "stamp_then_verify",
+        "Experience Mode": "toggle_profile",
+        "Entropy Sources": "stage_optional_sources",
+        "Drop Zone": "drag_or_paste_paths",
+        "Stamp Pack": "stamp_pack",
+        "Verify Pack": "verify_pack",
+        "View README": "read_usage",
+        "View TUI Standard": "read_standard",
+        "View TUI Contract": "read_history",
+        "Quit": "exit",
+    }
+    return actions.get(label, "none")
+
+
+def _quickstart_lines() -> List[str]:
+    return [
+        "90-SECOND START // first clean success",
+        "",
+        "EPS packages operator-supplied entropy-bearing input into a deterministic, auditable pack.",
+        "Use OS randomness for ordinary secrets. Reach for EPS when you want receipts, later verification, or a deliberate operator step.",
+        "",
+        "First clean success:",
+        "1. python3 -m eps stamp --input /ABS/PATH/TO/DIR --out ./out --zip",
+        "2. python3 -m eps verify --pack ./out/<pack_root_sha256>",
+        "",
+        "Then choose the path that fits the moment:",
+        "- busy humans -> stamp, verify, hand off the receipt/root",
+        "- nervous humans -> stage sources, decide calm/noisy, then stamp",
+        "- machines -> python3 -m eps stamp-bin --json",
+        "",
+        "Trust boundary:",
+        "- not a CSPRNG replacement",
+        "- not entropy-quality certification",
+        "- evidence bundles are tamper-evident, not externally signed",
+        "- audiovisual cues are ceremony only; they do not improve entropy quality",
+    ]
+
+
+def _experience_mode_lines(state: AppState) -> List[str]:
+    profile = _ui_profile_name(state)
+    alt = "Noisy" if not state.insane else "Calm"
+    return [
+        "EXPERIENCE MODE // same outputs, different cues",
+        "",
+        f"Current profile: {profile}",
+        "Calm -> quiet guidance, workflow-first previews, no UI audio.",
+        "Noisy -> optional ceremony cues, motion, and audio feedback.",
+        "",
+        "The pack, receipt, verification path, and seed derivation semantics do not change.",
+        "Noisy mode does not improve entropy quality; it only changes operator affordances.",
+        "",
+        f"Press Enter to switch to {alt}.",
+        "Tip: use --noisy to start loud, or stay calm by default.",
+    ]
+
+
+def _stamp_preview_lines() -> List[str]:
+    return [
+        "STAMP // auditable file set -> verifiable pack",
+        "",
+        "Use this when a human should deliberately contribute entropy-bearing input and you want receipts afterward.",
+        "",
+        "Writes:",
+        "- manifest.json",
+        "- pack_root_sha256.txt",
+        "- entropy_root_sha256.txt",
+        "- receipt.json",
+        "- payload/...",
+        "- optional entropy_pack.zip",
+        "",
+        "Optional seed derivation is reproducible.",
+        "Root-only seed is the default path unless you explicitly mix staged sources.",
+    ]
+
+
+def _verify_preview_lines() -> List[str]:
+    return [
+        "VERIFY // later provenance audit",
+        "",
+        "Use this after handoff or after a run to prove pack integrity and source linkage.",
+        "",
+        "Checks:",
+        "- manifest root hash",
+        "- file sizes + sha256",
+        "- traversal + symlink defenses",
+        "- zip duplicate member defenses",
+    ]
+
+
+def _selection_preview(state: AppState, label: str, *, width: int, height: int) -> List[str]:
+    if label == "90-Second Start":
+        preview = _quickstart_lines()
+    elif label == "Experience Mode":
+        preview = _experience_mode_lines(state)
+    elif label == "Entropy Sources":
+        preview = _entropy_sources_preview(state, width=width, height=height)
+    elif label == "Drop Zone":
+        preview = _dropzone_preview(state, width=width, height=height)
+    elif label == "Stamp Pack":
+        preview = _stamp_preview_lines()
+    elif label == "Verify Pack":
+        preview = _verify_preview_lines()
+    elif label.startswith("View "):
+        preview = ["Open a read-only viewer."]
+    elif label == "Quit":
+        preview = ["Exit EPS."]
+    else:
+        preview = []
+
+    if state.log_lines and label in ("Stamp Pack", "Verify Pack"):
+        preview = state.log_lines[-max(1, (height - 1)) :]
+    return [ln[:width] for ln in preview[:height]]
+
+
 def _draw_header(stdscr, state: AppState, cols: int) -> None:
     head_attr = state.theme.header | (curses.A_REVERSE if state.interaction_flash_ticks > 0 else 0)
     header_identity = build_header_identity_line(APP_NAME, EPS_TUI_TITLE, EPS_TUI_VERSION, cols)
@@ -1354,8 +1485,10 @@ def _draw_header(stdscr, state: AppState, cols: int) -> None:
         risk = "OK"
     else:
         risk = "INFO"
-    action = "none"
-    status_line = f"MODE: {mode}  RISK: {risk}  ACTION: {action}"
+    label = state.menu[state.selected] if 0 <= state.selected < len(state.menu) else ""
+    action = _header_action_for_label(label)
+    profile = _ui_profile_name(state).lower()
+    status_line = f"MODE: {mode}  PROFILE: {profile}  RISK: {risk}  ACTION: {action}"
     status_attr = state.theme.normal | (curses.A_REVERSE if state.interaction_flash_ticks > 0 else 0)
     safe_addstr(stdscr, 1, 0, status_line[:cols].ljust(cols), status_attr)
 
@@ -2113,7 +2246,9 @@ def _draw_insane_header(stdscr, state: AppState, cols: int) -> None:
     else:
         risk_attr = state.palette.info
         risk = "INFO"
-    meta = f" MODE=OFFLINE  RISK={risk}  TICK={state.tick}  STATUS={s or 'Ready'} "
+    label = state.menu[state.selected] if 0 <= state.selected < len(state.menu) else ""
+    action = _header_action_for_label(label)
+    meta = f" MODE=OFFLINE  PROFILE=NOISY  RISK={risk}  ACTION={action}  STATUS={s or 'Ready'} "
     safe_addstr(stdscr, 1, 0, meta[:cols].ljust(cols), risk_attr)
 
     div = ("═" * max(0, cols - 2)) if cols >= 2 else ""
@@ -2217,40 +2352,7 @@ def _draw_insane_right_pane(stdscr, state: AppState, top: int, left_w: int, cols
     right_w = max(0, cols - right_x)
 
     label = state.menu[state.selected] if 0 <= state.selected < len(state.menu) else ""
-    preview: List[str] = []
-    if label == "Entropy Sources":
-        preview = _entropy_sources_preview(state, width=right_w, height=body_h)
-    elif label == "Drop Zone":
-        preview = _dropzone_preview(state, width=right_w, height=body_h)
-    elif label == "Stamp Pack":
-        preview = [
-            "STAMP // directory -> content-addressed pack",
-            "",
-            "Outputs:",
-            "  manifest.json",
-            "  entropy_root_sha256.txt",
-            "  receipt.json (operational)",
-            "  payload/...",
-            "  entropy_pack.zip (optional)",
-            "",
-            "Seed (optional): HKDF(root) -> derived seed material",
-        ]
-    elif label == "Verify Pack":
-        preview = [
-            "VERIFY // root + payload integrity",
-            "",
-            "Hardening:",
-            "  caps (manifest/artifact/total)",
-            "  traversal + symlink defense",
-            "  zip duplicate member defense",
-        ]
-    elif label.startswith("View "):
-        preview = ["Open a read-only viewer."]
-    elif label == "Quit":
-        preview = ["Exit."]
-
-    if state.log_lines and label not in ("Drop Zone", "Entropy Sources"):
-        preview = state.log_lines[-(body_h - 1) :]
+    preview = _selection_preview(state, label, width=right_w, height=body_h)
 
     for i in range(body_h):
         y = top + i
@@ -2287,11 +2389,13 @@ def _draw_footer(stdscr, state: AppState, rows: int, cols: int) -> None:
 
     label = state.menu[state.selected] if 0 <= state.selected < len(state.menu) else ""
     if label == "Entropy Sources":
-        legend = "Up/Down: move  Tab: focus  A/T/Space: add  Enter: preview  Esc: back"
+        legend = "Up/Down: move  Tab: focus  A/T/Space: add  Enter: preview  M: mode  Esc: back"
     elif label == "Drop Zone":
         legend = "Up/Down: move  Enter: drop path  Esc: back"
+    elif label == "Experience Mode":
+        legend = "Enter/M: toggle mode  Esc: back"
     else:
-        legend = "Up/Down: move  Enter: select  Esc: back"
+        legend = "Up/Down: move  Enter: select  M: mode  Esc: back"
     msg = state.status.strip() if state.status else ""
     line = legend
     if msg:
@@ -2342,43 +2446,7 @@ def _draw_right_pane(stdscr, state: AppState, top: int, left_w: int, cols: int, 
     right_w = max(0, cols - right_x)
 
     label = state.menu[state.selected] if 0 <= state.selected < len(state.menu) else ""
-    preview: List[str] = []
-    if label == "Entropy Sources":
-        preview = _entropy_sources_preview(state, width=right_w, height=body_h)
-    elif label == "Drop Zone":
-        preview = _dropzone_preview(state, width=right_w, height=body_h)
-    elif label == "Stamp Pack":
-        preview = [
-            "Stamp a content-addressed EntropyPack from a directory.",
-            "",
-            "Writes:",
-            "- manifest.json",
-            "- entropy_root_sha256.txt",
-            "- receipt.json",
-            "- payload/...",
-            "- optional entropy_pack.zip",
-            "",
-            "Seed policy:",
-            "- derive seed -> fingerprint in receipt",
-            "- root-only seed unless mixed sources are enabled",
-            "- write seed files only if requested",
-        ]
-    elif label == "Verify Pack":
-        preview = [
-            "Verify a stamped pack (dir or .zip).",
-            "",
-            "Checks:",
-            "- manifest root hash",
-            "- file sizes + sha256",
-        ]
-    elif label.startswith("View "):
-        preview = ["Open a read-only viewer for pinned docs."]
-    elif label == "Quit":
-        preview = ["Exit EPS."]
-
-    # If we have log output, show it instead of the generic preview.
-    if state.log_lines and label not in ("Drop Zone", "Entropy Sources"):
-        preview = state.log_lines[-(body_h - 1) :]
+    preview = _selection_preview(state, label, width=right_w, height=body_h)
 
     for i in range(body_h):
         y = top + i
@@ -2870,7 +2938,10 @@ def _action_stamp(state: AppState, stdscr) -> None:
         _fx_no_entropy(stdscr, state, duration_s=5.0, fps=25)
         state.status = "Failed."
         state.log_lines = ["Stamp blocked: no entropy sources staged.", "Go to Entropy Sources or Drop Zone and add some first."]
-        state.selected = 0  # Entropy Sources
+        try:
+            state.selected = state.menu.index("Entropy Sources")
+        except ValueError:
+            state.selected = 0
         state.focus = "entropy"
         return
 
@@ -2913,7 +2984,10 @@ def _action_stamp(state: AppState, stdscr) -> None:
                     f"Add {need_more} more (photos/text/tap), then try again.",
                 ]
                 # Guide the user back to the deterministic path: go stage more sources now.
-                state.selected = 0  # Entropy Sources
+                try:
+                    state.selected = state.menu.index("Entropy Sources")
+                except ValueError:
+                    state.selected = 0
                 state.focus = "entropy"
                 return
             seed_path_label = "LOCKDOWN mixed-source derivation"
@@ -2938,6 +3012,42 @@ def _action_stamp(state: AppState, stdscr) -> None:
     evidence_bundle = _prompt_bool_curses(stdscr, "(EPS) write evidence bundle zip (tamper-evident)", default=evidence_default)
 
     tmp_payload_dir: Optional[Path] = None
+    sources_for_audit: Sequence[EntropySource] = mixed_sources if mix_sources else state.entropy_sources
+    audit_status = "not_requested"
+    audit_requested_count = 0
+    audit_materialized_count = 0
+    audit_warnings: List[str] = []
+    audit_dir_path: Optional[Path] = None
+
+    def _before_finalize(pack_dir: Path) -> Optional[Dict[str, object]]:
+        nonlocal audit_status, audit_requested_count, audit_materialized_count, audit_warnings, audit_dir_path
+        audit_status = "not_requested"
+        audit_requested_count = 0
+        audit_materialized_count = 0
+        audit_warnings = []
+        audit_dir_path = None
+        if write_sources and derive_seed and sources_for_audit:
+            p, warnings, materialized_count = _write_entropy_sources_into_pack(pack_dir, sources_for_audit)
+            audit_requested_count = len(sources_for_audit)
+            audit_materialized_count = int(materialized_count)
+            audit_warnings = list(warnings)
+            audit_dir_path = p
+            if p is None:
+                audit_status = "failed"
+            elif audit_warnings:
+                audit_status = "partial"
+            else:
+                audit_status = "ok"
+        fields: Dict[str, object] = {}
+        _update_receipt_entropy_audit(
+            fields,
+            status=audit_status,
+            requested_count=audit_requested_count,
+            materialized_count=audit_materialized_count,
+            warnings=audit_warnings,
+        )
+        return fields
+
     try:
         input_dir: Path
         exclude_relpaths: Optional[Set[str]] = None
@@ -2974,9 +3084,10 @@ def _action_stamp(state: AppState, stdscr) -> None:
                 zip_pack=zip_pack,
                 derive_seed=derive_seed,
                 entropy_sources_sha256=pool_sha if mix_sources else None,
-                evidence_bundle=False,  # do this post-stamp so it can include entropy_sources if we choose to write them
+                evidence_bundle=evidence_bundle,
                 write_seed_files=write_seed,
                 print_seed=False,  # never print to stdout from TUI
+                before_finalize=_before_finalize,
             )
 
         if state.insane:
@@ -2996,18 +3107,25 @@ def _action_stamp(state: AppState, stdscr) -> None:
 
     state.last_pack_dir = res.pack_dir
     state.last_out_dir = out_dir.resolve()
+    pack_root = getattr(res, "pack_root_sha256", getattr(res, "root_sha256", ""))
+    payload_root = getattr(res, "payload_root_sha256", "")
+    zip_path = getattr(res, "zip_path", None)
+    evidence_path = getattr(res, "evidence_bundle_path", None)
+    evidence_sha = getattr(res, "evidence_bundle_sha256", None)
     state.log_lines = [
         "Stamp complete.",
         f"input_dir: {input_dir.resolve()}",
         f"out_dir: {out_dir.resolve()}",
         f"pack_dir: {res.pack_dir}",
-        f"entropy_root_sha256: {res.root_sha256}",
+        f"pack_root_sha256: {pack_root}",
     ]
+    if payload_root:
+        state.log_lines.append(f"payload_root_sha256: {payload_root}")
     if exclude_relpaths:
         state.log_lines.append(f"excluded_artifacts: {len(exclude_relpaths)}")
-    fp = res.receipt.get("seed_fingerprint_sha256")
+    fp = res.receipt.get("derived_seed_fingerprint_sha256") or res.receipt.get("seed_fingerprint_sha256")
     if isinstance(fp, str) and fp:
-        state.log_lines.append(f"seed_fingerprint_sha256: {fp}")
+        state.log_lines.append(f"derived_seed_fingerprint_sha256: {fp}")
     if seed_path_label:
         state.log_lines.append(f"Seed path: {seed_path_label}")
         if seed_path_label == "root-only seed":
@@ -3016,52 +3134,16 @@ def _action_stamp(state: AppState, stdscr) -> None:
         state.log_lines.append(f"entropy_sources_staged_count: {len(state.entropy_sources)}")
         state.log_lines.append(f"entropy_sources_eligible_count: {len(mixed_sources)}")
         state.log_lines.append(f"entropy_sources_sha256: {pool_sha}")
-    sources_for_audit: Sequence[EntropySource] = mixed_sources if mix_sources else state.entropy_sources
-    audit_status = "not_requested"
-    audit_requested_count = 0
-    audit_materialized_count = 0
-    audit_warnings: List[str] = []
-    if write_sources and derive_seed and sources_for_audit:
-        p, warnings, materialized_count = _write_entropy_sources_into_pack(res.pack_dir, sources_for_audit)
-        audit_requested_count = len(sources_for_audit)
-        audit_materialized_count = int(materialized_count)
-        audit_warnings = list(warnings)
-        if p is None:
-            audit_status = "failed"
-        elif audit_warnings:
-            audit_status = "partial"
-        else:
-            audit_status = "ok"
-        for w in warnings:
-            state.log_lines.append(f"warning: entropy_sources audit: {w}")
-        if p is not None:
-            state.log_lines.append(f"entropy_sources_dir: {p}")
-    _update_receipt_entropy_audit(
-        res.receipt,
-        status=audit_status,
-        requested_count=audit_requested_count,
-        materialized_count=audit_materialized_count,
-        warnings=audit_warnings,
-    )
-    if evidence_bundle:
-        try:
-            ev_path, ev_sha = write_evidence_bundle(res.pack_dir)
-            state.log_lines.append(f"evidence_bundle: {ev_path}")
-            if ev_sha:
-                state.log_lines.append(f"evidence_bundle_sha256: {ev_sha}")
-            # Persist in receipt.json for agent consumption.
-            res.receipt["evidence_bundle_path"] = str(Path(ev_path).name)
-            if ev_sha:
-                res.receipt["evidence_bundle_sha256"] = str(ev_sha)
-        except Exception as exc:
-            state.log_lines.append(f"evidence_bundle failed: {exc}")
-    try:
-        (res.pack_dir / "receipt.json").write_text(
-            json.dumps(res.receipt, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False) + "\n",
-            encoding="utf-8",
-        )
-    except Exception as exc:
-        state.log_lines.append(f"warning: receipt write failed: {exc}")
+    for w in audit_warnings:
+        state.log_lines.append(f"warning: entropy_sources audit: {w}")
+    if audit_dir_path is not None:
+        state.log_lines.append(f"entropy_sources_dir: {audit_dir_path}")
+    if zip_path is not None:
+        state.log_lines.append(f"entropy_pack_zip: {zip_path}")
+    if evidence_path is not None:
+        state.log_lines.append(f"evidence_bundle: {evidence_path}")
+    if evidence_sha:
+        state.log_lines.append(f"evidence_bundle_sha256: {evidence_sha}")
     if show_seed and res.seed_master is not None:
         _show_seed_reveal(state, res.seed_master)
     state.status = "Done."
@@ -3099,10 +3181,12 @@ def _action_verify(state: AppState, stdscr) -> None:
     if res.ok:
         state.log_lines = [
             "Verify ok.",
-            f"entropy_root_sha256: {res.root_sha256}",
+            f"pack_root_sha256: {res.root_sha256}",
             f"artifact_count_verified: {res.file_count}",
             f"artifact_bytes_verified: {res.total_bytes}",
         ]
+        if res.payload_root_sha256:
+            state.log_lines.insert(2, f"payload_root_sha256: {res.payload_root_sha256}")
         state.status = "Done."
     else:
         state.log_lines = ["Verify failed."] + [f"- {e}" for e in res.errors]
@@ -3113,6 +3197,51 @@ def _action_verify(state: AppState, stdscr) -> None:
             state.log_lines.append("")
             state.log_lines.append("Hint: manifest.json is a file-list; very large packs need a larger cap (enable 'allow large manifest').")
         state.status = "Failed."
+
+
+def _ensure_noisy_profile_assets(state: AppState) -> None:
+    if state.palette is None:
+        state.palette = init_insane_palette()
+    if state.godel_words or state.godel_phrase:
+        return
+
+    words: List[str] = _load_bundled_godel_words()
+    src_s = (state.godel_source_arg or "").strip()
+    if src_s:
+        src = _resolve_godel_source(src_s)
+        if src is None:
+            state.godel_phrase = "NO GODEL SOURCE"
+        else:
+            if src.suffix.lower() == ".pdf":
+                if not words:
+                    state.godel_phrase = "PDF SOURCE DISABLED"
+            else:
+                src_words = _load_wordlist_from_source(src, max_bytes=5_000_000)
+                if src_words:
+                    words = src_words
+                elif not words:
+                    state.godel_phrase = "EMPTY GODEL TEXT"
+    state.godel_words = words
+    if words:
+        _update_godel_phrase(state, min_interval_ticks=0)
+    elif not state.godel_phrase:
+        state.godel_phrase = "EMPTY GODEL WORDS"
+
+
+def _set_experience_mode(state: AppState, *, noisy: bool) -> None:
+    state.insane = bool(noisy)
+    if state.insane:
+        _ensure_noisy_profile_assets(state)
+
+
+def _toggle_experience_mode(state: AppState) -> None:
+    _set_experience_mode(state, noisy=(not state.insane))
+    profile = _ui_profile_name(state)
+    state.status = f"Experience: {profile} mode."
+    if state.insane:
+        state.log_lines = ["Noisy mode enabled: ceremony cues only. Pack and seed semantics are unchanged."]
+    else:
+        state.log_lines = ["Calm mode enabled: quiet guidance, no UI audio, same underlying tool behavior."]
 
 
 def handle_key(stdscr, state: AppState, ch: int) -> bool:
@@ -3179,7 +3308,8 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
                     state.drop_paste_buf += "\n"
                     state.drop_paste_last_ns = now
                     return True
-            _start_ui_select_sfx_best_effort()
+            if state.insane:
+                _start_ui_select_sfx_best_effort()
             # If we already have buffered paste, commit it immediately.
             if state.drop_paste_buf:
                 paths = _split_drop_payload(state.drop_paste_buf)
@@ -3187,7 +3317,7 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
                 state.drop_paste_last_ns = 0
                 if paths:
                     msgs = _apply_drop_paths(state, paths, max_apply=7)
-                    _apply_drop_feedback(state, msgs, play_sfx=True)
+                    _apply_drop_feedback(state, msgs, play_sfx=bool(state.insane))
                 return True
             # Provide a focused "landing zone" input. If the user drags a folder into the terminal,
             # many terminals will paste the path into this field.
@@ -3197,9 +3327,13 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
                 state.status = "Ready."
                 return True
             msgs = _apply_drop_paths(state, paths, max_apply=7)
-            _apply_drop_feedback(state, msgs, play_sfx=True)
+            _apply_drop_feedback(state, msgs, play_sfx=bool(state.insane))
             return True
         # Do not swallow other keys; Up/Down should still navigate the menu.
+
+    if ch in (ord("m"), ord("M")) and label != "Drop Zone":
+        _toggle_experience_mode(state)
+        return True
 
     # Entropy Sources mode has its own navigation/actions.
     if label == "Entropy Sources":
@@ -3227,14 +3361,15 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
             _action_entropy_clear(state)
             return True
         if ch in (curses.KEY_ENTER, 10, 13) and state.focus == "entropy":
-            _start_ui_select_sfx_best_effort()
+            if state.insane:
+                _start_ui_select_sfx_best_effort()
             _action_entropy_preview(state)
             return True
 
     if ch in (curses.KEY_UP, ord("k")):
         old = int(state.selected)
         state.selected = max(0, state.selected - 1)
-        if state.selected != old:
+        if state.selected != old and state.insane:
             _start_ui_move_sfx_best_effort()
         label2 = state.menu[state.selected] if 0 <= state.selected < len(state.menu) else ""
         state.focus = "entropy" if label2 == "Entropy Sources" else "menu"
@@ -3244,7 +3379,7 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
     if ch in (curses.KEY_DOWN, ord("j")):
         old = int(state.selected)
         state.selected = min(len(state.menu) - 1, state.selected + 1)
-        if state.selected != old:
+        if state.selected != old and state.insane:
             _start_ui_move_sfx_best_effort()
         label2 = state.menu[state.selected] if 0 <= state.selected < len(state.menu) else ""
         state.focus = "entropy" if label2 == "Entropy Sources" else "menu"
@@ -3253,7 +3388,14 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
         return True
 
     if ch in (curses.KEY_ENTER, 10, 13):
-        _start_ui_select_sfx_best_effort()
+        if state.insane:
+            _start_ui_select_sfx_best_effort()
+        if label == "90-Second Start":
+            open_viewer(state, "90-Second Start", _quickstart_lines())
+            return True
+        if label == "Experience Mode":
+            _toggle_experience_mode(state)
+            return True
         if label == "Stamp Pack":
             _action_stamp(state, stdscr)
             return True
@@ -3299,36 +3441,12 @@ def run_tui(stdscr, *, insane: bool = False, godel_source: Optional[str] = None)
         pass
 
     theme = init_theme()
-    pal = init_insane_palette() if insane else None
-    state = AppState(theme=theme, insane=bool(insane), palette=pal, tick=0)
-    if insane:
-        # Default: use bundled Gödel word bank from repo assets (no runtime PDF/OCR dependency).
-        words: List[str] = _load_bundled_godel_words()
-        src_s = (godel_source or "").strip()
-        if src_s:
-            src = _resolve_godel_source(src_s)
-            if src is None:
-                state.godel_phrase = "NO GODEL SOURCE"
-            else:
-                if src.suffix.lower() == ".pdf":
-                    # Intentionally skip PDF runtime extraction; keep bundled words.
-                    if not words:
-                        state.godel_phrase = "PDF SOURCE DISABLED"
-                else:
-                    src_words = _load_wordlist_from_source(src, max_bytes=5_000_000)
-                    if src_words:
-                        words = src_words
-                    elif not words:
-                        state.godel_phrase = "EMPTY GODEL TEXT"
-        state.godel_words = words
-        if words:
-            _update_godel_phrase(state, min_interval_ticks=0)
-        elif not state.godel_phrase:
-            state.godel_phrase = "EMPTY GODEL WORDS"
+    state = AppState(theme=theme, tick=0, godel_source_arg=godel_source)
+    _set_experience_mode(state, noisy=bool(insane))
 
     stdscr.keypad(True)
     stdscr.nodelay(False)
-    stdscr.timeout(50 if insane else 100)
+    stdscr.timeout(50 if state.insane else 100)
 
     while True:
         state.tick += 1
@@ -3351,11 +3469,15 @@ def run_tui(stdscr, *, insane: bool = False, godel_source: Optional[str] = None)
                 state.drop_paste_last_ns = 0
                 if paths:
                     msgs = _apply_drop_paths(state, paths, max_apply=7)
-                    _apply_drop_feedback(state, msgs, play_sfx=True)
+                    _apply_drop_feedback(state, msgs, play_sfx=bool(state.insane))
         # Poll the filesystem landing zone occasionally (not every tick) to stay cheap.
         if state.tick % 4 == 0:
             _poll_drop_dir(state)
         draw(stdscr, state)
+        try:
+            stdscr.timeout(50 if state.insane else 100)
+        except curses.error:
+            pass
         try:
             ch = stdscr.getch()
         except curses.error:
@@ -3368,14 +3490,20 @@ def run_tui(stdscr, *, insane: bool = False, godel_source: Optional[str] = None)
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    p = argparse.ArgumentParser(prog="eps-tui")
-    p.add_argument("--insane", action="store_true", help="Enable non-conforming neon TUI skin")
+    p = argparse.ArgumentParser(
+        prog="eps-tui",
+        description="Calm-first TUI for auditable operator-provided entropy. Default is Calm Mode; Noisy Mode keeps the ceremony cues without changing pack semantics.",
+    )
+    p.add_argument("--mode", choices=("calm", "noisy"), default="calm", help="Start in calm or noisy mode (default: calm)")
+    p.add_argument("--noisy", action="store_true", help="Start in Noisy Mode")
+    p.add_argument("--insane", action="store_true", help="Legacy alias for --noisy")
     p.add_argument(
         "--godel-source",
         default=None,
-        help="Optional text/markdown path for header words (insane mode). PDFs are ignored; bundled words are used.",
+        help="Optional text/markdown path for header words in Noisy Mode. PDFs are ignored; bundled words are used.",
     )
     ns = p.parse_args(list(argv) if argv is not None else None)
+    start_noisy = bool(ns.noisy or ns.insane or ns.mode == "noisy")
 
     # The curses TUI must run in a real terminal/pty. When launched from an IDE
     # or a non-interactive environment, curses will crash with setupterm errors.
@@ -3389,7 +3517,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 2
 
     try:
-        curses.wrapper(lambda stdscr: run_tui(stdscr, insane=bool(ns.insane), godel_source=ns.godel_source))
+        curses.wrapper(lambda stdscr: run_tui(stdscr, insane=start_noisy, godel_source=ns.godel_source))
     except curses.error as exc:
         # Keep failure mode readable (no traceback) for common terminal issues.
         msg = str(exc).strip() or exc.__class__.__name__

@@ -11,6 +11,7 @@ from .safeio import hash_trusted_file
 
 
 MANIFEST_SCHEMA_VERSION = "entropy.pack.v2"
+PAYLOAD_IDENTITY_SCHEMA_VERSION = "entropy.payload.v1"
 DEFAULT_DERIVATION_VERSION = "ENTROPYPACK-SEED-v1"
 
 
@@ -94,6 +95,7 @@ def build_manifest(
     *,
     pack_id: Optional[str],
     artifacts: Sequence[Dict[str, object]],
+    payload_root_sha256: Optional[str] = None,
     notes: Optional[str] = None,
     created_at_utc: Optional[str] = None,
     dice: Optional[Sequence[Tuple[str, int]]] = None,
@@ -103,6 +105,8 @@ def build_manifest(
         "schema_version": MANIFEST_SCHEMA_VERSION,
         "artifacts": list(artifacts),
     }
+    if payload_root_sha256:
+        manifest["payload_root_sha256"] = str(payload_root_sha256)
     if pack_id:
         manifest["pack_id"] = str(pack_id)
     if notes:
@@ -121,6 +125,26 @@ def manifest_root_sha256(manifest: Dict[str, object]) -> str:
     return sha256_hex(canonical)
 
 
+def payload_root_sha256(artifacts: Sequence[Dict[str, object]]) -> str:
+    normalized: List[Dict[str, object]] = []
+    for a in artifacts:
+        normalized.append(
+            {
+                "path": str(a.get("path", "")),
+                "sha256": str(a.get("sha256", "")),
+                "size_bytes": int(a.get("size_bytes", 0) or 0),
+            }
+        )
+    normalized.sort(key=lambda d: str(d.get("path", "")))
+    canonical = stable_dumps(
+        {
+            "schema_version": PAYLOAD_IDENTITY_SCHEMA_VERSION,
+            "artifacts": normalized,
+        }
+    ).encode("utf-8")
+    return sha256_hex(canonical)
+
+
 @dataclass(frozen=True)
 class VerificationResult:
     ok: bool
@@ -128,3 +152,4 @@ class VerificationResult:
     file_count: int
     total_bytes: int
     errors: List[str]
+    payload_root_sha256: str = ""

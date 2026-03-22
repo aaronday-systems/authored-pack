@@ -148,8 +148,18 @@ class TestTuiP1Regressions(unittest.TestCase):
             def fake_stamp_pack(**_kwargs):
                 pack_dir = out_dir / ("a" * 64)
                 pack_dir.mkdir(parents=True, exist_ok=True)
-                receipt = {"seed_fingerprint_sha256": "f" * 64}
-                return SimpleNamespace(pack_dir=pack_dir, root_sha256="a" * 64, receipt=receipt, seed_master=b"\x01" * 32)
+                receipt = {"derived_seed_fingerprint_sha256": "f" * 64}
+                return SimpleNamespace(
+                    pack_dir=pack_dir,
+                    root_sha256="a" * 64,
+                    pack_root_sha256="a" * 64,
+                    payload_root_sha256="b" * 64,
+                    receipt=receipt,
+                    seed_master=b"\x01" * 32,
+                    zip_path=None,
+                    evidence_bundle_path=None,
+                    evidence_bundle_sha256=None,
+                )
 
             try:
                 m._prompt_str_curses = fake_prompt_str
@@ -163,15 +173,15 @@ class TestTuiP1Regressions(unittest.TestCase):
 
             self.assertIsNotNone(state.viewer)
             self.assertEqual(state.viewer.title if state.viewer is not None else None, "Derived Seed Material")
-            self.assertTrue(state.viewer is not None and any("seed_master.hex" in line for line in state.viewer.lines))
-            self.assertFalse(any("seed_master.hex" in line for line in state.log_lines))
-            self.assertFalse(any("seed_master.b64" in line for line in state.log_lines))
+            self.assertTrue(state.viewer is not None and any("derived_seed.hex" in line for line in state.viewer.lines))
+            self.assertFalse(any("derived_seed.hex" in line for line in state.log_lines))
+            self.assertFalse(any("derived_seed.b64" in line for line in state.log_lines))
             self.assertIn("(EPS) derive seed", bool_prompts)
             self.assertFalse(any("LOCKDOWN" in label for label in bool_prompts))
             self.assertTrue(any("Seed path: root-only seed" in line for line in state.log_lines))
             self.assertTrue(any("staged entropy sources are not affecting the seed" in line for line in state.log_lines))
 
-    def test_action_stamp_persists_entropy_audit_fields_on_receipt(self) -> None:
+    def test_action_stamp_finalizes_receipt_before_zip_and_evidence(self) -> None:
         m = self.m
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -202,11 +212,12 @@ class TestTuiP1Regressions(unittest.TestCase):
             state.entropy_sources.append(missing_photo)
 
             prompts_s = iter([str(input_dir), str(out_dir), "", "", ""])
-            bool_answers = iter([False, False, False, True, True, False, False, True, False])
+            bool_answers = iter([False, False, True, True, True, False, False, True, True])
 
             orig_prompt_str = m._prompt_str_curses
             orig_prompt_bool = m._prompt_bool_curses
             orig_stamp_pack = m.stamp_pack
+            receipt_snapshots: list[dict[str, object]] = []
 
             def fake_prompt_str(*_args, **_kwargs) -> str:
                 return next(prompts_s)
@@ -217,8 +228,28 @@ class TestTuiP1Regressions(unittest.TestCase):
             def fake_stamp_pack(**_kwargs):
                 pack_dir = tmp_path / "pack"
                 pack_dir.mkdir(parents=True, exist_ok=True)
-                receipt = {"seed_fingerprint_sha256": "f" * 64}
-                return SimpleNamespace(pack_dir=pack_dir, root_sha256="a" * 64, receipt=receipt, seed_master=b"\x02" * 32)
+                before_finalize = _kwargs.get("before_finalize")
+                extra = before_finalize(pack_dir) if before_finalize is not None else {}
+                receipt = {"derived_seed_fingerprint_sha256": "f" * 64, "zip_path": "entropy_pack.zip"}
+                receipt.update(extra or {})
+                (pack_dir / "receipt.json").write_text(json.dumps(receipt, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+                receipt_snapshots.append(json.loads((pack_dir / "receipt.json").read_text(encoding="utf-8")))
+                zip_path = pack_dir / "entropy_pack.zip"
+                zip_path.write_bytes(b"zip")
+                evidence_path = pack_dir / "eps_evidence_a.zip"
+                evidence_path.write_bytes(b"bundle")
+                receipt_snapshots.append(json.loads((pack_dir / "receipt.json").read_text(encoding="utf-8")))
+                return SimpleNamespace(
+                    pack_dir=pack_dir,
+                    root_sha256="a" * 64,
+                    pack_root_sha256="a" * 64,
+                    payload_root_sha256="b" * 64,
+                    receipt=receipt,
+                    seed_master=b"\x02" * 32,
+                    zip_path=zip_path,
+                    evidence_bundle_path=evidence_path,
+                    evidence_bundle_sha256="e" * 64,
+                )
 
             try:
                 m._prompt_str_curses = fake_prompt_str
@@ -238,6 +269,11 @@ class TestTuiP1Regressions(unittest.TestCase):
             self.assertEqual(receipt["entropy_sources_audit_materialized_count"], 7)
             self.assertTrue(receipt["entropy_sources_audit_warnings"])
             self.assertTrue(any("missing.jpg" in w for w in receipt["entropy_sources_audit_warnings"]))
+            self.assertEqual(receipt["zip_path"], "entropy_pack.zip")
+            self.assertNotIn("evidence_bundle_path", receipt)
+            self.assertNotIn("evidence_bundle_sha256", receipt)
+            self.assertTrue(receipt_snapshots)
+            self.assertTrue(all(snapshot == receipt for snapshot in receipt_snapshots))
             self.assertEqual(state.status, "Done.")
 
     def test_poll_drop_dir_retries_transient_failures_until_success(self) -> None:

@@ -21,6 +21,7 @@ from .manifest import (
     build_manifest,
     collect_artifacts,
     manifest_root_sha256,
+    payload_root_sha256,
     sha256_hex,
 )
 from .safeio import read_trusted_bytes_limited, trusted_copy_with_sha256
@@ -35,6 +36,8 @@ DEFAULT_MAX_MANIFEST_BYTES = 4 * 1024 * 1024  # 4 MiB
 DEFAULT_MAX_ARTIFACT_BYTES = 512 * 1024 * 1024  # 512 MiB
 DEFAULT_MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB
 EVIDENCE_SCHEMA_VERSION = "eps.evidence.v1"
+PACK_ROOT_ALIAS_FILENAME = "pack_root_sha256.txt"
+LEGACY_ROOT_ALIAS_FILENAME = "entropy_root_sha256.txt"
 
 
 def _utc_now_iso() -> str:
@@ -163,6 +166,48 @@ def _append_unexpected_payload_errors(errors: List[str], *, expected: Set[str], 
 
 def _output_would_self_ingest_input(input_dir: Path, out_dir: Path) -> bool:
     return input_dir == out_dir or out_dir.is_relative_to(input_dir)
+
+
+def _write_root_alias_files(pack_dir: Path, root_sha: str) -> None:
+    for name in (PACK_ROOT_ALIAS_FILENAME, LEGACY_ROOT_ALIAS_FILENAME):
+        _safe_write_text(pack_dir / name, root_sha + "\n")
+
+
+def _root_alias_names_for_schema(schema_version: object) -> Tuple[str, ...]:
+    if schema_version == MANIFEST_SCHEMA_VERSION:
+        return (PACK_ROOT_ALIAS_FILENAME, LEGACY_ROOT_ALIAS_FILENAME)
+    return (LEGACY_ROOT_ALIAS_FILENAME,)
+
+
+def _evidence_bundle_path_for_root(pack_dir: Path, root_sha: str) -> Path:
+    return pack_dir / f"eps_evidence_{root_sha}.zip"
+
+
+def _existing_evidence_bundle_path(pack_dir: Path, root_sha: str) -> Optional[Path]:
+    candidate = _evidence_bundle_path_for_root(pack_dir, root_sha)
+    return candidate if candidate.is_file() else None
+
+
+def _finalize_public_artifacts(
+    pack_dir: Path,
+    *,
+    receipt: Dict[str, object],
+    zip_pack: bool,
+    evidence_bundle: bool,
+) -> Tuple[Optional[Path], Optional[Path], Optional[str]]:
+    _safe_write_json(pack_dir / "receipt.json", receipt)
+
+    zip_path: Optional[Path] = None
+    if zip_pack:
+        zip_path = pack_dir / "entropy_pack.zip"
+        _write_zip(pack_dir, zip_path)
+
+    evidence_path: Optional[Path] = None
+    evidence_sha: Optional[str] = None
+    if evidence_bundle:
+        evidence_path, evidence_sha = write_evidence_bundle(pack_dir)
+
+    return zip_path, evidence_path, evidence_sha
 
 
 def _verify_one_artifact_in_dir(pack_dir: Path, *, idx: int, rel_s: str, size: int, sha: str) -> Optional[str]:
@@ -367,6 +412,22 @@ def _is_sha256_hex(value: object) -> bool:
     return all(c in "0123456789abcdef" for c in value.lower())
 
 
+def _validate_manifest_payload_root(manifest: Dict[str, object]) -> Tuple[str, List[str]]:
+    errors: List[str] = []
+    payload_root = manifest.get("payload_root_sha256")
+    if payload_root is None:
+        return "", errors
+    if not _is_sha256_hex(payload_root):
+        return "", ["manifest payload_root_sha256 invalid"]
+    artifacts = manifest.get("artifacts")
+    if not isinstance(artifacts, list) or not artifacts:
+        return "", ["manifest payload_root_sha256 present without valid artifacts"]
+    computed = payload_root_sha256(artifacts)
+    if str(payload_root) != computed:
+        errors.append("manifest payload_root_sha256 mismatch")
+    return str(payload_root), errors
+
+
 def _build_derivation_metadata(
     *,
     derive_seed: bool,
@@ -399,8 +460,19 @@ def _validate_receipt_v2(
         errors.append("receipt.json schema_version invalid")
     if receipt.get("entropy_schema_version") != manifest.get("schema_version"):
         errors.append("receipt.json entropy_schema_version mismatch")
-    if receipt.get("entropy_root_sha256") != root_sha:
+    pack_root = receipt.get("pack_root_sha256")
+    legacy_root = receipt.get("entropy_root_sha256")
+    if pack_root is None and legacy_root is None:
+        errors.append("receipt.json missing pack root")
+    if pack_root is not None and pack_root != root_sha:
+        errors.append("receipt.json pack_root_sha256 mismatch")
+    if legacy_root is not None and legacy_root != root_sha:
         errors.append("receipt.json entropy_root_sha256 mismatch")
+    if pack_root is not None and legacy_root is not None and pack_root != legacy_root:
+        errors.append("receipt.json pack root aliases disagree")
+    payload_root = manifest.get("payload_root_sha256")
+    if payload_root is not None and receipt.get("payload_root_sha256") != payload_root:
+        errors.append("receipt.json payload_root_sha256 mismatch")
     if receipt.get("artifact_count") != len(artifact_entries):
         errors.append("receipt.json artifact_count mismatch")
     total_bytes = sum(int(a.get("size_bytes", 0) or 0) for a in artifact_entries)
@@ -412,14 +484,22 @@ def _validate_receipt_v2(
     if manifest_derivation is None:
         if receipt_derivation is not None:
             errors.append("receipt.json derivation present without manifest derivation")
-        if receipt.get("seed_fingerprint_sha256") is not None:
+        if receipt.get("seed_fingerprint_sha256") is not None or receipt.get("derived_seed_fingerprint_sha256") is not None:
             errors.append("receipt.json seed fingerprint present without manifest derivation")
     else:
         if receipt_derivation != manifest_derivation:
             errors.append("receipt.json derivation mismatch")
-        fingerprint = receipt.get("seed_fingerprint_sha256")
-        if fingerprint is not None and not _is_sha256_hex(fingerprint):
-            errors.append("receipt.json seed_fingerprint_sha256 invalid")
+        fingerprints = []
+        for key in ("derived_seed_fingerprint_sha256", "seed_fingerprint_sha256"):
+            value = receipt.get(key)
+            if value is None:
+                continue
+            if not _is_sha256_hex(value):
+                errors.append(f"receipt.json {key} invalid")
+                continue
+            fingerprints.append(str(value))
+        if len(set(fingerprints)) > 1:
+            errors.append("receipt.json seed fingerprint aliases disagree")
     return errors
 
 
@@ -427,8 +507,16 @@ def _validate_receipt_v2(
 class StampResult:
     pack_dir: Path
     root_sha256: str
+    payload_root_sha256: str
     receipt: Dict[str, object]
     seed_master: Optional[bytes] = None
+    zip_path: Optional[Path] = None
+    evidence_bundle_path: Optional[Path] = None
+    evidence_bundle_sha256: Optional[str] = None
+
+    @property
+    def pack_root_sha256(self) -> str:
+        return self.root_sha256
 
 
 def stamp_pack(
@@ -447,6 +535,7 @@ def stamp_pack(
     evidence_bundle: bool = False,
     write_seed_files: bool = False,
     print_seed: bool = False,
+    before_finalize: Optional[Callable[[Path], Optional[Dict[str, object]]]] = None,
 ) -> StampResult:
     input_dir = Path(input_dir).resolve()
     out_dir = Path(out_dir).resolve()
@@ -465,6 +554,7 @@ def stamp_pack(
 
     try:
         artifact_entries = _copy_payload_files(input_dir=input_dir, pack_dir=tmp_dir, artifacts=raw_artifacts)
+        payload_root = payload_root_sha256(artifact_entries)
         derivation = _build_derivation_metadata(
             derive_seed=bool(derive_seed),
             entropy_sources_sha256=entropy_sources_sha256,
@@ -472,12 +562,19 @@ def stamp_pack(
         manifest = build_manifest(
             pack_id=pack_id,
             artifacts=artifact_entries,
+            payload_root_sha256=payload_root,
             notes=notes,
             created_at_utc=created_at_utc,
             dice=dice,
             derivation=derivation,
         )
         root_sha = manifest_root_sha256(manifest)
+        seed_master: Optional[bytes] = None
+        if derive_seed:
+            seed_master = derive_seed_master(
+                root_sha256_hex=root_sha,
+                entropy_sources_sha256_hex=entropy_sources_sha256,
+            )
 
         pack_dir = _pack_dir_for_root(out_dir, root_sha)
         if pack_dir.exists():
@@ -507,15 +604,6 @@ def stamp_pack(
                                 "existing entropy_pack.zip failed verification: "
                                 + (zip_res.errors[0] if zip_res.errors else "unknown error")
                             )
-                    seed_master: Optional[bytes] = None
-                    if derive_seed:
-                        seed_master = derive_seed_master(
-                            root_sha256_hex=root_sha,
-                            entropy_sources_sha256_hex=entropy_sources_sha256,
-                        )
-                    # Best-effort: ensure requested derived outputs exist when reusing a pack.
-                    if zip_pack and not (pack_dir / "entropy_pack.zip").is_file():
-                        _write_zip(pack_dir, pack_dir / "entropy_pack.zip")
                     if derive_seed and write_seed_files and seed_master is not None:
                         seed_hex = seed_master.hex()
                         seed_b64 = base64.b64encode(seed_master).decode("ascii")
@@ -523,70 +611,88 @@ def stamp_pack(
                         _safe_write_text(pack_dir / "seed_master.b64", seed_b64 + "\n")
                         _chmod_600(pack_dir / "seed_master.hex")
                         _chmod_600(pack_dir / "seed_master.b64")
-                    # receipt.json is operational metadata; keep it aligned with the most recent stamp call.
+                    _write_root_alias_files(pack_dir, root_sha)
+                    extra_receipt_fields: Optional[Dict[str, object]] = None
+                    if before_finalize is not None:
+                        raw_extra = before_finalize(pack_dir)
+                        if raw_extra is not None:
+                            if not isinstance(raw_extra, dict):
+                                raise ValueError("before_finalize must return a dict or None")
+                            extra_receipt_fields = dict(raw_extra)
+                    effective_zip = bool(zip_pack or (pack_dir / "entropy_pack.zip").is_file())
+                    effective_evidence = bool(
+                        evidence_bundle or _existing_evidence_bundle_path(pack_dir, root_sha) is not None
+                    )
                     receipt = _build_receipt(
                         root_sha256=root_sha,
+                        payload_root_sha256=payload_root,
                         pack_id=pack_id,
                         artifact_entries=artifact_entries,
-                        zip_path=Path("entropy_pack.zip") if zip_pack else None,
+                        zip_path=Path("entropy_pack.zip") if effective_zip else None,
                         derivation=derivation,
                         seed_master=seed_master,
+                        extra_fields=extra_receipt_fields,
                     )
-                    _safe_write_json(pack_dir / "receipt.json", receipt)
-                    if evidence_bundle:
-                        ev_path, ev_sha = write_evidence_bundle(pack_dir)
-                        receipt["evidence_bundle_path"] = str(ev_path.name)
-                        if ev_sha:
-                            receipt["evidence_bundle_sha256"] = str(ev_sha)
-                        _safe_write_json(pack_dir / "receipt.json", receipt)
-                    if zip_pack:
-                        _write_zip(pack_dir, pack_dir / "entropy_pack.zip")
+                    zip_path, ev_path, ev_sha = _finalize_public_artifacts(
+                        pack_dir,
+                        receipt=receipt,
+                        zip_pack=effective_zip,
+                        evidence_bundle=effective_evidence,
+                    )
                     if print_seed and seed_master is not None:
                         _print_seed_material(seed_master)
                     try:
                         shutil.rmtree(tmp_dir)
                     except Exception:
                         pass
-                    return StampResult(pack_dir=pack_dir, root_sha256=root_sha, receipt=receipt, seed_master=seed_master)
+                    return StampResult(
+                        pack_dir=pack_dir,
+                        root_sha256=root_sha,
+                        payload_root_sha256=payload_root,
+                        receipt=receipt,
+                        seed_master=seed_master,
+                        zip_path=zip_path,
+                        evidence_bundle_path=ev_path,
+                        evidence_bundle_sha256=ev_sha,
+                    )
             raise FileExistsError(f"pack already exists with different contents: {pack_dir}")
 
         # Write pack contents into temp dir first.
         _safe_write_json(tmp_dir / "manifest.json", manifest)
-        _safe_write_text(tmp_dir / "entropy_root_sha256.txt", root_sha + "\n")
+        _write_root_alias_files(tmp_dir, root_sha)
 
-        seed_master: Optional[bytes] = None
-        if derive_seed:
-            seed_master = derive_seed_master(
-                root_sha256_hex=root_sha,
-                entropy_sources_sha256_hex=entropy_sources_sha256,
-            )
-            if write_seed_files:
-                seed_hex = seed_master.hex()
-                seed_b64 = base64.b64encode(seed_master).decode("ascii")
-                _safe_write_text(tmp_dir / "seed_master.hex", seed_hex + "\n")
-                _safe_write_text(tmp_dir / "seed_master.b64", seed_b64 + "\n")
-                _chmod_600(tmp_dir / "seed_master.hex")
-                _chmod_600(tmp_dir / "seed_master.b64")
+        if write_seed_files and seed_master is not None:
+            seed_hex = seed_master.hex()
+            seed_b64 = base64.b64encode(seed_master).decode("ascii")
+            _safe_write_text(tmp_dir / "seed_master.hex", seed_hex + "\n")
+            _safe_write_text(tmp_dir / "seed_master.b64", seed_b64 + "\n")
+            _chmod_600(tmp_dir / "seed_master.hex")
+            _chmod_600(tmp_dir / "seed_master.b64")
+
+        extra_receipt_fields: Optional[Dict[str, object]] = None
+        if before_finalize is not None:
+            raw_extra = before_finalize(tmp_dir)
+            if raw_extra is not None:
+                if not isinstance(raw_extra, dict):
+                    raise ValueError("before_finalize must return a dict or None")
+                extra_receipt_fields = dict(raw_extra)
 
         receipt = _build_receipt(
             root_sha256=root_sha,
+            payload_root_sha256=payload_root,
             pack_id=pack_id,
             artifact_entries=artifact_entries,
             zip_path=Path("entropy_pack.zip") if zip_pack else None,
             derivation=derivation,
             seed_master=seed_master,
+            extra_fields=extra_receipt_fields,
         )
-        _safe_write_json(tmp_dir / "receipt.json", receipt)
-
-        if evidence_bundle:
-            ev_path, ev_sha = write_evidence_bundle(tmp_dir)
-            receipt["evidence_bundle_path"] = str(ev_path.name)
-            if ev_sha:
-                receipt["evidence_bundle_sha256"] = str(ev_sha)
-            _safe_write_json(tmp_dir / "receipt.json", receipt)
-
-        if zip_pack:
-            _write_zip(tmp_dir, tmp_dir / "entropy_pack.zip")
+        zip_path_tmp, ev_path_tmp, ev_sha = _finalize_public_artifacts(
+            tmp_dir,
+            receipt=receipt,
+            zip_pack=bool(zip_pack),
+            evidence_bundle=bool(evidence_bundle),
+        )
 
         # Atomic-ish move: rename tmp dir into content-addressed target.
         tmp_dir.replace(pack_dir)
@@ -594,7 +700,18 @@ def stamp_pack(
         if print_seed and seed_master is not None:
             _print_seed_material(seed_master)
 
-        return StampResult(pack_dir=pack_dir, root_sha256=root_sha, receipt=receipt, seed_master=seed_master)
+        zip_path = pack_dir / zip_path_tmp.name if zip_path_tmp is not None else None
+        ev_path = pack_dir / ev_path_tmp.name if ev_path_tmp is not None else None
+        return StampResult(
+            pack_dir=pack_dir,
+            root_sha256=root_sha,
+            payload_root_sha256=payload_root,
+            receipt=receipt,
+            seed_master=seed_master,
+            zip_path=zip_path,
+            evidence_bundle_path=ev_path,
+            evidence_bundle_sha256=ev_sha,
+        )
     except Exception:
         try:
             shutil.rmtree(tmp_dir)
@@ -606,11 +723,13 @@ def stamp_pack(
 def _build_receipt(
     *,
     root_sha256: str,
+    payload_root_sha256: str,
     pack_id: Optional[str],
     artifact_entries: Sequence[Dict[str, object]],
     zip_path: Optional[Path],
     derivation: Optional[Dict[str, object]],
     seed_master: Optional[bytes],
+    extra_fields: Optional[Dict[str, object]] = None,
 ) -> Dict[str, object]:
     total_bytes = sum(int(a.get("size_bytes", 0) or 0) for a in artifact_entries)
     receipt: Dict[str, object] = {
@@ -619,7 +738,9 @@ def _build_receipt(
         "tool_version": str(EPS_VERSION),
         "pack_layout": PACK_LAYOUT_VERSION,
         "entropy_schema_version": MANIFEST_SCHEMA_VERSION,
+        "pack_root_sha256": root_sha256,
         "entropy_root_sha256": root_sha256,
+        "payload_root_sha256": payload_root_sha256,
         "artifact_count": int(len(artifact_entries)),
         "artifact_bytes": int(total_bytes),
         "stamped_at_utc": _utc_now_iso(),
@@ -632,20 +753,24 @@ def _build_receipt(
     if derivation:
         receipt["derivation"] = dict(derivation)
     if seed_master is not None:
-        receipt["seed_fingerprint_sha256"] = seed_fingerprint_sha256(seed_master)
+        fingerprint = seed_fingerprint_sha256(seed_master)
+        receipt["derived_seed_fingerprint_sha256"] = fingerprint
+        receipt["seed_fingerprint_sha256"] = fingerprint
+    if extra_fields:
+        receipt.update(dict(extra_fields))
     return receipt
 
 
 def _print_seed_material(seed_master: bytes) -> None:
     seed_hex = seed_master.hex()
     seed_b64 = base64.b64encode(seed_master).decode("ascii")
-    print("seed_master.hex:", seed_hex)
-    print("seed_master.b64:", seed_b64)
+    print("derived_seed.hex:", seed_hex)
+    print("derived_seed.b64:", seed_b64)
 
 
 def _write_zip(pack_dir: Path, zip_path: Path) -> None:
-    # Public zip is a canonical projection of the pack: rooted metadata + payload only.
-    include_relpaths = {"manifest.json", "entropy_root_sha256.txt", "receipt.json"}
+    # Public zip is the finalized public projection of the pack: rooted metadata aliases + payload only.
+    include_relpaths = {"manifest.json", PACK_ROOT_ALIAS_FILENAME, LEGACY_ROOT_ALIAS_FILENAME, "receipt.json"}
     exclude = {
         "seed_master.hex",
         "seed_master.b64",
@@ -672,10 +797,13 @@ def write_evidence_bundle(pack_dir: Path) -> Tuple[Path, Optional[str]]:
     """
     # Name includes the pack root for human ergonomics.
     root = ""
-    try:
-        root = _read_file_bytes_limited(pack_dir / "entropy_root_sha256.txt", max_bytes=256).decode("utf-8").strip()
-    except Exception:
-        root = ""
+    for name in (PACK_ROOT_ALIAS_FILENAME, LEGACY_ROOT_ALIAS_FILENAME):
+        try:
+            root = _read_file_bytes_limited(pack_dir / name, max_bytes=256).decode("utf-8").strip()
+        except Exception:
+            root = ""
+        if root:
+            break
     if not (isinstance(root, str) and len(root) == 64 and all(c in "0123456789abcdef" for c in root.lower())):
         # Fall back to pack dir name.
         root = pack_dir.name
@@ -786,20 +914,30 @@ def verify_pack(
             return VerificationResult(ok=False, root_sha256="", file_count=0, total_bytes=0, errors=["manifest schema_version unsupported"])
         root_sha = manifest_root_sha256(manifest)
         require_receipt = schema_version == MANIFEST_SCHEMA_VERSION
+        payload_root, payload_errors = _validate_manifest_payload_root(manifest)
+        errors.extend(payload_errors)
 
-        expected_path = pack_path / "entropy_root_sha256.txt"
-        if require_receipt and not expected_path.is_file():
-            errors.append("missing entropy_root_sha256.txt")
-        elif expected_path.is_symlink():
-            errors.append("entropy_root_sha256.txt is a symlink")
-        elif expected_path.is_file():
+        seen_root_alias = False
+        for name in _root_alias_names_for_schema(schema_version):
+            expected_path = pack_path / name
+            if not expected_path.exists():
+                continue
+            seen_root_alias = True
+            if expected_path.is_symlink():
+                errors.append(f"{name} is a symlink")
+                continue
+            if not expected_path.is_file():
+                errors.append(f"{name} is not a file")
+                continue
             try:
                 raw_expected = _read_file_bytes_limited(expected_path, max_bytes=256)
                 expected = raw_expected.decode("utf-8").strip()
             except Exception:
                 expected = ""
             if expected and expected != root_sha:
-                errors.append("entropy_root_sha256.txt does not match manifest root")
+                errors.append(f"{name} does not match manifest root")
+        if require_receipt and not seen_root_alias:
+            errors.append(f"missing {PACK_ROOT_ALIAS_FILENAME} or {LEGACY_ROOT_ALIAS_FILENAME}")
 
         if require_receipt:
             receipt_path = pack_path / "receipt.json"
@@ -839,7 +977,14 @@ def verify_pack(
             actual=_payload_relpaths_in_dir(pack_path),
         )
 
-        return VerificationResult(ok=not errors, root_sha256=root_sha, file_count=file_count, total_bytes=total_bytes, errors=errors)
+        return VerificationResult(
+            ok=not errors,
+            root_sha256=root_sha,
+            file_count=file_count,
+            total_bytes=total_bytes,
+            errors=errors,
+            payload_root_sha256=payload_root,
+        )
 
     if pack_path.is_file() and pack_path.suffix.lower() == ".zip":
         try:
@@ -864,14 +1009,20 @@ def verify_pack(
 
                 root_sha = manifest_root_sha256(manifest)
                 require_receipt = schema_version == MANIFEST_SCHEMA_VERSION
-                try:
-                    raw_expected = _read_zip_member_bytes_limited(zf, "entropy_root_sha256.txt", max_bytes=256)
+                payload_root, payload_errors = _validate_manifest_payload_root(manifest)
+                errors.extend(payload_errors)
+                seen_root_alias = False
+                for name in _root_alias_names_for_schema(schema_version):
+                    try:
+                        raw_expected = _read_zip_member_bytes_limited(zf, name, max_bytes=256)
+                    except KeyError:
+                        continue
+                    seen_root_alias = True
                     expected = raw_expected.decode("utf-8").strip()
                     if expected and expected != root_sha:
-                        errors.append("entropy_root_sha256.txt does not match manifest root")
-                except KeyError:
-                    if require_receipt:
-                        errors.append("missing entropy_root_sha256.txt in zip")
+                        errors.append(f"{name} does not match manifest root")
+                if require_receipt and not seen_root_alias:
+                    errors.append(f"missing {PACK_ROOT_ALIAS_FILENAME} or {LEGACY_ROOT_ALIAS_FILENAME} in zip")
 
                 if require_receipt:
                     try:
@@ -909,7 +1060,14 @@ def verify_pack(
                     actual=_payload_relpaths_in_zip(zf),
                 )
 
-                return VerificationResult(ok=not errors, root_sha256=root_sha, file_count=file_count, total_bytes=total_bytes, errors=errors)
+                return VerificationResult(
+                    ok=not errors,
+                    root_sha256=root_sha,
+                    file_count=file_count,
+                    total_bytes=total_bytes,
+                    errors=errors,
+                    payload_root_sha256=payload_root,
+                )
         except zipfile.BadZipFile as exc:
             return VerificationResult(ok=False, root_sha256="", file_count=0, total_bytes=0, errors=[f"invalid zip: {exc}"])
 
