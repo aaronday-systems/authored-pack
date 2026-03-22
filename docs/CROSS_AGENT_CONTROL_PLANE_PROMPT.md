@@ -9,7 +9,7 @@ Context: This repo `/Users/aaronday/dev/entropy-pack-stamper` implements Entropy
   - Default low-watermark policy: refuses to run if it would leave `< 50` files in the bin after consuming 7 (override with `--allow-low-bin`).
   - By default, also writes:
     - `entropy_pack.zip`
-    - derived seed (`seed_fingerprint_sha256` recorded in receipt)
+    - derived seed material (`seed_fingerprint_sha256` recorded in `receipt.json` when seed derivation is enabled)
     - tamper-evident evidence bundle `eps_evidence_<root>.zip` + `.sha256`
 
 - **Local bins instantiated (repo-local):**
@@ -24,12 +24,23 @@ cd /Users/aaronday/dev/entropy-pack-stamper && \
 python3 -m eps stamp-bin --json
 ```
 
-The JSON includes `entropy_root_sha256`, pack path(s), and evidence bundle hash for downstream agent ingestion.
+The JSON envelope is machine-readable and should be treated as the contract:
+
+- success: `{ "ok": true, "command": "...", "result": { ... } }`
+- failure: `{ "ok": false, "command": "...", "error": { "type": "...", "message": "..." } }`
+
+The `result` object includes `pack_dir`, `entropy_root_sha256`, and a `receipt` payload. Receipt fields are conditional:
+- `seed_fingerprint_sha256` appears only when seed derivation is enabled
+- `evidence_bundle_path` and `evidence_bundle_sha256` appear only when evidence bundle writing succeeds
+- `derivation` appears only when seed derivation is enabled
+- `entropy_sources_audit_status`, `entropy_sources_audit_requested_count`, `entropy_sources_audit_materialized_count`, and `entropy_sources_audit_warnings` appear when the TUI records source-audit state
 
 ## Notes For Control Plane Integration
 
 - EPS outputs: `receipt.json` contains:
   - `entropy_root_sha256`
-  - optional `seed_fingerprint_sha256`
-  - optional `evidence_bundle_path` + `evidence_bundle_sha256`
+  - `seed_fingerprint_sha256` when seed derivation is enabled
+  - `derivation` when seed derivation is enabled
+  - `evidence_bundle_path` + `evidence_bundle_sha256` when evidence bundle writing succeeds
+  - `entropy_sources_audit_*` fields when source auditing is requested through the TUI
 - "Untamperable" is currently implemented as **tamper-evident** (hashes + evidence manifest). True tamper-resistance would require an external signature step.

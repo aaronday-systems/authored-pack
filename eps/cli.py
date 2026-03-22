@@ -7,13 +7,33 @@ from typing import List, Optional, Sequence, Tuple
 
 from .binmode import stamp_from_entropy_bin
 from .manifest import DEFAULT_DERIVATION_VERSION, stable_dumps
-from .pack import StampResult, stamp_pack, verify_pack
+from .pack import StampResult, _output_would_self_ingest_input, stamp_pack, verify_pack
 
 
-def _paths_overlap(a: Path, b: Path) -> bool:
-    ra = Path(a).expanduser().resolve()
-    rb = Path(b).expanduser().resolve()
-    return ra == rb or ra.is_relative_to(rb) or rb.is_relative_to(ra)
+class CliUsageError(ValueError):
+    pass
+
+
+class EPSArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        raise CliUsageError(message)
+
+
+def _json_success(command: str, result: object) -> str:
+    return stable_dumps({"ok": True, "command": command, "result": result})
+
+
+def _json_failure(command: str, error_type: str, message: str) -> str:
+    return stable_dumps(
+        {
+            "ok": False,
+            "command": command,
+            "error": {
+                "type": error_type,
+                "message": message,
+            },
+        }
+    )
 
 
 def _parse_dice(items: Sequence[str]) -> List[Tuple[str, int]]:
@@ -44,7 +64,7 @@ def _stamp(args: argparse.Namespace) -> int:
 
     input_dir = Path(args.input)
     out_dir = Path(args.out)
-    if _paths_overlap(input_dir, out_dir):
+    if _output_would_self_ingest_input(input_dir.expanduser().resolve(), out_dir.expanduser().resolve()):
         raise ValueError("--input and --out must not overlap")
 
     res: StampResult = stamp_pack(
@@ -63,7 +83,12 @@ def _stamp(args: argparse.Namespace) -> int:
     )
 
     if args.json:
-        print(stable_dumps(res.receipt))
+        payload = {
+            "pack_dir": str(res.pack_dir),
+            "entropy_root_sha256": res.root_sha256,
+            "receipt": res.receipt,
+        }
+        print(_json_success("stamp", payload))
     else:
         print(f"pack_dir: {res.pack_dir}")
         print(f"entropy_root_sha256: {res.root_sha256}")
@@ -78,15 +103,18 @@ def _verify(args: argparse.Namespace) -> int:
     max_manifest_bytes = int(args.max_manifest_mib) * 1024 * 1024
     res = verify_pack(Path(args.pack), max_manifest_bytes=max_manifest_bytes)
     if args.json:
+        if not res.ok:
+            msg = res.errors[0] if res.errors else "verification failed"
+            print(_json_failure("verify", "VerificationError", msg))
+            return 1
         payload = {
-            "ok": res.ok,
             "entropy_root_sha256": res.root_sha256,
             "artifact_count_verified": res.file_count,
             "artifact_bytes_verified": res.total_bytes,
             "errors": list(res.errors),
             "limits": {"max_manifest_mib": int(args.max_manifest_mib)},
         }
-        print(stable_dumps(payload))
+        print(_json_success("verify", payload))
     else:
         if res.ok:
             print("ok")
@@ -125,7 +153,7 @@ def _stamp_bin(args: argparse.Namespace) -> int:
             "entropy_root_sha256": res.stamp.root_sha256,
             "receipt": res.stamp.receipt,
         }
-        print(stable_dumps(payload))
+        print(_json_success("stamp-bin", payload))
         return 0
 
     # Human-readable.
@@ -152,7 +180,7 @@ def _stamp_bin(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="eps", description="Entropy Pack Stamper (EPS)")
+    p = EPSArgumentParser(prog="eps", description="Entropy Pack Stamper (EPS)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     stamp = sub.add_parser("stamp", help="Stamp an EntropyPack from an input directory")
@@ -227,21 +255,31 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    argv_list = list(argv) if argv is not None else list(sys.argv[1:])
+    json_mode = "--json" in argv_list
     parser = build_parser()
-    ns = parser.parse_args(list(argv) if argv is not None else None)
-    if not hasattr(ns, "func"):
-        parser.print_help()
-        return 2
     try:
+        ns = parser.parse_args(argv_list)
+        if not hasattr(ns, "func"):
+            parser.print_help()
+            return 2
         return int(ns.func(ns))
-    except ValueError as exc:
+    except (CliUsageError, ValueError, FileExistsError, RuntimeError, OSError) as exc:
         # Keep CLI UX clean: most user-caused validation failures should not
         # show a Python traceback.
         msg = str(exc).strip() or exc.__class__.__name__
+        if json_mode:
+            command = "eps"
+            if argv_list:
+                first = str(argv_list[0]).strip()
+                if first and not first.startswith("-"):
+                    command = first
+            print(_json_failure(command, exc.__class__.__name__, msg))
+            return 1
         print(f"eps: error: {msg}", file=sys.stderr)
-        if "must be a directory" in msg and "--input" in msg:
+        if isinstance(exc, ValueError) and "must be a directory" in msg and "--input" in msg:
             print("hint: pass an existing directory path; on macOS you can drag a folder into the terminal to paste its absolute path.", file=sys.stderr)
-        return 2
+        return 2 if isinstance(exc, ValueError) else 1
 
 
 if __name__ == "__main__":

@@ -59,16 +59,31 @@ class TestPackHardening(unittest.TestCase):
             input_dir.mkdir()
             (input_dir / "a.txt").write_text("hello", encoding="utf-8")
 
-            original_copy2 = shutil.copy2
-
-            def corrupting_copy2(src, dst, *args, **kwargs):
-                result = original_copy2(src, dst, *args, **kwargs)
+            def corrupting_copy(src, dst, *args, **kwargs):
+                Path(dst).parent.mkdir(parents=True, exist_ok=True)
                 Path(dst).write_text("tampered", encoding="utf-8")
-                return result
+                return ("0" * 64, 8)
 
-            with patch("eps.pack.shutil.copy2", side_effect=corrupting_copy2):
+            with patch("eps.pack.trusted_copy_with_sha256", side_effect=corrupting_copy):
                 with self.assertRaises(ValueError):
                     stamp_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=False, derive_seed=False)
+
+    def test_stamp_pack_rejects_symlink_source_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            target = input_dir / "target.txt"
+            target.write_text("hello", encoding="utf-8")
+            link = input_dir / "link.txt"
+            try:
+                link.symlink_to(target)
+            except OSError:
+                self.skipTest("symlinks not supported on this platform")
+
+            with self.assertRaises(ValueError):
+                stamp_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=False, derive_seed=False)
 
 
 if __name__ == "__main__":

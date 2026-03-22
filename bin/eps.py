@@ -1305,6 +1305,36 @@ def open_viewer(state: AppState, title: str, lines: List[str]) -> None:
     state.status = ""
 
 
+def _seed_reveal_lines(seed_master: bytes) -> List[str]:
+    seed_hex = seed_master.hex()
+    seed_b64 = base64.b64encode(seed_master).decode("ascii")
+    return [
+        "Derived seed material:",
+        f"seed_master.hex: {seed_hex}",
+        f"seed_master.b64: {seed_b64}",
+        "",
+        "Press Enter, Esc, or q to dismiss.",
+    ]
+
+
+def _show_seed_reveal(state: AppState, seed_master: bytes) -> None:
+    open_viewer(state, "Derived Seed Material", _seed_reveal_lines(seed_master))
+
+
+def _update_receipt_entropy_audit(
+    receipt: Dict[str, object],
+    *,
+    status: str,
+    requested_count: int,
+    materialized_count: int,
+    warnings: Sequence[str],
+) -> None:
+    receipt["entropy_sources_audit_status"] = str(status)
+    receipt["entropy_sources_audit_requested_count"] = int(requested_count)
+    receipt["entropy_sources_audit_materialized_count"] = int(materialized_count)
+    receipt["entropy_sources_audit_warnings"] = [str(w) for w in warnings]
+
+
 def close_viewer(state: AppState) -> None:
     state.viewer = None
     state.status = "Ready."
@@ -2137,7 +2167,7 @@ def _entropy_sources_preview(state: AppState, *, width: int, height: int) -> Lis
     eligible = _lockdown_eligible_sources(state.entropy_sources)
     n_eligible = len(eligible)
     pool = _entropy_pool_sha256(eligible)[:16] if eligible else "none"
-    header = f"ENTROPY SOURCES // staged={n} eligible={n_eligible}/{min_n} for LOCKDOWN seed  pool={pool}"
+    header = f"ENTROPY SOURCES // staged={n} eligible={n_eligible}/{min_n} for mixed-source seed  pool={pool}"
     lines: List[str] = [header, ""]
     focus = "LIST" if state.focus == "entropy" else "MENU"
     lines.append(f"FOCUS={focus}  Tab=toggle focus")
@@ -2150,7 +2180,7 @@ def _entropy_sources_preview(state: AppState, *, width: int, height: int) -> Lis
         return lines[:height]
     if n_eligible < min_n:
         need = max(0, min_n - n_eligible)
-        lines.append(f"LOCKDOWN gate: need {need} more eligible unique source(s).")
+        lines.append(f"Seed-mix gate: need {need} more eligible unique source(s).")
         lines.append(f"Tap sources need >= {LOCKDOWN_MIN_TAP_EVENTS} events.")
         lines.append("")
 
@@ -2203,7 +2233,7 @@ def _draw_insane_right_pane(stdscr, state: AppState, top: int, left_w: int, cols
             "  payload/...",
             "  entropy_pack.zip (optional)",
             "",
-            "Seed (optional): HKDF(root) -> seed_master",
+            "Seed (optional): HKDF(root) -> derived seed material",
         ]
     elif label == "Verify Pack":
         preview = [
@@ -2330,6 +2360,7 @@ def _draw_right_pane(stdscr, state: AppState, top: int, left_w: int, cols: int, 
             "",
             "Seed policy:",
             "- derive seed -> fingerprint in receipt",
+            "- root-only seed unless mixed sources are enabled",
             "- write seed files only if requested",
         ]
     elif label == "Verify Pack":
@@ -2746,7 +2777,7 @@ def _build_sources_payload_dir(sources: Sequence[EntropySource]) -> Path:
         raise
 
 
-def _write_entropy_sources_into_pack(pack_dir: Path, sources: Sequence[EntropySource]) -> Tuple[Optional[Path], List[str]]:
+def _write_entropy_sources_into_pack(pack_dir: Path, sources: Sequence[EntropySource]) -> Tuple[Optional[Path], List[str], int]:
     """
     Persist staged sources into the pack directory (outside payload/) for audit.
     These files are excluded from entropy_pack.zip.
@@ -2807,7 +2838,7 @@ def _write_entropy_sources_into_pack(pack_dir: Path, sources: Sequence[EntropySo
 
         if not index:
             warnings.append("entropy_sources audit produced no materialized entries")
-            return None, warnings
+            return None, warnings, 0
 
         (tmp_out / "sources.index.json").write_text(json.dumps(index, sort_keys=True, indent=2) + "\n", encoding="utf-8")
         if out.exists():
@@ -2818,13 +2849,13 @@ def _write_entropy_sources_into_pack(pack_dir: Path, sources: Sequence[EntropySo
                     out.unlink()
             except Exception as exc:
                 warnings.append(f"could not replace existing entropy_sources audit dir: {exc}")
-                return None, warnings
+                return None, warnings, 0
         tmp_out.replace(out)
         tmp_out = None
-        return out, warnings
+        return out, warnings, len(index)
     except Exception as exc:
         warnings.append(f"entropy_sources audit failed: {exc}")
-        return None, warnings
+        return None, warnings, 0
     finally:
         if tmp_out is not None:
             try:
@@ -2862,10 +2893,11 @@ def _action_stamp(state: AppState, stdscr) -> None:
     if input_s.strip() != "@sources":
         exclude_picker = _prompt_bool_curses(stdscr, "(EPS) exclude artifacts before stamping (picker)", default=False)
     zip_pack = _prompt_bool_curses(stdscr, "(EPS) write entropy_pack.zip", default=True)
-    derive_seed = _prompt_bool_curses(stdscr, "(EPS) derive seed_master (LOCKDOWN)", default=bool(state.insane))
+    derive_seed = _prompt_bool_curses(stdscr, "(EPS) derive seed", default=bool(state.insane))
     mix_sources = False
     pool_sha = None
     mixed_sources: List[EntropySource] = []
+    seed_path_label: Optional[str] = None
     if derive_seed and state.entropy_sources:
         mix_sources = _prompt_bool_curses(stdscr, "(EPS) mix staged entropy sources into seed", default=True)
         if mix_sources:
@@ -2884,7 +2916,12 @@ def _action_stamp(state: AppState, stdscr) -> None:
                 state.selected = 0  # Entropy Sources
                 state.focus = "entropy"
                 return
+            seed_path_label = "LOCKDOWN mixed-source derivation"
             pool_sha = _entropy_pool_sha256(mixed_sources)
+        else:
+            seed_path_label = "root-only seed"
+    elif derive_seed:
+        seed_path_label = "root-only seed"
     write_seed = _prompt_bool_curses(stdscr, "(EPS) write seed files (chmod 600)", default=False) if derive_seed else False
     show_seed = _prompt_bool_curses(stdscr, "(EPS) show seed in UI", default=False) if derive_seed else False
     write_sources_default = bool(mix_sources)  # if sources affect the seed, default to auditing them
@@ -2971,17 +3008,41 @@ def _action_stamp(state: AppState, stdscr) -> None:
     fp = res.receipt.get("seed_fingerprint_sha256")
     if isinstance(fp, str) and fp:
         state.log_lines.append(f"seed_fingerprint_sha256: {fp}")
+    if seed_path_label:
+        state.log_lines.append(f"Seed path: {seed_path_label}")
+        if seed_path_label == "root-only seed":
+            state.log_lines.append("Warning: staged entropy sources are not affecting the seed.")
     if mix_sources and pool_sha:
         state.log_lines.append(f"entropy_sources_staged_count: {len(state.entropy_sources)}")
         state.log_lines.append(f"entropy_sources_eligible_count: {len(mixed_sources)}")
         state.log_lines.append(f"entropy_sources_sha256: {pool_sha}")
     sources_for_audit: Sequence[EntropySource] = mixed_sources if mix_sources else state.entropy_sources
+    audit_status = "not_requested"
+    audit_requested_count = 0
+    audit_materialized_count = 0
+    audit_warnings: List[str] = []
     if write_sources and derive_seed and sources_for_audit:
-        p, warnings = _write_entropy_sources_into_pack(res.pack_dir, sources_for_audit)
+        p, warnings, materialized_count = _write_entropy_sources_into_pack(res.pack_dir, sources_for_audit)
+        audit_requested_count = len(sources_for_audit)
+        audit_materialized_count = int(materialized_count)
+        audit_warnings = list(warnings)
+        if p is None:
+            audit_status = "failed"
+        elif audit_warnings:
+            audit_status = "partial"
+        else:
+            audit_status = "ok"
         for w in warnings:
             state.log_lines.append(f"warning: entropy_sources audit: {w}")
         if p is not None:
             state.log_lines.append(f"entropy_sources_dir: {p}")
+    _update_receipt_entropy_audit(
+        res.receipt,
+        status=audit_status,
+        requested_count=audit_requested_count,
+        materialized_count=audit_materialized_count,
+        warnings=audit_warnings,
+    )
     if evidence_bundle:
         try:
             ev_path, ev_sha = write_evidence_bundle(res.pack_dir)
@@ -2992,20 +3053,17 @@ def _action_stamp(state: AppState, stdscr) -> None:
             res.receipt["evidence_bundle_path"] = str(Path(ev_path).name)
             if ev_sha:
                 res.receipt["evidence_bundle_sha256"] = str(ev_sha)
-            try:
-                (res.pack_dir / "receipt.json").write_text(
-                    json.dumps(res.receipt, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False) + "\n",
-                    encoding="utf-8",
-                )
-            except Exception:
-                pass
         except Exception as exc:
             state.log_lines.append(f"evidence_bundle failed: {exc}")
+    try:
+        (res.pack_dir / "receipt.json").write_text(
+            json.dumps(res.receipt, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False) + "\n",
+            encoding="utf-8",
+        )
+    except Exception as exc:
+        state.log_lines.append(f"warning: receipt write failed: {exc}")
     if show_seed and res.seed_master is not None:
-        seed_hex = res.seed_master.hex()
-        seed_b64 = base64.b64encode(res.seed_master).decode("ascii")
-        state.log_lines.append(f"seed_master.hex: {seed_hex}")
-        state.log_lines.append(f"seed_master.b64: {seed_b64}")
+        _show_seed_reveal(state, res.seed_master)
     state.status = "Done."
 
 

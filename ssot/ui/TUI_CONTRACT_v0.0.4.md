@@ -1,7 +1,8 @@
-# TUI Contract (v0.0.4)
+# TUI Contract (v0.0.4, historical/reference-only)
 
-This contract defines a deterministic, human-centered operator console pattern for terminal UIs.
-If a TUI conflicts with this contract, the implementation is wrong unless the contract is version-bumped.
+This contract defined a deterministic, human-centered operator console pattern for terminal UIs.
+For EPS, it is now historical/reference-only. The normative EPS UI baseline is `ssot/ui/TUI_STANDARD_v0.1.0.md`.
+If a TUI conflicts with this contract, that may still be acceptable for legacy or experimental modes, but it is no longer the EPS conformance target unless the contract is version-bumped.
 
 Design posture: calm, legible, procedure-driven. One strong move; everything else quiet.
 
@@ -224,4 +225,3 @@ Recommended fields:
 ## 14. Conformance tracking
 
 Per-app conformance status lives in `ssot/ui/UI_CONFORMANCE.md`.
-

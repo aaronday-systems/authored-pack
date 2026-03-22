@@ -1,6 +1,7 @@
 # TUI Standard (v0.1.0, neutral)
 
 Control Plane is the **reference implementation and source of truth** for this terminal UI standard. No separate "spec repo" exists; copy from here. The standard is neutral: branding and marks are per-app, not shared.
+EPS default-mode screens are expected to follow this standard. EPS insane mode is intentionally allowed to diverge.
 
 ## 1) Scope
 - Shared contract for terminal UIs and CLI headers.

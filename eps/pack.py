@@ -23,10 +23,13 @@ from .manifest import (
     manifest_root_sha256,
     sha256_hex,
 )
+from .safeio import read_trusted_bytes_limited, trusted_copy_with_sha256
 
 
-RECEIPT_SCHEMA_VERSION = "eps.receipt.v1"
+RECEIPT_SCHEMA_VERSION = "eps.receipt.v2"
 PACK_LAYOUT_VERSION = "eps.pack_layout.v1"
+LEGACY_MANIFEST_SCHEMA_VERSION = "entropy.pack.v1"
+SUPPORTED_MANIFEST_SCHEMA_VERSIONS = {LEGACY_MANIFEST_SCHEMA_VERSION, MANIFEST_SCHEMA_VERSION}
 
 DEFAULT_MAX_MANIFEST_BYTES = 4 * 1024 * 1024  # 4 MiB
 DEFAULT_MAX_ARTIFACT_BYTES = 512 * 1024 * 1024  # 512 MiB
@@ -84,19 +87,7 @@ def _sha256_hex_stream(handle, *, max_bytes: Optional[int] = None) -> Tuple[str,
 
 
 def _read_file_bytes_limited(path: Path, *, max_bytes: int) -> bytes:
-    if path.is_symlink():
-        raise ValueError(f"refusing to read symlink file: {path}")
-    try:
-        size = int(path.stat().st_size)
-        if size > int(max_bytes):
-            raise ValueError(f"file too large ({size} > {max_bytes})")
-    except OSError:
-        pass
-    with path.open("rb") as handle:
-        data = handle.read(int(max_bytes) + 1)
-    if len(data) > int(max_bytes):
-        raise ValueError(f"file too large ({len(data)} > {max_bytes})")
-    return data
+    return read_trusted_bytes_limited(path, max_bytes=max_bytes)
 
 
 def _read_zip_member_bytes_limited(zf: zipfile.ZipFile, name: str, *, max_bytes: int) -> bytes:
@@ -304,21 +295,13 @@ def _copy_payload_files(
         if not src_rel:
             raise ValueError("artifact missing source_relpath")
         src = input_dir / Path(src_rel)
-        if src.is_symlink():
-            raise ValueError(f"artifact source became symlink: {src}")
-        if not src.is_file():
-            raise ValueError(f"artifact source missing: {src}")
 
         dst_rel = Path("payload") / Path(src_rel)
-
         dst = pack_dir / dst_rel
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, dst)
 
         expected_sha = str(a.get("sha256", ""))
         expected_size = int(a.get("size_bytes", 0))
-        with dst.open("rb") as handle:
-            actual_sha, actual_size = _sha256_hex_stream(handle)
+        actual_sha, actual_size = trusted_copy_with_sha256(src, dst)
         if actual_sha != expected_sha or actual_size != expected_size:
             raise ValueError(f"artifact copy diverged from source bytes: {src_rel}")
 
@@ -378,6 +361,68 @@ def _pack_dir_for_root(out_dir: Path, root_sha256: str) -> Path:
     return out_dir / root_sha256
 
 
+def _is_sha256_hex(value: object) -> bool:
+    if not isinstance(value, str) or len(value) != 64:
+        return False
+    return all(c in "0123456789abcdef" for c in value.lower())
+
+
+def _build_derivation_metadata(
+    *,
+    derive_seed: bool,
+    entropy_sources_sha256: Optional[str],
+) -> Optional[Dict[str, object]]:
+    if not derive_seed:
+        return None
+    derivation: Dict[str, object] = {
+        "method": "hkdf-sha256",
+        "derivation_version": DEFAULT_DERIVATION_VERSION,
+        "mode": "root-only",
+    }
+    if entropy_sources_sha256:
+        derivation["mode"] = "root-plus-sources"
+        derivation["entropy_sources_sha256"] = str(entropy_sources_sha256)
+    return derivation
+
+
+def _validate_receipt_v2(
+    receipt: object,
+    *,
+    manifest: Dict[str, object],
+    root_sha: str,
+    artifact_entries: Sequence[Dict[str, object]],
+) -> List[str]:
+    errors: List[str] = []
+    if not isinstance(receipt, dict):
+        return ["receipt.json must be an object"]
+    if receipt.get("schema_version") != RECEIPT_SCHEMA_VERSION:
+        errors.append("receipt.json schema_version invalid")
+    if receipt.get("entropy_schema_version") != manifest.get("schema_version"):
+        errors.append("receipt.json entropy_schema_version mismatch")
+    if receipt.get("entropy_root_sha256") != root_sha:
+        errors.append("receipt.json entropy_root_sha256 mismatch")
+    if receipt.get("artifact_count") != len(artifact_entries):
+        errors.append("receipt.json artifact_count mismatch")
+    total_bytes = sum(int(a.get("size_bytes", 0) or 0) for a in artifact_entries)
+    if receipt.get("artifact_bytes") != total_bytes:
+        errors.append("receipt.json artifact_bytes mismatch")
+
+    manifest_derivation = manifest.get("derivation")
+    receipt_derivation = receipt.get("derivation")
+    if manifest_derivation is None:
+        if receipt_derivation is not None:
+            errors.append("receipt.json derivation present without manifest derivation")
+        if receipt.get("seed_fingerprint_sha256") is not None:
+            errors.append("receipt.json seed fingerprint present without manifest derivation")
+    else:
+        if receipt_derivation != manifest_derivation:
+            errors.append("receipt.json derivation mismatch")
+        fingerprint = receipt.get("seed_fingerprint_sha256")
+        if fingerprint is not None and not _is_sha256_hex(fingerprint):
+            errors.append("receipt.json seed_fingerprint_sha256 invalid")
+    return errors
+
+
 @dataclass(frozen=True)
 class StampResult:
     pack_dir: Path
@@ -420,17 +465,19 @@ def stamp_pack(
 
     try:
         artifact_entries = _copy_payload_files(input_dir=input_dir, pack_dir=tmp_dir, artifacts=raw_artifacts)
+        derivation = _build_derivation_metadata(
+            derive_seed=bool(derive_seed),
+            entropy_sources_sha256=entropy_sources_sha256,
+        )
         manifest = build_manifest(
             pack_id=pack_id,
             artifacts=artifact_entries,
             notes=notes,
             created_at_utc=created_at_utc,
             dice=dice,
+            derivation=derivation,
         )
         root_sha = manifest_root_sha256(manifest)
-        deriv_version = None
-        if derive_seed:
-            deriv_version = DEFAULT_DERIVATION_VERSION if not entropy_sources_sha256 else f"{DEFAULT_DERIVATION_VERSION}+SOURCES"
 
         pack_dir = _pack_dir_for_root(out_dir, root_sha)
         if pack_dir.exists():
@@ -482,16 +529,18 @@ def stamp_pack(
                         pack_id=pack_id,
                         artifact_entries=artifact_entries,
                         zip_path=Path("entropy_pack.zip") if zip_pack else None,
-                        derivation_version=deriv_version,
-                        entropy_sources_sha256=entropy_sources_sha256,
+                        derivation=derivation,
                         seed_master=seed_master,
                     )
+                    _safe_write_json(pack_dir / "receipt.json", receipt)
                     if evidence_bundle:
                         ev_path, ev_sha = write_evidence_bundle(pack_dir)
                         receipt["evidence_bundle_path"] = str(ev_path.name)
                         if ev_sha:
                             receipt["evidence_bundle_sha256"] = str(ev_sha)
-                    _safe_write_json(pack_dir / "receipt.json", receipt)
+                        _safe_write_json(pack_dir / "receipt.json", receipt)
+                    if zip_pack:
+                        _write_zip(pack_dir, pack_dir / "entropy_pack.zip")
                     if print_seed and seed_master is not None:
                         _print_seed_material(seed_master)
                     try:
@@ -519,29 +568,28 @@ def stamp_pack(
                 _chmod_600(tmp_dir / "seed_master.hex")
                 _chmod_600(tmp_dir / "seed_master.b64")
 
-        if zip_pack:
-            _write_zip(tmp_dir, tmp_dir / "entropy_pack.zip")
-
         receipt = _build_receipt(
             root_sha256=root_sha,
             pack_id=pack_id,
             artifact_entries=artifact_entries,
             zip_path=Path("entropy_pack.zip") if zip_pack else None,
-            derivation_version=deriv_version,
-            entropy_sources_sha256=entropy_sources_sha256,
+            derivation=derivation,
             seed_master=seed_master,
         )
         _safe_write_json(tmp_dir / "receipt.json", receipt)
 
-        # Atomic-ish move: rename tmp dir into content-addressed target.
-        tmp_dir.replace(pack_dir)
-
         if evidence_bundle:
-            ev_path, ev_sha = write_evidence_bundle(pack_dir)
+            ev_path, ev_sha = write_evidence_bundle(tmp_dir)
             receipt["evidence_bundle_path"] = str(ev_path.name)
             if ev_sha:
                 receipt["evidence_bundle_sha256"] = str(ev_sha)
-            _safe_write_json(pack_dir / "receipt.json", receipt)
+            _safe_write_json(tmp_dir / "receipt.json", receipt)
+
+        if zip_pack:
+            _write_zip(tmp_dir, tmp_dir / "entropy_pack.zip")
+
+        # Atomic-ish move: rename tmp dir into content-addressed target.
+        tmp_dir.replace(pack_dir)
 
         if print_seed and seed_master is not None:
             _print_seed_material(seed_master)
@@ -561,8 +609,7 @@ def _build_receipt(
     pack_id: Optional[str],
     artifact_entries: Sequence[Dict[str, object]],
     zip_path: Optional[Path],
-    derivation_version: Optional[str],
-    entropy_sources_sha256: Optional[str],
+    derivation: Optional[Dict[str, object]],
     seed_master: Optional[bytes],
 ) -> Dict[str, object]:
     total_bytes = sum(int(a.get("size_bytes", 0) or 0) for a in artifact_entries)
@@ -582,10 +629,8 @@ def _build_receipt(
     if zip_path is not None:
         # Avoid embedding absolute local paths in receipts.
         receipt["zip_path"] = str(Path(str(zip_path)).name)
-    if derivation_version:
-        receipt["derivation_version"] = derivation_version
-    if entropy_sources_sha256:
-        receipt["entropy_sources_sha256"] = str(entropy_sources_sha256)
+    if derivation:
+        receipt["derivation"] = dict(derivation)
     if seed_master is not None:
         receipt["seed_fingerprint_sha256"] = seed_fingerprint_sha256(seed_master)
     return receipt
@@ -599,14 +644,22 @@ def _print_seed_material(seed_master: bytes) -> None:
 
 
 def _write_zip(pack_dir: Path, zip_path: Path) -> None:
-    # Avoid including seed files by default. They are sensitive and should be injected per-run.
-    exclude = {"seed_master.hex", "seed_master.b64", zip_path.name}
+    # Public zip is a canonical projection of the pack: rooted metadata + payload only.
+    include_relpaths = {"manifest.json", "entropy_root_sha256.txt", "receipt.json"}
+    exclude = {
+        "seed_master.hex",
+        "seed_master.b64",
+        zip_path.name,
+    }
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for path in _iter_pack_archive_files(pack_dir, exclude_names=exclude, skip_nested_zips=False):
             rel = path.relative_to(pack_dir).as_posix()
             if rel.startswith("entropy_sources/") or rel.startswith("entropy_sources\\"):
                 continue
-            zf.write(path, arcname=rel)
+            if rel.endswith(".sha256") or rel.startswith("eps_evidence_"):
+                continue
+            if rel in include_relpaths or rel.startswith("payload/"):
+                zf.write(path, arcname=rel)
 
 
 def write_evidence_bundle(pack_dir: Path) -> Tuple[Path, Optional[str]]:
@@ -620,7 +673,7 @@ def write_evidence_bundle(pack_dir: Path) -> Tuple[Path, Optional[str]]:
     # Name includes the pack root for human ergonomics.
     root = ""
     try:
-        root = (pack_dir / "entropy_root_sha256.txt").read_text(encoding="utf-8", errors="ignore").strip()
+        root = _read_file_bytes_limited(pack_dir / "entropy_root_sha256.txt", max_bytes=256).decode("utf-8").strip()
     except Exception:
         root = ""
     if not (isinstance(root, str) and len(root) == 64 and all(c in "0123456789abcdef" for c in root.lower())):
@@ -728,10 +781,16 @@ def verify_pack(
             return VerificationResult(ok=False, root_sha256="", file_count=0, total_bytes=0, errors=[f"invalid manifest.json: {exc}"])
         if not isinstance(manifest, dict):
             return VerificationResult(ok=False, root_sha256="", file_count=0, total_bytes=0, errors=["manifest.json must be an object"])
+        schema_version = manifest.get("schema_version")
+        if schema_version not in SUPPORTED_MANIFEST_SCHEMA_VERSIONS:
+            return VerificationResult(ok=False, root_sha256="", file_count=0, total_bytes=0, errors=["manifest schema_version unsupported"])
         root_sha = manifest_root_sha256(manifest)
+        require_receipt = schema_version == MANIFEST_SCHEMA_VERSION
 
         expected_path = pack_path / "entropy_root_sha256.txt"
-        if expected_path.is_symlink():
+        if require_receipt and not expected_path.is_file():
+            errors.append("missing entropy_root_sha256.txt")
+        elif expected_path.is_symlink():
             errors.append("entropy_root_sha256.txt is a symlink")
         elif expected_path.is_file():
             try:
@@ -741,6 +800,25 @@ def verify_pack(
                 expected = ""
             if expected and expected != root_sha:
                 errors.append("entropy_root_sha256.txt does not match manifest root")
+
+        if require_receipt:
+            receipt_path = pack_path / "receipt.json"
+            if not receipt_path.is_file():
+                errors.append("missing receipt.json")
+            else:
+                try:
+                    raw_receipt = _read_file_bytes_limited(receipt_path, max_bytes=max_manifest_bytes)
+                    receipt = json.loads(raw_receipt.decode("utf-8"))
+                    errors.extend(
+                        _validate_receipt_v2(
+                            receipt,
+                            manifest=manifest,
+                            root_sha=root_sha,
+                            artifact_entries=manifest.get("artifacts") if isinstance(manifest.get("artifacts"), list) else [],
+                        )
+                    )
+                except Exception as exc:
+                    errors.append(f"invalid receipt.json: {exc}")
 
         artifacts = manifest.get("artifacts")
         file_count, total_bytes, expected_payload_relpaths, artifact_errors = _verify_manifest_artifacts(
@@ -780,16 +858,37 @@ def verify_pack(
                     return VerificationResult(ok=False, root_sha256="", file_count=0, total_bytes=0, errors=[f"invalid manifest.json in zip: {exc}"])
                 if not isinstance(manifest, dict):
                     return VerificationResult(ok=False, root_sha256="", file_count=0, total_bytes=0, errors=["manifest.json must be an object"])
+                schema_version = manifest.get("schema_version")
+                if schema_version not in SUPPORTED_MANIFEST_SCHEMA_VERSIONS:
+                    return VerificationResult(ok=False, root_sha256="", file_count=0, total_bytes=0, errors=["manifest schema_version unsupported"])
 
                 root_sha = manifest_root_sha256(manifest)
+                require_receipt = schema_version == MANIFEST_SCHEMA_VERSION
                 try:
                     raw_expected = _read_zip_member_bytes_limited(zf, "entropy_root_sha256.txt", max_bytes=256)
                     expected = raw_expected.decode("utf-8").strip()
                     if expected and expected != root_sha:
                         errors.append("entropy_root_sha256.txt does not match manifest root")
                 except KeyError:
-                    # Optional
-                    pass
+                    if require_receipt:
+                        errors.append("missing entropy_root_sha256.txt in zip")
+
+                if require_receipt:
+                    try:
+                        raw_receipt = _read_zip_member_bytes_limited(zf, "receipt.json", max_bytes=max_manifest_bytes)
+                        receipt = json.loads(raw_receipt.decode("utf-8"))
+                        errors.extend(
+                            _validate_receipt_v2(
+                                receipt,
+                                manifest=manifest,
+                                root_sha=root_sha,
+                                artifact_entries=manifest.get("artifacts") if isinstance(manifest.get("artifacts"), list) else [],
+                            )
+                        )
+                    except KeyError:
+                        errors.append("missing receipt.json in zip")
+                    except Exception as exc:
+                        errors.append(f"invalid receipt.json in zip: {exc}")
 
                 artifacts = manifest.get("artifacts")
                 file_count, total_bytes, expected_payload_relpaths, artifact_errors = _verify_manifest_artifacts(

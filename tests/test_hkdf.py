@@ -43,6 +43,18 @@ class TestHkdf(unittest.TestCase):
         self.assertEqual(a, b)
         self.assertEqual(len(a), 32)
 
+    def test_hkdf_rejects_non_bytes_salt_and_info(self) -> None:
+        with self.assertRaises(TypeError):
+            hkdf_sha256(ikm=b"ikm", length=32, salt="salt")  # type: ignore[arg-type]
+        with self.assertRaises(TypeError):
+            hkdf_sha256(ikm=b"ikm", length=32, info="info")  # type: ignore[arg-type]
+
+    def test_hkdf_rejects_non_bytes_salt_and_info(self) -> None:
+        with self.assertRaises(TypeError):
+            hkdf_sha256(ikm=b"ikm", length=32, salt="salt", info=b"info")  # type: ignore[arg-type]
+        with self.assertRaises(TypeError):
+            hkdf_sha256(ikm=b"ikm", length=32, salt=b"salt", info="info")  # type: ignore[arg-type]
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -46,3 +46,76 @@ Do not rewrite, reorder, or prune previous entries.
 - Operational insight for future me:
   - The highest-leverage pattern in this repo is to encode invariants as tests immediately after refactors.
   - The most fragile surface is still `bin/eps.py` (UI + orchestration in one file); future safety work should keep extracting pure logic out of curses paths.
+
+## 2026-03-22T15:33:25Z
+
+- Documentation hardening wave for the public-release pass.
+- What changed and why:
+  - `README.md` now states the seed trust boundary plainly: published packs reproduce the same derived seed material, so `seed_master` should not be handed to untrusted agents as if it were secret.
+    - Why: the old wording blurred operational secrecy with derived reproducibility and invited unsafe handoff patterns.
+  - `README.md` now says pack directories are named by the root hash, not by `pack_id`.
+    - Why: `pack_id` is metadata only; the directory name is content-addressed and must stay that way for operator predictability.
+  - `ssot/ui/TUI_STANDARD_v0.1.0.md` is now the normative EPS baseline, and `ssot/ui/TUI_CONTRACT_v0.0.4.md` is explicitly historical/reference-only.
+    - Why: there should be one clear conformance target; the older contract is useful context, not the release rule.
+  - `docs/CROSS_AGENT_CONTROL_PLANE_PROMPT.md` now documents the JSON envelope and the conditional receipt fields.
+    - Why: downstream automation needs exact shapes, not loose prose, if it is going to consume EPS outputs safely.
+  - Added `docs/RELEASE_NOTES_v0.2.0.md` to pin the public-release contract in one place.
+    - Why: this gives future Aaron a single artifact to consult when reconciling the schema bump, console script, and receipt/provenance rules.
+- Assumptions this log entry depends on:
+  - New stamps will emit `entropy.pack.v2` and `eps.receipt.v2`.
+  - `eps` will be exposed as a console script in addition to `python -m eps`.
+  - JSON mode will be stdout-only and stable on both success and expected operational failure paths.
+- Verification note:
+  - Documentation-only change; no runtime behavior was modified in this pass.
+
+## 2026-03-22T18:12:00Z
+
+- Public-release hardening wave landed for `v0.2.0`.
+- What changed and why:
+  - Added `eps/safeio.py` and routed trusted manifest/root reads through it.
+    - Why: pathname-only reads are raceable; safe open/read is the minimum acceptable primitive for public verification software.
+  - New stamps now emit `entropy.pack.v2` and `eps.receipt.v2`.
+    - Why: derivation metadata and receipt consistency are now part of the public contract, so the schema needed a versioned cut.
+  - Seed derivation metadata is now rooted into the manifest whenever derivation is enabled.
+    - Why: provenance that affects operator interpretation must be bound to the content identity, not left mutable in `receipt.json` alone.
+  - `entropy_pack.zip` is now built from finalized metadata and limited to the canonical public surface (`manifest.json`, `entropy_root_sha256.txt`, `receipt.json`, `payload/**`).
+    - Why: zip and directory forms should tell the same public story; operational byproducts and local audit adjuncts do not belong in the public archive.
+  - CLI `--json` mode now uses one envelope shape and no longer relies on human stderr for expected operational failures.
+    - Why: automation needs a stable machine contract, not a mixture of JSON, stderr prose, and occasional tracebacks.
+  - Entropy-bin recovery now preserves staged files under `.eps_failed/...` on failure.
+    - Why: destructive entropy consumption without failure preservation is unacceptable; entropy loss must be noisy and reversible.
+  - TUI seed display is now a one-shot viewer, and the TUI only labels mixed-source derivation as `LOCKDOWN`.
+    - Why: the old UI could mislead operators and could leak raw seed material through persistent logs.
+- Test/verification status after this wave:
+  - `pytest -q` passed
+  - `python3 -m pytest -q` passed
+- Future-self note:
+  - The main contract is now split cleanly: rooted facts in `manifest.json`, operational facts in `receipt.json`, and local-only audit adjuncts outside the canonical public zip.
+  - If future work adds signatures or peppers, do it as a new versioned derivation/receipt contract. Do not smuggle new semantics into `v2`.
+
+## 2026-03-22T15:50:33Z
+
+- Runtime hardening landed for the public-release `v0.2.0` pass.
+- What changed and why:
+  - Added `eps/safeio.py` and moved trusted local reads/hashing onto a single file-descriptor-safe path.
+    - Why: pathname-only checks were leaving race windows around source hashing and canonical file reads.
+  - `eps/manifest.py` now emits `entropy.pack.v2` for new stamps, and `eps/pack.py` verifies both `v1` and `v2` manifests.
+    - Why: we needed rooted derivation metadata for public verification without breaking old packs.
+  - Derivation provenance now lives in the rooted manifest and is mirrored into `eps.receipt.v2`.
+    - Why: seed path claims in `receipt.json` were previously mutable and not tied to the pack identity.
+  - `receipt.json` is finalized before `entropy_pack.zip` is written, and the public zip now contains only rooted metadata plus `payload/**`.
+    - Why: zip and directory forms now present the same public provenance story.
+  - The CLI now exposes a machine-readable JSON envelope for success and expected failures, and `pyproject.toml` now declares the `eps` console script.
+    - Why: headless automation needs a stable contract; raw tracebacks are not a contract.
+  - Bin-mode failure handling now preserves staged entropy under `.eps_failed/...` instead of risking silent loss.
+    - Why: failure should be noisy and recoverable, never destructive.
+  - The TUI no longer persists raw `seed_master` in log lines; it uses a one-shot reveal and writes audit completeness into `receipt.json`.
+    - Why: persistent terminal logs are a real leak surface, and audit degradation needs to survive past the live session.
+- Verification status after the runtime hardening wave:
+  - `PYTHONDONTWRITEBYTECODE=1 pytest -q` passed (`52 passed`)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q` passed (`52 passed`)
+  - `python3 -m eps --help` passed
+  - `git diff --check` passed
+- Operational insight for future me:
+  - The risky seams in EPS are still the cross-module contracts: manifest schema, receipt schema, and TUI orchestration. Change them together or not at all.
+  - The fastest way to break public trust here is to let docs drift away from the actual JSON and zip contracts. Treat the tests as the executable version of the release notes.

@@ -44,6 +44,10 @@ class BinStampResult:
     bin_files_after: int
 
 
+class BinRecoveryError(RuntimeError):
+    pass
+
+
 def _iter_entropy_bin_files(
     entropy_bin: Path,
     *,
@@ -157,6 +161,7 @@ def stamp_from_entropy_bin(
     stage_dir.mkdir(parents=True, exist_ok=False)
 
     consumed: List[ConsumedItem] = []
+    cleanup_stage_dir = True
     try:
         # Move files into a staging input_dir. stamp_pack will copy them into payload/.
         # After success we delete stage_dir, leaving only the pack copies (destructive/subtractive).
@@ -178,26 +183,34 @@ def stamp_from_entropy_bin(
             write_seed_files=False,
             print_seed=False,
         )
-    except Exception:
-        # Recovery: put staged files back into the bin (under a deterministic failure folder),
+    except Exception as exc:
+        # Recovery: put the staging tree back under a deterministic failure folder,
         # so a failed run does not silently destroy entropy.
-        failed_root = entropy_bin / ".eps_failed" / f"{int(time.time())}"
+        cleanup_stage_dir = False
+        failed_root = entropy_bin / ".eps_failed" / f"{int(time.time())}_{secrets.token_hex(4)}"
+        preserved_path: Path = failed_root
         try:
-            failed_root.mkdir(parents=True, exist_ok=True)
-            for item in consumed:
-                try:
-                    if item.staged_path.is_file():
-                        shutil.move(str(item.staged_path), str(_unique_stage_name(failed_root, item.staged_path.name)))
-                except Exception:
-                    pass
+            failed_root.parent.mkdir(parents=True, exist_ok=True)
+            # Preserve the whole staging directory with whatever remains unrecovered.
+            shutil.move(str(stage_dir), str(failed_root))
+            preserved_path = failed_root
         except Exception:
-            pass
-        raise
+            try:
+                nested_preserve = failed_root / stage_dir.name
+                failed_root.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(stage_dir), str(nested_preserve))
+                preserved_path = nested_preserve
+            except Exception:
+                preserved_path = stage_dir
+        raise BinRecoveryError(
+            f"stamp failed; preserved staged files at {preserved_path}: {exc}"
+        ) from exc
     finally:
-        try:
-            shutil.rmtree(stage_dir)
-        except Exception:
-            pass
+        if cleanup_stage_dir:
+            try:
+                shutil.rmtree(stage_dir)
+            except Exception:
+                pass
 
     # Post-run counts are best-effort (bin contents changed).
     try:

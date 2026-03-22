@@ -7,8 +7,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from .safeio import hash_trusted_file
 
-MANIFEST_SCHEMA_VERSION = "entropy.pack.v1"
+
+MANIFEST_SCHEMA_VERSION = "entropy.pack.v2"
 DEFAULT_DERIVATION_VERSION = "ENTROPYPACK-SEED-v1"
 
 
@@ -22,11 +24,8 @@ def sha256_hex(data: bytes) -> str:
 
 
 def file_sha256_hex(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            h.update(chunk)
-    return h.hexdigest()
+    digest, _size = hash_trusted_file(path)
+    return digest
 
 
 def is_hidden_path(path: Path) -> bool:
@@ -67,15 +66,11 @@ def collect_artifacts(
         rel = path.relative_to(input_dir).as_posix()
         if exclude is not None and rel in exclude:
             continue
-        if path.is_symlink():
-            raise ValueError(f"refusing to include symlink artifact: {rel}")
-        if not path.is_file():
-            raise ValueError(f"refusing to include non-file artifact: {rel}")
-        size = path.stat().st_size
+        digest, size = hash_trusted_file(path)
         artifacts.append(
             {
                 "source_relpath": rel,
-                "sha256": file_sha256_hex(path),
+                "sha256": digest,
                 "size_bytes": int(size),
             }
         )
@@ -102,6 +97,7 @@ def build_manifest(
     notes: Optional[str] = None,
     created_at_utc: Optional[str] = None,
     dice: Optional[Sequence[Tuple[str, int]]] = None,
+    derivation: Optional[Dict[str, object]] = None,
 ) -> Dict[str, object]:
     manifest: Dict[str, object] = {
         "schema_version": MANIFEST_SCHEMA_VERSION,
@@ -115,6 +111,8 @@ def build_manifest(
         manifest["created_at_utc"] = str(created_at_utc)
     if dice:
         manifest["dice"] = normalize_dice(dice)
+    if derivation:
+        manifest["derivation"] = dict(derivation)
     return manifest
 
 

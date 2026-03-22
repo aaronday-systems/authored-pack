@@ -18,11 +18,10 @@ def hkdf_sha256(*, ikm: bytes, length: int, salt: bytes = b"", info: bytes = b""
         raise ValueError("length must be > 0")
     if not isinstance(ikm, (bytes, bytearray)):
         raise TypeError("ikm must be bytes")
-
-    if salt is None:
-        salt = b""
-    if info is None:
-        info = b""
+    if not isinstance(salt, (bytes, bytearray)):
+        raise TypeError("salt must be bytes")
+    if not isinstance(info, (bytes, bytearray)):
+        raise TypeError("info must be bytes")
 
     hash_len = hashlib.sha256().digest_size
     if length > 255 * hash_len:
@@ -40,4 +39,3 @@ def hkdf_sha256(*, ikm: bytes, length: int, salt: bytes = b"", info: bytes = b""
         okm += t
         counter += 1
     return okm[:length]
-
