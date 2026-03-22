@@ -1,6 +1,8 @@
 # Entropy Pack Stamper (EPS)
 
-Current release: `v0.2.0` (git tag target). Runtime version: `python3 -c 'from eps import __version__; print(__version__)'`.
+Current release target: `v1.0.0`. Runtime version: `python3 -c 'from eps import __version__; print(__version__)'`.
+
+EPS is source-available under the Aaron Day license. It is not OSI open source.
 
 EPS stamps and verifies **EntropyPacks**: a directory (or `.zip`) containing:
 - `manifest.json` (canonical, deterministic JSON)
@@ -19,6 +21,32 @@ It produces:
 
 EPS does not create entropy. It packages, commits, and verifies operator-supplied entropy-bearing inputs, then
 optionally derives reproducible material from the rooted pack state.
+
+## V1 Contract
+
+EPS `v1.0.0` is the public deterministic core:
+- `stamp`
+- `verify`
+- `stamp-bin`
+- calm/noisy TUI flows
+- `pack_root_sha256` and `payload_root_sha256`
+- optional reproducible derived seed material
+
+What EPS is not:
+- not an RNG
+- not automatic secrecy
+- not signed provenance
+- not sealed break-glass storage
+
+What is stable in V1:
+- `entropy.pack.v2` manifests
+- `eps.receipt.v2` receipts
+- the JSON envelope emitted by `--json`
+- the public pack/zip contract documented in this README
+
+What is deferred:
+- sealed break-glass mode remains future design only
+- see `docs/SEALED_PACK_ARCHITECTURE.md`
 
 ## Why EPS Exists
 
@@ -113,6 +141,7 @@ Outputs are written under `--out/<pack_root_sha256>/`:
 - optional `<root_sha256>/eps_evidence_<root>.zip` + `.sha256`
 
 `pack_id` is manifest metadata only. It does not select the output directory name.
+Evidence bundles are local tamper-evident adjuncts, not signed provenance.
 
 ### Push-button mode: stamp from an entropy bin (subtractive)
 
@@ -169,6 +198,14 @@ Prefer:
 
 Do not describe `seed_master` as a secret unless you have added a separate secret input to the derivation.
 
+## Public Repo Notes
+
+- Public repo scope is the deterministic pack/verify tool only.
+- Sealed mode is not implemented in V1.
+- `docs/SEALED_PACK_ARCHITECTURE.md` is design work for a future versioned mode, not a promise about current runtime behavior.
+- `docs/RELEASE_NOTES_v1.0.0.md` and `CHANGELOG.md` describe the public release surface.
+- `CONTRIBUTING.md` and `SECURITY.md` define contribution and disclosure expectations for the public repo.
+
 ## TUI Contract
 
 Normative reference for EPS UI behavior:
@@ -182,6 +219,7 @@ Default mode follows the baseline contract. Noisy mode is intentionally non-conf
 ## License
 
 See `LICENSE`.
+This repository is source-available under the Aaron Day license and is not OSI open source.
 
 ## UI Header Conformance
 - Interactive terminal UIs must render header line 1 as `<App Name> :: <TUI Name> <SemVer>` for screenshot traceability.

@@ -1,7 +1,7 @@
 [project]
 name = "entropy-pack-stamper"
-version = "0.2.0"
-description = "Stamp and verify deterministic EntropyPacks (manifest + root hash + optional seed derivation)."
+version = "1.0.0"
+description = "Deterministic pack/verify tool for operator-supplied entropy-bearing inputs."
 readme = "README.md"
 license = { file = "LICENSE" }
 authors = [{ name = "Aaron Day" }]

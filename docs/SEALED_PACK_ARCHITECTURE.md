@@ -1,7 +1,7 @@
 # Sealed Pack Architecture
 
 Date: 2026-03-22
-Status: design only
+Status: future design only; not implemented in EPS v1.0.0
 Scope: define the next object model for secret-preserving EPS packs without changing current runtime behavior
 
 ## 1. Product Boundary

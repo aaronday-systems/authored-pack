@@ -2,7 +2,7 @@
 
 Generated from the live workspace on 2026-03-22.
 
-Repo: `/Users/aaronday/dev/entropy-pack-stamper`
+Repo: current EPS workspace checkout
 
 ## Purpose
 

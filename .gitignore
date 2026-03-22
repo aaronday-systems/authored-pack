@@ -6,3 +6,6 @@ dist/
 build/
 out/
 eps_drop/
+.claude/
+.idea/
+.vscode/

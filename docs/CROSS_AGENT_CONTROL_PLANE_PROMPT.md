@@ -1,6 +1,6 @@
 # Cross-Agent Prompt: Control Plane Architect
 
-Context: This repo `/Users/aaronday/dev/entropy-pack-stamper` implements Entropy Pack Stamper (EPS), deterministic packaging and verification for operator-supplied entropy-bearing inputs, including a headless "entropy bin" mode for agents.
+Context: This repo implements Entropy Pack Stamper (EPS), deterministic packaging and verification for operator-supplied entropy-bearing inputs, including a headless "entropy bin" mode for agents.
 
 ## What Was Added (2026-02-10)
 
@@ -13,14 +13,14 @@ Context: This repo `/Users/aaronday/dev/entropy-pack-stamper` implements Entropy
     - tamper-evident evidence bundle `eps_evidence_<root>.zip` + `.sha256`
 
 - **Local bins instantiated (repo-local):**
-  - Input bin: `/Users/aaronday/dev/entropy-pack-stamper/bins/entropy_bin`
-  - Output bin: `/Users/aaronday/dev/entropy-pack-stamper/bins/eps_out`
+  - Input bin: `./bins/entropy_bin`
+  - Output bin: `./bins/eps_out`
   - Both directories are present in git with per-dir `.gitignore` that ignores all contents (safe for dropping entropy-bearing files locally).
 
 ## Quick Command (Agent-Friendly)
 
 ```bash
-cd /Users/aaronday/dev/entropy-pack-stamper && \
+cd <repo-root> && \
 python3 -m eps stamp-bin --json
 ```
 

@@ -155,3 +155,26 @@ Do not rewrite, reorder, or prune previous entries.
   - Focused pack/CLI/TUI regression suite passed after the contract updates.
 - Future-self note:
   - If you change receipt fields, zip contents, or evidence composition, treat them as one seam. Splitting them again will reintroduce stale-artifact bugs immediately.
+
+## 2026-03-22T21:05:00Z
+
+- Public `v1.0.0` repo-prep pass landed on the release branch candidate.
+- What changed and why:
+  - Bumped `eps/__init__.py` and `pyproject.toml` from `0.2.0` to `1.0.0`.
+    - Why: public release prep needs one visible version across runtime and package metadata.
+  - `README.md` now carries an explicit V1 contract, public-scope note, and source-available/non-OSI wording.
+    - Why: future Aaron should not have to reconstruct the product boundary from scattered notes when the repo goes public.
+  - Added `CONTRIBUTING.md`, `SECURITY.md`, `CHANGELOG.md`, and `.github/workflows/ci.yml`.
+    - Why: a public repo without contribution, disclosure, and CI rails invites drift immediately.
+  - Removed tracked `.claude/settings.local.json` from git and added `.claude/` to `.gitignore`.
+    - Why: local tooling state does not belong in the public contract.
+  - Added `docs/RELEASE_NOTES_v1.0.0.md` and marked `docs/SEALED_PACK_ARCHITECTURE.md` as future design only, not implemented in V1.
+    - Why: public deterministic EPS needs a clean boundary before sealed-mode work starts.
+  - Scrubbed workspace-specific absolute paths from public-facing docs like `docs/CROSS_AGENT_CONTROL_PLANE_PROMPT.md` and `docs/CHATGPT_PRO_REDTEAM_ENTROPY_DOSSIER.md`.
+    - Why: publishing a repo should not leak local workstation assumptions.
+  - Added `tests/test_public_release_contract.py`.
+    - Why: version sync, README boundary language, CI presence, and local-ignore rules should be executable checks, not memory.
+- Verification status after this prep pass:
+  - pending full gate rerun in the next step: `pytest -q`, `python3 -m pytest -q`, `python3 -m eps --help`, and one real temp-dir stamp/verify smoke run.
+- Future-self note:
+  - The public-release failure mode here is mostly semantic drift. If version, docs, CI, and trust-boundary language stop matching the runtime, the repo will rot even if the core hashing logic stays correct.
