@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from .binmode import stamp_from_entropy_bin
 from .manifest import DEFAULT_DERIVATION_VERSION, stable_dumps
@@ -35,6 +35,21 @@ class CliUsageError(ValueError):
     pass
 
 
+class CliCommandError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        error_type: Optional[str] = None,
+        details: Optional[Dict[str, object]] = None,
+        exit_code: int = 1,
+    ) -> None:
+        super().__init__(message)
+        self.error_type = str(error_type or self.__class__.__name__)
+        self.details = dict(details) if details else None
+        self.exit_code = int(exit_code)
+
+
 class EPSArgumentParser(argparse.ArgumentParser):
     def error(self, message: str) -> None:
         raise CliUsageError(message)
@@ -44,17 +59,14 @@ def _json_success(command: str, result: object) -> str:
     return stable_dumps({"ok": True, "command": command, "result": result})
 
 
-def _json_failure(command: str, error_type: str, message: str) -> str:
-    return stable_dumps(
-        {
-            "ok": False,
-            "command": command,
-            "error": {
-                "type": error_type,
-                "message": message,
-            },
-        }
-    )
+def _json_failure(command: str, error_type: str, message: str, *, details: Optional[Dict[str, object]] = None) -> str:
+    error: Dict[str, object] = {
+        "type": error_type,
+        "message": message,
+    }
+    if details:
+        error["details"] = details
+    return stable_dumps({"ok": False, "command": command, "error": error})
 
 
 def _parse_dice(items: Sequence[str]) -> List[Tuple[str, int]]:
@@ -76,17 +88,34 @@ def _parse_dice(items: Sequence[str]) -> List[Tuple[str, int]]:
     return out
 
 
+def _validate_seed_flags(args: argparse.Namespace) -> None:
+    if args.json and args.print_seed:
+        raise ValueError("--json cannot be combined with --print-seed")
+    if args.write_seed and not args.derive_seed:
+        raise ValueError("--write-seed requires --derive-seed")
+    if args.print_seed and not args.derive_seed:
+        raise ValueError("--print-seed requires --derive-seed")
+
+
+def _command_name_from_argv(argv_list: Sequence[str]) -> str:
+    known = {"stamp", "verify", "stamp-bin"}
+    for item in argv_list:
+        token = str(item).strip()
+        if token in known:
+            return token
+    return "eps"
+
+
 def _stamp(args: argparse.Namespace) -> int:
     dice = None
     if args.dice:
         dice = _parse_dice(args.dice)
-    if args.json and args.print_seed:
-        raise ValueError("--json cannot be combined with --print-seed")
+    _validate_seed_flags(args)
 
     input_dir = Path(args.input)
     out_dir = Path(args.out)
     if _output_would_self_ingest_input(input_dir.expanduser().resolve(), out_dir.expanduser().resolve()):
-        raise ValueError("--input and --out must not overlap")
+        raise ValueError("--input and --out must not overlap in either direction")
 
     res: StampResult = stamp_pack(
         input_dir=input_dir,
@@ -134,11 +163,20 @@ def _stamp(args: argparse.Namespace) -> int:
 def _verify(args: argparse.Namespace) -> int:
     max_manifest_bytes = int(args.max_manifest_mib) * 1024 * 1024
     res = verify_pack(Path(args.pack), max_manifest_bytes=max_manifest_bytes)
+    if not res.ok:
+        msg = res.errors[0] if res.errors else "verification failed"
+        raise CliCommandError(
+            msg,
+            error_type="VerificationError",
+            details={
+                "pack": str(Path(args.pack)),
+                "errors": list(res.errors),
+                "limits": {"max_manifest_mib": int(args.max_manifest_mib)},
+            },
+            exit_code=1,
+        )
+
     if args.json:
-        if not res.ok:
-            msg = res.errors[0] if res.errors else "verification failed"
-            print(_json_failure("verify", "VerificationError", msg))
-            return 1
         payload = {
             "pack_root_sha256": res.root_sha256,
             "entropy_root_sha256": res.root_sha256,
@@ -150,18 +188,13 @@ def _verify(args: argparse.Namespace) -> int:
         }
         print(_json_success("verify", payload))
     else:
-        if res.ok:
-            print("ok")
-            print(f"pack_root_sha256: {res.root_sha256}")
-            if res.payload_root_sha256:
-                print(f"payload_root_sha256: {res.payload_root_sha256}")
-            print(f"artifact_count_verified: {res.file_count}")
-            print(f"artifact_bytes_verified: {res.total_bytes}")
-        else:
-            print("verify_failed", file=sys.stderr)
-            for e in res.errors:
-                print(f"- {e}", file=sys.stderr)
-    return 0 if res.ok else 1
+        print("ok")
+        print(f"pack_root_sha256: {res.root_sha256}")
+        if res.payload_root_sha256:
+            print(f"payload_root_sha256: {res.payload_root_sha256}")
+        print(f"artifact_count_verified: {res.file_count}")
+        print(f"artifact_bytes_verified: {res.total_bytes}")
+    return 0
 
 
 def _stamp_bin(args: argparse.Namespace) -> int:
@@ -252,8 +285,8 @@ def build_parser() -> argparse.ArgumentParser:
     stamp.add_argument("--zip", action="store_true", help="Write entropy_pack.zip alongside pack dir")
 
     stamp.add_argument("--derive-seed", action="store_true", help=f"Derive reproducible seed material via HKDF ({DEFAULT_DERIVATION_VERSION})")
-    stamp.add_argument("--write-seed", action="store_true", help="Write derived seed material as seed_master.{hex,b64} (chmod 600 best-effort)")
-    stamp.add_argument("--print-seed", action="store_true", help="Print derived seed material as seed_master.{hex,b64} to stdout (no files, incompatible with --json)")
+    stamp.add_argument("--write-seed", action="store_true", help="Write derived seed material as seed_master.{hex,b64} (requires --derive-seed)")
+    stamp.add_argument("--print-seed", action="store_true", help="Print derived seed material as seed_master.{hex,b64} to stdout (requires --derive-seed, incompatible with --json)")
     stamp.add_argument("--evidence-bundle", action="store_true", help="Write eps_evidence_<root>.zip + .sha256 (tamper-evident local audit bundle)")
 
     stamp.add_argument("--json", action="store_true", help="Emit receipt JSON to stdout")
@@ -318,16 +351,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         # show a Python traceback.
         msg = str(exc).strip() or exc.__class__.__name__
         if json_mode:
-            command = "eps"
-            if argv_list:
-                first = str(argv_list[0]).strip()
-                if first and not first.startswith("-"):
-                    command = first
-            print(_json_failure(command, exc.__class__.__name__, msg))
+            command = _command_name_from_argv(argv_list)
+            error_type = exc.__class__.__name__
+            details: Optional[Dict[str, object]] = None
+            if isinstance(exc, CliCommandError):
+                error_type = exc.error_type
+                details = exc.details
+            print(_json_failure(command, error_type, msg, details=details))
             return 1
         print(f"eps: error: {msg}", file=sys.stderr)
         if isinstance(exc, ValueError) and "must be a directory" in msg and "--input" in msg:
             print("hint: pass an existing directory path; many terminals let you drag a folder into the window to paste its absolute path.", file=sys.stderr)
+        if isinstance(exc, CliCommandError):
+            return int(exc.exit_code)
         return 2 if isinstance(exc, ValueError) else 1
 
 

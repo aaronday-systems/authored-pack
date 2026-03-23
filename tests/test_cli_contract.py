@@ -11,6 +11,7 @@ import unittest
 from pathlib import Path
 
 from eps import cli
+from eps.pack import stamp_pack
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -62,6 +63,44 @@ class TestCliContract(unittest.TestCase):
         self.assertEqual(payload["command"], "verify")
         self.assertEqual(payload["error"]["type"], "VerificationError")
         self.assertTrue(payload["error"]["message"])
+        self.assertEqual(payload["error"]["details"]["pack"], "/no/such/path")
+        self.assertIsInstance(payload["error"]["details"]["errors"], list)
+        self.assertEqual(payload["error"]["details"]["limits"]["max_manifest_mib"], 4)
+
+    def test_verify_json_failure_preserves_all_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            stamped = stamp_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=False, derive_seed=False)
+            (stamped.pack_dir / "pack_root_sha256.txt").write_text(("0" * 64) + "\n", encoding="utf-8")
+            (stamped.pack_dir / "payload" / "extra.txt").write_text("extra", encoding="utf-8")
+
+            rc, stdout, stderr = self._run_cli(["verify", "--pack", str(stamped.pack_dir), "--json"])
+
+            self.assertEqual(rc, 1)
+            self.assertEqual(stderr, "")
+            payload = json.loads(stdout)
+            self.assertEqual(payload["ok"], False)
+            self.assertEqual(payload["command"], "verify")
+            errors = payload["error"]["details"]["errors"]
+            self.assertGreaterEqual(len(errors), 2)
+            self.assertIn("pack_root_sha256.txt does not match manifest root", errors)
+            self.assertTrue(any("unexpected payload files present" in err for err in errors))
+
+    def test_stamp_json_usage_error_emits_failure_envelope(self) -> None:
+        rc, stdout, stderr = self._run_cli(["stamp", "--json"])
+
+        self.assertEqual(rc, 1)
+        self.assertEqual(stderr, "")
+        payload = json.loads(stdout)
+        self.assertEqual(payload["ok"], False)
+        self.assertEqual(payload["command"], "stamp")
+        self.assertEqual(payload["error"]["type"], "CliUsageError")
+        self.assertIn("required", payload["error"]["message"])
 
     def test_stamp_json_rejects_print_seed_with_failure_envelope(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -91,6 +130,77 @@ class TestCliContract(unittest.TestCase):
         self.assertEqual(payload["command"], "stamp")
         self.assertEqual(payload["error"]["type"], "ValueError")
         self.assertIn("--json cannot be combined", payload["error"]["message"])
+
+    def test_stamp_json_rejects_write_seed_without_derive_seed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            rc, stdout, stderr = self._run_cli(
+                [
+                    "stamp",
+                    "--input",
+                    str(input_dir),
+                    "--out",
+                    str(out_dir),
+                    "--write-seed",
+                    "--json",
+                ]
+            )
+
+            self.assertEqual(rc, 1)
+            self.assertEqual(stderr, "")
+            payload = json.loads(stdout)
+            self.assertEqual(payload["ok"], False)
+            self.assertEqual(payload["command"], "stamp")
+            self.assertEqual(payload["error"]["type"], "ValueError")
+            self.assertIn("--write-seed requires --derive-seed", payload["error"]["message"])
+
+    def test_stamp_print_seed_without_derive_seed_fails_fast(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            rc, stdout, stderr = self._run_cli(
+                [
+                    "stamp",
+                    "--input",
+                    str(input_dir),
+                    "--out",
+                    str(out_dir),
+                    "--print-seed",
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("--print-seed requires --derive-seed", stderr)
+
+    def test_verify_json_usage_error_emits_failure_envelope(self) -> None:
+        rc, stdout, stderr = self._run_cli(
+            [
+                "verify",
+                "--pack",
+                "/tmp/example.pack",
+                "--max-manifest-mib",
+                "not-an-int",
+                "--json",
+            ]
+        )
+
+        self.assertEqual(rc, 1)
+        self.assertEqual(stderr, "")
+        payload = json.loads(stdout)
+        self.assertEqual(payload["ok"], False)
+        self.assertEqual(payload["command"], "verify")
+        self.assertEqual(payload["error"]["type"], "CliUsageError")
+        self.assertIn("invalid int value", payload["error"]["message"])
 
     def test_stamp_bin_json_emits_success_envelope(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -124,6 +234,15 @@ class TestCliContract(unittest.TestCase):
             self.assertEqual(payload["command"], "stamp-bin")
             self.assertEqual(payload["result"]["mode"], "entropy_bin")
             self.assertEqual(payload["result"]["consumed_count"], 1)
+
+    def test_json_usage_failure_without_subcommand_reports_eps_command(self) -> None:
+        rc, stdout, stderr = self._run_cli(["--json"])
+
+        self.assertEqual(rc, 1)
+        self.assertEqual(stderr, "")
+        payload = json.loads(stdout)
+        self.assertEqual(payload["ok"], False)
+        self.assertEqual(payload["command"], "eps")
 
     def test_python_module_help_smoke(self) -> None:
         proc = subprocess.run(

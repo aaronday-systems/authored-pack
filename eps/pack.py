@@ -3,8 +3,8 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 import shutil
-import stat
 import tempfile
 import zipfile
 from dataclasses import dataclass
@@ -25,6 +25,7 @@ from .manifest import (
     sha256_hex,
 )
 from .safeio import read_trusted_bytes_limited, trusted_copy_with_sha256
+from .safeio import trusted_binary_reader, trusted_sha256_hex
 
 
 RECEIPT_SCHEMA_VERSION = "eps.receipt.v2"
@@ -165,7 +166,7 @@ def _append_unexpected_payload_errors(errors: List[str], *, expected: Set[str], 
 
 
 def _output_would_self_ingest_input(input_dir: Path, out_dir: Path) -> bool:
-    return input_dir == out_dir or out_dir.is_relative_to(input_dir)
+    return input_dir == out_dir or out_dir.is_relative_to(input_dir) or input_dir.is_relative_to(out_dir)
 
 
 def _write_root_alias_files(pack_dir: Path, root_sha: str) -> None:
@@ -233,13 +234,15 @@ def _verify_one_artifact_in_dir(pack_dir: Path, *, idx: int, rel_s: str, size: i
         return f"artifact[{idx}] is a symlink (refusing): {rel_s}"
     if not target.is_file():
         return f"missing artifact file: {rel_s}"
-    actual_size = target.stat().st_size
-    if actual_size != size:
-        return f"size mismatch: {rel_s} expected={size} actual={actual_size}"
     try:
-        with target.open("rb") as handle:
-            actual_sha, n = _sha256_hex_stream(handle, max_bytes=size)
+        actual_sha, n = trusted_sha256_hex(target, max_bytes=size)
     except Exception as exc:
+        try:
+            actual_size = target.stat().st_size
+        except Exception:
+            actual_size = "unknown"
+        if isinstance(actual_size, int) and actual_size != size:
+            return f"size mismatch: {rel_s} expected={size} actual={actual_size}"
         return f"failed to read artifact: {rel_s}: {exc}"
     if n != size:
         return f"size mismatch: {rel_s} expected={size} actual={n}"
@@ -331,6 +334,22 @@ def _safe_write_text(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
+def _safe_write_private_text(path: Path, content: str) -> None:
+    _ensure_parent(path)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent), text=True)
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+        raise
+
+
 def _safe_write_json(path: Path, obj: Dict[str, object]) -> None:
     _ensure_parent(path)
     payload = json.dumps(obj, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False) + "\n"
@@ -401,14 +420,6 @@ def derive_seed_master(
 
 def seed_fingerprint_sha256(seed_master: bytes) -> str:
     return sha256_hex(bytes(seed_master))
-
-
-def _chmod_600(path: Path) -> None:
-    try:
-        path.chmod(stat.S_IRUSR | stat.S_IWUSR)
-    except OSError:
-        # Best-effort; some filesystems may not support chmod.
-        pass
 
 
 def _pack_dir_for_root(out_dir: Path, root_sha256: str) -> Path:
@@ -619,7 +630,7 @@ def stamp_pack(
                     ev_path = _existing_evidence_bundle_path(pack_dir, root_sha)
                     ev_sha: Optional[str] = None
                     if ev_path is not None:
-                        ev_sha = sha256_hex(ev_path.read_bytes())
+                        ev_sha, _ = trusted_sha256_hex(ev_path)
                     if print_seed and seed_master is not None:
                         _print_seed_material(seed_master)
                     try:
@@ -645,10 +656,8 @@ def stamp_pack(
         if write_seed_files and seed_master is not None:
             seed_hex = seed_master.hex()
             seed_b64 = base64.b64encode(seed_master).decode("ascii")
-            _safe_write_text(tmp_dir / "seed_master.hex", seed_hex + "\n")
-            _safe_write_text(tmp_dir / "seed_master.b64", seed_b64 + "\n")
-            _chmod_600(tmp_dir / "seed_master.hex")
-            _chmod_600(tmp_dir / "seed_master.b64")
+            _safe_write_private_text(tmp_dir / "seed_master.hex", seed_hex + "\n")
+            _safe_write_private_text(tmp_dir / "seed_master.b64", seed_b64 + "\n")
 
         extra_receipt_fields: Optional[Dict[str, object]] = None
         if before_finalize is not None:
@@ -765,7 +774,15 @@ def _write_zip(pack_dir: Path, zip_path: Path) -> None:
             if rel.endswith(".sha256") or rel.startswith("eps_evidence_"):
                 continue
             if rel in include_relpaths or rel.startswith("payload/"):
-                zf.write(path, arcname=rel)
+                zi = zipfile.ZipInfo(filename=rel)
+                zi.compress_type = zipfile.ZIP_DEFLATED
+                zi.external_attr = (0o644 & 0xFFFF) << 16
+                with trusted_binary_reader(path) as reader, zf.open(zi, "w") as writer:
+                    while True:
+                        chunk = reader.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        writer.write(chunk)
 
 
 def write_evidence_bundle(pack_dir: Path) -> Tuple[Path, Optional[str]]:
@@ -815,7 +832,7 @@ def write_evidence_bundle(pack_dir: Path) -> Tuple[Path, Optional[str]]:
 
             h = hashlib.sha256()
             size = 0
-            with src.open("rb") as r, zf.open(zi, "w") as w:
+            with trusted_binary_reader(src) as r, zf.open(zi, "w") as w:
                 while True:
                     chunk = r.read(1024 * 1024)
                     if not chunk:
@@ -850,8 +867,7 @@ def write_evidence_bundle(pack_dir: Path) -> Tuple[Path, Optional[str]]:
     # Store a sidecar hash for the zip bytes (useful when publishing the bundle).
     zip_sha: Optional[str] = None
     try:
-        with zip_path.open("rb") as handle:
-            zip_sha, _n = _sha256_hex_stream(handle)
+        zip_sha, _n = trusted_sha256_hex(zip_path)
         _safe_write_text(pack_dir / f"{zip_name}.sha256", zip_sha + "\n")
     except Exception:
         zip_sha = None

@@ -155,7 +155,7 @@ def stamp_from_entropy_bin(
     chosen.sort(key=lambda p: str(p))  # stable order for staging names / UX
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    stage_root = out_dir / ".eps_stage"
+    stage_root = entropy_bin / ".eps_stage"
     stage_root.mkdir(parents=True, exist_ok=True)
     stage_dir = stage_root / f"bin_{int(time.time())}_{secrets.token_hex(4)}"
     stage_dir.mkdir(parents=True, exist_ok=False)

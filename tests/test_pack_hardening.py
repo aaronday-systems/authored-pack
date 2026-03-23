@@ -7,7 +7,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from eps.pack import stamp_pack, write_evidence_bundle, _write_zip
+from eps import pack as pack_module
+from eps.pack import stamp_pack, verify_pack, write_evidence_bundle, _write_zip
 
 
 class TestPackHardening(unittest.TestCase):
@@ -16,6 +17,18 @@ class TestPackHardening(unittest.TestCase):
             tmp_path = Path(tmp)
             input_dir = tmp_path / "input"
             out_dir = input_dir / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            with self.assertRaises(ValueError):
+                stamp_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=False, derive_seed=False)
+
+    def test_stamp_pack_rejects_input_nested_under_out(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            out_dir = tmp_path / "out"
+            input_dir = out_dir / "input"
+            out_dir.mkdir()
             input_dir.mkdir()
             (input_dir / "a.txt").write_text("hello", encoding="utf-8")
 
@@ -94,6 +107,27 @@ class TestPackHardening(unittest.TestCase):
             with self.assertRaises(ValueError):
                 write_evidence_bundle(pack_dir)
 
+    def test_stamp_pack_writes_private_seed_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            res = stamp_pack(
+                input_dir=input_dir,
+                out_dir=out_dir,
+                zip_pack=False,
+                derive_seed=True,
+                write_seed_files=True,
+            )
+
+            for name in ("seed_master.hex", "seed_master.b64"):
+                path = res.pack_dir / name
+                self.assertTrue(path.is_file())
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
     def test_stamp_pack_fails_when_copied_payload_diverges(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -127,6 +161,39 @@ class TestPackHardening(unittest.TestCase):
 
             with self.assertRaises(ValueError):
                 stamp_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=False, derive_seed=False)
+
+    def test_verify_pack_uses_trusted_sha256_for_artifact_hashing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            res = stamp_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=False, derive_seed=False)
+
+            with patch("eps.pack.trusted_sha256_hex", wraps=pack_module.trusted_sha256_hex) as mocked:
+                verified = verify_pack(res.pack_dir)
+
+            self.assertTrue(verified.ok, msg=verified.errors)
+            self.assertGreaterEqual(mocked.call_count, 1)
+
+    def test_write_zip_uses_trusted_binary_reader(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            res = stamp_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=False, derive_seed=False)
+            zip_path = res.pack_dir / "entropy_pack.zip"
+
+            with patch("eps.pack.trusted_binary_reader", wraps=pack_module.trusted_binary_reader) as mocked:
+                _write_zip(res.pack_dir, zip_path)
+
+            self.assertTrue(zip_path.is_file())
+            self.assertGreaterEqual(mocked.call_count, 1)
 
 
 if __name__ == "__main__":
