@@ -327,7 +327,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return 1
         print(f"eps: error: {msg}", file=sys.stderr)
         if isinstance(exc, ValueError) and "must be a directory" in msg and "--input" in msg:
-            print("hint: pass an existing directory path; on macOS you can drag a folder into the terminal to paste its absolute path.", file=sys.stderr)
+            print("hint: pass an existing directory path; many terminals let you drag a folder into the window to paste its absolute path.", file=sys.stderr)
         return 2 if isinstance(exc, ValueError) else 1
 
 

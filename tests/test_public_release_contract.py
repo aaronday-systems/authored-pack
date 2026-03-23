@@ -21,6 +21,9 @@ class TestPublicReleaseContract(unittest.TestCase):
         self.assertIn("source-available", readme)
         self.assertIn("not OSI open source", readme)
         self.assertIn("Sealed mode is not implemented in V1", readme)
+        self.assertIn("macOS terminals", readme)
+        self.assertIn("Linux terminals", readme)
+        self.assertIn("best-effort", readme)
 
     def test_sealed_architecture_doc_is_marked_future_only(self) -> None:
         text = (ROOT / "docs" / "SEALED_PACK_ARCHITECTURE.md").read_text(encoding="utf-8")

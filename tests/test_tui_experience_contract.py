@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from eps import cli
@@ -48,7 +49,36 @@ class TestTuiExperienceContract(unittest.TestCase):
         self.assertIn("Current profile: Calm", joined)
         self.assertIn("Calm -> quiet guidance", joined)
         self.assertIn("Noisy -> optional ceremony cues", joined)
+        self.assertIn("local audio feedback when supported", joined)
         self.assertIn("does not improve entropy quality", joined)
+
+    def test_drop_zone_preview_uses_platform_neutral_language(self) -> None:
+        m = self.m
+        state = m.AppState(theme=m.Theme(normal=0, reverse=0, header=0))
+        preview = m._selection_preview(state, "Drop Zone", width=200, height=40)
+        joined = "\n".join(preview)
+        self.assertIn("Terminal drag-drop / paste", joined)
+        self.assertIn("Many terminals will paste the absolute path for you.", joined)
+        self.assertIn("Watched drop folder (deterministic)", joined)
+        self.assertNotIn("macOS", joined)
+        self.assertNotIn("Finder", joined)
+
+    def test_audio_player_command_supports_linux_stub_backend_selection(self) -> None:
+        m = self.m
+        wav_path = ROOT / "tests" / "fixtures" / "dummy.wav"
+        with mock.patch.object(m.sys, "platform", "linux"), mock.patch.object(
+            m.shutil,
+            "which",
+            side_effect=lambda name: "/usr/bin/paplay" if name == "paplay" else None,
+        ):
+            self.assertEqual(m._audio_player_command(wav_path), ["paplay", str(wav_path)])
+
+        with mock.patch.object(m.sys, "platform", "linux"), mock.patch.object(
+            m.shutil,
+            "which",
+            side_effect=lambda name: "/usr/bin/aplay" if name == "aplay" else None,
+        ):
+            self.assertEqual(m._audio_player_command(wav_path), ["aplay", "-q", str(wav_path)])
 
     def test_cli_help_mentions_first_success_path_and_machine_mode(self) -> None:
         help_text = cli.build_parser().format_help()

@@ -108,6 +108,11 @@ No install required. Run with system Python 3.11+:
 - CLI: `python3 -m eps --help`
 - Installed package entrypoint: `eps --help`
 
+Platform support target:
+- macOS terminals
+- Linux terminals
+- TUI audio cues are best-effort and may stay silent if no supported local WAV player is available
+
 Noisy-mode header words now come from the bundled file:
 - `assets/godel_words.txt`
 

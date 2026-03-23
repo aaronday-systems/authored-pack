@@ -741,14 +741,14 @@ def _image_ascii_cached(path: Path, *, cols: int = 72, rows: int = 28) -> List[s
 
 def _clean_dropped_path(s: str) -> str:
     """
-    Terminals on macOS often paste dropped paths either quoted or with backslash-escapes.
+    Many terminals paste dropped paths either quoted or with backslash-escapes.
     Normalize the common forms.
     """
     v = (s or "").strip()
     if not v:
         return ""
     if v.startswith("file://"):
-        # Finder may paste file:// URLs in some contexts.
+        # Some desktop file managers paste file:// URLs in some contexts.
         v = v[len("file://") :]
         try:
             v = urllib.parse.unquote(v)
@@ -891,12 +891,12 @@ def _dropzone_preview(state: AppState, *, width: int, height: int) -> List[str]:
     lines.append("")
     lines.append("Use this when you do not want to type paths.")
     lines.append("")
-    lines.append("1) Terminal drag-drop (best effort):")
+    lines.append("1) Terminal drag-drop / paste (best effort):")
     lines.append("   Press Enter to open a big path field, then drag a folder/file into the terminal.")
-    lines.append("   Most macOS terminals will paste the absolute path for you.")
+    lines.append("   Many terminals will paste the absolute path for you.")
     lines.append("   First 7 paths per burst are processed; extras are rejected.")
     lines.append("")
-    lines.append("2) Finder drop folder (deterministic):")
+    lines.append("2) Watched drop folder (deterministic):")
     lines.append(f"   Drop items into: {d.resolve() if d.exists() else d}")
     lines.append("   EPS will auto-detect new items and import them.")
     lines.append(f"   Items currently in folder: {state.drop_last_count}")
@@ -950,7 +950,7 @@ def _dropzone_preview(state: AppState, *, width: int, height: int) -> List[str]:
 def _poll_drop_dir(state: AppState) -> None:
     """
     Best-effort "drag and drop" via a filesystem landing zone.
-    Users can drop items into `state.drop_dir` (Finder can access /tmp via Go to Folder).
+    Users can drop items into `state.drop_dir` from a desktop file manager or shell.
     """
     d = state.drop_dir
     try:
@@ -1403,7 +1403,7 @@ def _experience_mode_lines(state: AppState) -> List[str]:
         "",
         f"Current profile: {profile}",
         "Calm -> quiet guidance, workflow-first previews, no UI audio.",
-        "Noisy -> optional ceremony cues, motion, and audio feedback.",
+        "Noisy -> optional ceremony cues, motion, and local audio feedback when supported.",
         "",
         "The pack, receipt, verification path, and seed derivation semantics do not change.",
         "Noisy mode does not improve entropy quality; it only changes operator affordances.",
@@ -1560,14 +1560,39 @@ def _triangle_wave(phase: float) -> float:
     return (4.0 * abs(frac - 0.5)) - 1.0
 
 
+def _audio_player_command(wav_path: Path) -> Optional[List[str]]:
+    """
+    Best-effort local WAV playback command.
+
+    macOS:
+    - afplay
+
+    Linux:
+    - paplay
+    - aplay
+
+    No supported local player means silent fallback.
+    """
+    s = str(wav_path)
+    if shutil.which("afplay") is not None:
+        return ["afplay", s]
+    if sys.platform.startswith("linux"):
+        if shutil.which("paplay") is not None:
+            return ["paplay", s]
+        if shutil.which("aplay") is not None:
+            return ["aplay", "-q", s]
+    return None
+
+
 def _play_wav_async_best_effort(wav_path: Path, *, timeout_s: float = 2.0, thread_name: str = "eps_sfx") -> None:
-    if shutil.which("afplay") is None:
+    cmd = _audio_player_command(wav_path)
+    if not cmd:
         return
 
     def _worker() -> None:
         try:
             p = subprocess.Popen(
-                ["afplay", str(wav_path)],
+                cmd,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -1806,9 +1831,10 @@ def _write_drop_triangle_wav(
 
 def _start_drop_import_sfx_best_effort(*, duration_s: float = 1.3) -> None:
     """
-    Best-effort drop cue for macOS (afplay). Non-fatal if unavailable.
+    Best-effort drop cue using a local audio player when available.
+    Non-fatal if unavailable.
     """
-    if shutil.which("afplay") is None:
+    if not _audio_player_command(Path("eps_drop.wav")):
         return
 
     tmp_dir = Path(tempfile.gettempdir())
@@ -1817,8 +1843,11 @@ def _start_drop_import_sfx_best_effort(*, duration_s: float = 1.3) -> None:
     def _worker() -> None:
         try:
             _write_drop_triangle_wav(wav_path, duration_s=float(duration_s), hold_hz=25.0, lfo_hz=8.0)
+            cmd = _audio_player_command(wav_path)
+            if not cmd:
+                return
             p = subprocess.Popen(
-                ["afplay", str(wav_path)],
+                cmd,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -1841,10 +1870,11 @@ def _start_drop_import_sfx_best_effort(*, duration_s: float = 1.3) -> None:
 
 def _start_supernova_sfx_best_effort(*, duration_s: float = 5.0) -> None:
     """
-    Best-effort audio effect for macOS (afplay). Non-fatal if unavailable.
+    Best-effort audio effect using a local audio player when available.
+    Non-fatal if unavailable.
     Runs async to avoid blocking the TUI.
     """
-    if shutil.which("afplay") is None:
+    if not _audio_player_command(Path("eps_supernova.wav")):
         return
 
     tmp_dir = Path(tempfile.gettempdir())
@@ -1854,8 +1884,11 @@ def _start_supernova_sfx_best_effort(*, duration_s: float = 5.0) -> None:
     def _worker() -> None:
         try:
             _write_modulated_sine_wav(wav_path, duration_s=dur, hold_hz=25.0, f_min_hz=100.0, f_max_hz=1000.0)
+            cmd = _audio_player_command(wav_path)
+            if not cmd:
+                return
             p = subprocess.Popen(
-                ["afplay", str(wav_path)],
+                cmd,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -3510,7 +3543,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         print("eps-tui: error: no TTY detected (curses requires an interactive terminal).", file=sys.stderr)
         print(
-            "hint: run from Terminal.app/iTerm2, or use the headless CLI: "
+            "hint: run from a real terminal, or use the headless CLI: "
             "`python3 -m eps stamp --input <dir> --out ./out`",
             file=sys.stderr,
         )
