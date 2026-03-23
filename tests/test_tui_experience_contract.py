@@ -39,7 +39,7 @@ class TestTuiExperienceContract(unittest.TestCase):
         self.assertIn("python3 -m eps stamp", joined)
         self.assertIn("python3 -m eps verify", joined)
         self.assertIn("stamp-bin --json", joined)
-        self.assertIn("not a CSPRNG replacement", joined)
+        self.assertIn("not an RNG", joined)
 
     def test_experience_preview_describes_calm_and_noisy_without_entropy_claims(self) -> None:
         m = self.m
@@ -60,6 +60,7 @@ class TestTuiExperienceContract(unittest.TestCase):
         self.assertIn("Terminal drag-drop / paste", joined)
         self.assertIn("Many terminals will paste the absolute path for you.", joined)
         self.assertIn("Watched drop folder (deterministic)", joined)
+        self.assertIn("Enter opens path input", joined)
         self.assertNotIn("macOS", joined)
         self.assertNotIn("Finder", joined)
 

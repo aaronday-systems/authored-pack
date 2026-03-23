@@ -35,6 +35,12 @@ class DummyStdScr:
     def refresh(self) -> None:
         return None
 
+    def erase(self) -> None:
+        return None
+
+    def addstr(self, *_args, **_kwargs) -> None:
+        return None
+
 
 class TestTuiP1Regressions(unittest.TestCase):
     @classmethod
@@ -335,6 +341,74 @@ class TestTuiP1Regressions(unittest.TestCase):
             self.assertEqual(call_count["n"], 1)
             self.assertEqual(len(state.drop_seen), 1)
             self.assertTrue(any("bad.txt" in msg for msg in state.drop_last_msgs))
+
+    def test_entropy_sources_menu_navigation_stays_on_menu_until_explicit_focus(self) -> None:
+        m = self.m
+        state = m.AppState(theme=m.Theme(normal=0, reverse=0, header=0))
+        state.selected = state.menu.index("Entropy Sources")
+        state.focus = "menu"
+
+        keep_running = m.handle_key(DummyStdScr(), state, m.curses.KEY_DOWN)
+
+        self.assertTrue(keep_running)
+        self.assertEqual(state.focus, "menu")
+        self.assertEqual(state.menu[state.selected], "Drop Zone")
+
+    def test_tab_on_empty_entropy_sources_keeps_menu_focus(self) -> None:
+        m = self.m
+        state = m.AppState(theme=m.Theme(normal=0, reverse=0, header=0))
+        state.selected = state.menu.index("Entropy Sources")
+        state.focus = "menu"
+
+        keep_running = m.handle_key(DummyStdScr(), state, 9)
+
+        self.assertTrue(keep_running)
+        self.assertEqual(state.focus, "menu")
+
+    def test_action_verify_logs_verified_path(self) -> None:
+        m = self.m
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            pack_dir = tmp_path / "out" / ("a" * 64)
+            pack_dir.mkdir(parents=True)
+            (pack_dir / "manifest.json").write_text("{}", encoding="utf-8")
+
+            state = m.AppState(theme=m.Theme(normal=0, reverse=0, header=0))
+            state.last_out_dir = tmp_path / "out"
+
+            orig_prompt_str = m._prompt_str_curses
+            orig_prompt_bool = m._prompt_bool_curses
+            orig_verify_pack = m.verify_pack
+
+            def fake_prompt_str(*_args, **_kwargs) -> str:
+                return str(tmp_path / "out")
+
+            def fake_prompt_bool(*_args, **_kwargs) -> bool:
+                return False
+
+            def fake_verify_pack(_pack, **_kwargs):
+                return SimpleNamespace(
+                    ok=True,
+                    root_sha256="a" * 64,
+                    payload_root_sha256="b" * 64,
+                    file_count=3,
+                    total_bytes=42,
+                    errors=[],
+                )
+
+            try:
+                m._prompt_str_curses = fake_prompt_str
+                m._prompt_bool_curses = fake_prompt_bool
+                m.verify_pack = fake_verify_pack
+                m._action_verify(state, DummyStdScr())
+            finally:
+                m._prompt_str_curses = orig_prompt_str
+                m._prompt_bool_curses = orig_prompt_bool
+                m.verify_pack = orig_verify_pack
+
+            self.assertEqual(state.status, "Done.")
+            self.assertTrue(any(line.startswith("verified_path: ") for line in state.log_lines))
+            self.assertTrue(any("used most recent pack in that folder" == line for line in state.log_lines))
 
     def test_audit_writer_skips_unwritable_entries_and_stays_transactional(self) -> None:
         m = self.m

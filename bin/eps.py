@@ -70,6 +70,7 @@ DIVIDER_NARROW = "-------+-------+-------+-------+-------+-------+-------+----"
 
 _UI_SFX_LOCK = threading.Lock()
 _UI_SFX_CACHE: Dict[str, Path] = {}
+_UI_SFX_LAST_NS: Dict[str, int] = {}
 LOCKDOWN_MIN_TAP_EVENTS = 16
 
 
@@ -171,6 +172,13 @@ def _artifact_exclude_picker(stdscr, state: "AppState", *, input_dir: Path, incl
             pass
         return None
 
+    stdscr.erase()
+    attr_t = state.palette.header[0] if (state.insane and state.palette) else state.theme.header
+    attr = state.palette.text if (state.insane and state.palette) else state.theme.normal
+    safe_addstr(stdscr, 0, 0, "ARTIFACTS // EXCLUDE FROM NEXT STAMP".ljust(cols), attr_t)
+    safe_addstr(stdscr, 2, 0, f"Scanning {_display_path(input_dir, max_len=max(24, cols - 12))} ...".ljust(cols), attr)
+    stdscr.refresh()
+
     items = _scan_artifacts_for_picker(Path(input_dir), include_hidden=bool(include_hidden))
     total = len(items)
     if total == 0:
@@ -205,7 +213,7 @@ def _artifact_exclude_picker(stdscr, state: "AppState", *, input_dir: Path, incl
     while True:
         stdscr.erase()
         title = "ARTIFACTS // EXCLUDE FROM NEXT STAMP"
-        sub = f"input: {str(Path(input_dir).resolve())}"
+        sub = f"input: {_display_path(Path(input_dir).resolve(), max_len=max(24, cols - 8))}"
         stats = f"total={total}  match={len(filtered)}  excluded={len(excludes)}  hidden={'on' if include_hidden else 'off'}"
         filt = f"filter: {query or '(none)'}   (press / to edit)"
 
@@ -568,6 +576,68 @@ def _fmt_bytes(n: int) -> str:
     return f"{n}B"
 
 
+def _shorten_middle(s: str, max_len: int) -> str:
+    v = str(s or "")
+    lim = max(8, int(max_len))
+    if len(v) <= lim:
+        return v
+    keep = max(2, (lim - 3) // 2)
+    tail = max(2, lim - 3 - keep)
+    return f"{v[:keep]}...{v[-tail:]}"
+
+
+def _display_path(path: Path | str | None, *, max_len: int = 40) -> str:
+    if path is None:
+        return "-"
+    raw = str(path)
+    try:
+        p = Path(path)
+        cwd = Path.cwd().resolve()
+        pp = p.expanduser()
+        if pp.is_absolute():
+            try:
+                raw = pp.relative_to(cwd).as_posix()
+                raw = f"./{raw}" if raw else "."
+            except Exception:
+                raw = pp.name or str(pp)
+        else:
+            raw = pp.as_posix()
+    except Exception:
+        raw = str(path)
+    return _shorten_middle(raw, max_len=max_len)
+
+
+def _iter_image_files_deterministic(root: Path, *, limit: int) -> List[Path]:
+    """
+    Deterministic bounded walk for interactive photo staging.
+    Stops as soon as `limit` image files are found.
+    """
+    out: List[Path] = []
+    stack: List[Path] = [Path(root)]
+    while stack and len(out) < int(limit):
+        cur = stack.pop()
+        try:
+            with os.scandir(cur) as it:
+                entries = sorted(list(it), key=lambda e: e.name)
+        except OSError:
+            continue
+        dirs: List[Path] = []
+        for ent in entries:
+            try:
+                if ent.is_dir(follow_symlinks=False):
+                    dirs.append(Path(ent.path))
+                    continue
+                if ent.is_file(follow_symlinks=False) and _is_image_path(Path(ent.path)):
+                    out.append(Path(ent.path))
+                    if len(out) >= int(limit):
+                        break
+            except OSError:
+                continue
+        for d in reversed(dirs):
+            stack.append(d)
+    return out
+
+
 def _sha256_hex_path(path: Path, *, max_bytes: Optional[int] = None) -> Tuple[str, int]:
     h = hashlib.sha256()
     n = 0
@@ -798,17 +868,13 @@ def _apply_drop_paths(state: AppState, paths: Sequence[str], *, max_apply: Optio
         p = Path(v).expanduser()
         if p.exists() and p.is_dir():
             state.last_input_dir = p.resolve()
-            msgs.append(f"Input dir set: {state.last_input_dir}")
+            msgs.append(f"Input dir set: {_display_path(state.last_input_dir, max_len=44)}")
             continue
         if p.exists() and p.is_file() and _is_image_path(p):
             try:
                 sha, size = _sha256_hex_path(p, max_bytes=100 * 1024 * 1024)
-                dims = _identify_image_dims(p)
-                meta: Dict[str, object] = {}
-                if dims:
-                    meta["dims"] = dims
                 state.entropy_sources.append(
-                    EntropySource(kind="photo", name=p.name, sha256=sha, size_bytes=size, meta=meta, path=p)
+                    EntropySource(kind="photo", name=p.name, sha256=sha, size_bytes=size, meta={}, path=p)
                 )
                 msgs.append(f"Photo source added: {p.name}")
                 continue
@@ -830,7 +896,7 @@ def _apply_drop_paths(state: AppState, paths: Sequence[str], *, max_apply: Optio
             except Exception as exc:
                 msgs.append(f"Text add failed: {p.name}: {exc}")
                 continue
-        msgs.append(f"Not usable: {p}")
+        msgs.append(f"Not usable: {_display_path(p, max_len=44)}")
 
     if msgs:
         # Keep selection in bounds if list grew.
@@ -897,12 +963,12 @@ def _dropzone_preview(state: AppState, *, width: int, height: int) -> List[str]:
     lines.append("   First 7 paths per burst are processed; extras are rejected.")
     lines.append("")
     lines.append("2) Watched drop folder (deterministic):")
-    lines.append(f"   Drop items into: {d.resolve() if d.exists() else d}")
+    lines.append(f"   Drop items into: {_display_path(d.resolve() if d.exists() else d, max_len=max(24, width - 18))}")
     lines.append("   EPS will auto-detect new items and import them.")
     lines.append(f"   Items currently in folder: {state.drop_last_count}")
     if state.drop_last_names:
         # Show a few to validate the user dropped into the right place.
-        sample = ", ".join(state.drop_last_names[:5])
+        sample = ", ".join(_shorten_middle(name, 18) for name in state.drop_last_names[:5])
         lines.append(f"   Recent items: {sample}")
     lines.append("")
     lines.append("Auto-import rules:")
@@ -911,7 +977,7 @@ def _dropzone_preview(state: AppState, *, width: int, height: int) -> List[str]:
     lines.append("- Dropped .txt/.md: added as Entropy Source (text)")
     lines.append("")
     if state.last_input_dir is not None:
-        lines.append(f"Current default input dir: {state.last_input_dir}")
+        lines.append(f"Current input dir: {_display_path(state.last_input_dir, max_len=max(24, width - 20))}")
     lines.append(f"Drop imports this run: {state.drop_import_count}")
     lines.append(f"Seen drop items this run: {have}")
     if state.drop_paste_buf:
@@ -922,7 +988,7 @@ def _dropzone_preview(state: AppState, *, width: int, height: int) -> List[str]:
         lines.append("Last import:")
         for m in state.drop_last_msgs[:3]:
             lines.append(f"- {m}")
-    lines.append("Tip: Use Tab/Up/Down to navigate; q jumps to Quit, Enter quits.")
+    lines.append("Tip: Up/Down moves. Enter opens path input. Esc backs out.")
 
     # Draw a big landing box.
     box_w = max(12, min(width - 2, 78))
@@ -1357,16 +1423,16 @@ def _ui_profile_name(state: AppState) -> str:
 
 def _header_action_for_label(label: str) -> str:
     actions = {
-        "90-Second Start": "stamp_then_verify",
-        "Experience Mode": "toggle_profile",
-        "Entropy Sources": "stage_optional_sources",
-        "Drop Zone": "drag_or_paste_paths",
-        "Stamp Pack": "stamp_pack",
-        "Verify Pack": "verify_pack",
-        "View README": "read_usage",
-        "View TUI Standard": "read_standard",
-        "View TUI Contract": "read_history",
-        "Quit": "exit",
+        "90-Second Start": "quickstart",
+        "Experience Mode": "profile",
+        "Entropy Sources": "sources",
+        "Drop Zone": "dropzone",
+        "Stamp Pack": "stamp",
+        "Verify Pack": "verify",
+        "View README": "readme",
+        "View TUI Standard": "standard",
+        "View TUI Contract": "history",
+        "Quit": "quit",
     }
     return actions.get(label, "none")
 
@@ -1375,23 +1441,23 @@ def _quickstart_lines() -> List[str]:
     return [
         "90-SECOND START // first clean success",
         "",
-        "EPS packages operator-supplied entropy-bearing input into a deterministic, auditable pack.",
-        "Use OS randomness for ordinary secrets. Reach for EPS when you want receipts, later verification, or a deliberate operator step.",
+        "EPS turns your files into a verifiable pack.",
+        "Use it when you want receipts, repeatable verification, or a deliberate human step.",
         "",
-        "First clean success:",
+        "Fast path:",
         "1. python3 -m eps stamp --input /ABS/PATH/TO/DIR --out ./out --zip",
         "2. python3 -m eps verify --pack ./out/<pack_root_sha256>",
         "",
-        "Then choose the path that fits the moment:",
-        "- busy humans -> stamp, verify, hand off the receipt/root",
-        "- nervous humans -> stage sources, decide calm/noisy, then stamp",
-        "- machines -> python3 -m eps stamp-bin --json",
+        "Then pick a mode:",
+        "- quick run -> stamp, verify, hand off the root",
+        "- guided run -> stage sources, choose calm/noisy, then stamp",
+        "- machine run -> python3 -m eps stamp-bin --json",
         "",
         "Trust boundary:",
-        "- not a CSPRNG replacement",
+        "- not an RNG",
         "- not entropy-quality certification",
-        "- evidence bundles are tamper-evident, not externally signed",
-        "- audiovisual cues are ceremony only; they do not improve entropy quality",
+        "- evidence bundles are tamper-evident, not signed provenance",
+        "- audio/visual cues are ceremony only",
     ]
 
 
@@ -1405,8 +1471,8 @@ def _experience_mode_lines(state: AppState) -> List[str]:
         "Calm -> quiet guidance, workflow-first previews, no UI audio.",
         "Noisy -> optional ceremony cues, motion, and local audio feedback when supported.",
         "",
-        "The pack, receipt, verification path, and seed derivation semantics do not change.",
-        "Noisy mode does not improve entropy quality; it only changes operator affordances.",
+        "The pack, receipt, verify path, and derived seed behavior do not change.",
+        "Noisy mode does not improve entropy quality.",
         "",
         f"Press Enter to switch to {alt}.",
         "Tip: use --noisy to start loud, or stay calm by default.",
@@ -1417,7 +1483,7 @@ def _stamp_preview_lines() -> List[str]:
     return [
         "STAMP // auditable file set -> verifiable pack",
         "",
-        "Use this when a human should deliberately contribute entropy-bearing input and you want receipts afterward.",
+        "Use this when a human is choosing the input and you want receipts afterward.",
         "",
         "Writes:",
         "- manifest.json",
@@ -1427,8 +1493,8 @@ def _stamp_preview_lines() -> List[str]:
         "- payload/...",
         "- optional entropy_pack.zip",
         "",
-        "Optional seed derivation is reproducible.",
-        "Root-only seed is the default path unless you explicitly mix staged sources.",
+        "Optional derived seed material is reproducible.",
+        "Root-only seed is the default unless you explicitly use staged sources.",
     ]
 
 
@@ -1584,10 +1650,25 @@ def _audio_player_command(wav_path: Path) -> Optional[List[str]]:
     return None
 
 
-def _play_wav_async_best_effort(wav_path: Path, *, timeout_s: float = 2.0, thread_name: str = "eps_sfx") -> None:
+def _play_wav_async_best_effort(
+    wav_path: Path,
+    *,
+    timeout_s: float = 2.0,
+    thread_name: str = "eps_sfx",
+    token: Optional[str] = None,
+    min_interval_s: float = 0.0,
+) -> None:
     cmd = _audio_player_command(wav_path)
     if not cmd:
         return
+    if token:
+        now_ns = time.monotonic_ns()
+        min_interval_ns = int(max(0.0, float(min_interval_s)) * 1_000_000_000)
+        with _UI_SFX_LOCK:
+            last_ns = int(_UI_SFX_LAST_NS.get(token, 0))
+            if min_interval_ns and (now_ns - last_ns) < min_interval_ns:
+                return
+            _UI_SFX_LAST_NS[token] = now_ns
 
     def _worker() -> None:
         try:
@@ -1600,7 +1681,15 @@ def _play_wav_async_best_effort(wav_path: Path, *, timeout_s: float = 2.0, threa
             try:
                 p.wait(timeout=max(0.2, float(timeout_s)))
             except Exception:
-                pass
+                try:
+                    p.terminate()
+                    p.wait(timeout=0.2)
+                except Exception:
+                    try:
+                        p.kill()
+                        p.wait(timeout=0.2)
+                    except Exception:
+                        pass
         except Exception:
             pass
 
@@ -1672,7 +1761,9 @@ def _ui_sfx_path(kind: str) -> Path:
 def _start_ui_move_sfx_best_effort() -> None:
     try:
         p = _ui_sfx_path("move")
-        _play_wav_async_best_effort(p, timeout_s=0.35, thread_name="eps_ui_move_sfx")
+        _play_wav_async_best_effort(
+            p, timeout_s=0.35, thread_name="eps_ui_move_sfx", token="move", min_interval_s=0.05
+        )
     except Exception:
         pass
 
@@ -1680,7 +1771,9 @@ def _start_ui_move_sfx_best_effort() -> None:
 def _start_ui_select_sfx_best_effort() -> None:
     try:
         p = _ui_sfx_path("select")
-        _play_wav_async_best_effort(p, timeout_s=0.5, thread_name="eps_ui_select_sfx")
+        _play_wav_async_best_effort(
+            p, timeout_s=0.5, thread_name="eps_ui_select_sfx", token="select", min_interval_s=0.08
+        )
     except Exception:
         pass
 
@@ -1855,7 +1948,15 @@ def _start_drop_import_sfx_best_effort(*, duration_s: float = 1.3) -> None:
             try:
                 p.wait(timeout=5)
             except Exception:
-                pass
+                try:
+                    p.terminate()
+                    p.wait(timeout=0.2)
+                except Exception:
+                    try:
+                        p.kill()
+                        p.wait(timeout=0.2)
+                    except Exception:
+                        pass
         except Exception:
             pass
         finally:
@@ -1896,7 +1997,15 @@ def _start_supernova_sfx_best_effort(*, duration_s: float = 5.0) -> None:
             try:
                 p.wait(timeout=10)
             except Exception:
-                pass
+                try:
+                    p.terminate()
+                    p.wait(timeout=0.2)
+                except Exception:
+                    try:
+                        p.kill()
+                        p.wait(timeout=0.2)
+                    except Exception:
+                        pass
         except Exception:
             pass
         finally:
@@ -2334,21 +2443,25 @@ def _entropy_sources_preview(state: AppState, *, width: int, height: int) -> Lis
     n = len(state.entropy_sources)
     eligible = _lockdown_eligible_sources(state.entropy_sources)
     n_eligible = len(eligible)
-    pool = _entropy_pool_sha256(eligible)[:16] if eligible else "none"
-    header = f"ENTROPY SOURCES // staged={n} eligible={n_eligible}/{min_n} for mixed-source seed  pool={pool}"
+    need = max(0, min_n - n_eligible)
+    header = "SOURCES // stage photos, text, or taps"
     lines: List[str] = [header, ""]
-    focus = "LIST" if state.focus == "entropy" else "MENU"
-    lines.append(f"FOCUS={focus}  Tab=toggle focus")
+    if n_eligible >= min_n:
+        lines.append(f"Mixed-source seed: ready ({n_eligible}/{min_n})")
+    else:
+        lines.append(f"Mixed-source seed: need {need} more ({n_eligible}/{min_n})")
     lines.append("")
-    lines.append("[A] Add Photos   [T] Add Text   [Space] Tap Entropy   [Enter] Preview   [D] Delete   [C] Clear")
+    if state.focus == "entropy" and state.entropy_sources:
+        lines.append("List focus. Up/Down moves sources. Tab returns to menu.")
+    else:
+        lines.append("Menu focus. A adds photos, T adds text, Space records taps.")
     lines.append("")
     if not state.entropy_sources:
-        lines.append("No sources staged.")
-        lines.append("Add at least 7 sources, then enable derive seed in Stamp Pack.")
+        lines.append("No sources yet.")
+        lines.append("Add 7 eligible sources to unlock mixed-source seed.")
         return lines[:height]
-    if n_eligible < min_n:
-        need = max(0, min_n - n_eligible)
-        lines.append(f"Seed-mix gate: need {need} more eligible unique source(s).")
+    if need > 0:
+        lines.append(f"Need {need} more eligible unique source(s) for mixed-source seed.")
         lines.append(f"Tap sources need >= {LOCKDOWN_MIN_TAP_EVENTS} events.")
         lines.append("")
 
@@ -2372,8 +2485,7 @@ def _entropy_sources_preview(state: AppState, *, width: int, height: int) -> Lis
             meta_bits.append("dupe")
         seen_ids.add(sid)
         meta = (" " + " ".join(meta_bits)) if meta_bits else ""
-        short = s.sha256[:10]
-        lines.append(f"{mark} [{s.kind}] {s.name}  {_fmt_bytes(s.size_bytes)}  sha={short}{meta}")
+        lines.append(f"{mark} [{s.kind}] {_shorten_middle(s.name, 28)}  {_fmt_bytes(s.size_bytes)}{meta}")
     return [ln[:width] for ln in lines[:height]]
 
 
@@ -2422,9 +2534,12 @@ def _draw_footer(stdscr, state: AppState, rows: int, cols: int) -> None:
 
     label = state.menu[state.selected] if 0 <= state.selected < len(state.menu) else ""
     if label == "Entropy Sources":
-        legend = "Up/Down: move  Tab: focus  A/T/Space: add  Enter: preview  M: mode  Esc: back"
+        if state.focus == "entropy" and state.entropy_sources:
+            legend = "Up/Down: list  Tab: menu  Enter: preview  D/C: edit  Esc: back"
+        else:
+            legend = "Up/Down: menu  Tab: list  A/T/Space: add  M: mode  Esc: back"
     elif label == "Drop Zone":
-        legend = "Up/Down: move  Enter: drop path  Esc: back"
+        legend = "Up/Down: move  Enter: paste path  Esc: back"
     elif label == "Experience Mode":
         legend = "Enter/M: toggle mode  Esc: back"
     else:
@@ -2562,7 +2677,14 @@ def _run_outside_curses(stdscr, fn: Callable[[], None]) -> None:
 
 def _prompt_str_curses(stdscr, label: str, *, default: str = "", max_len: int = 512) -> str:
     rows, cols = stdscr.getmaxyx()
-    prompt = f"{label} [{default}]: " if default else f"{label}: "
+    lower_label = str(label).lower()
+    show_default = str(default)
+    if default and any(tok in lower_label for tok in ("path", "dir", "file", "@sources")):
+        show_default = _display_path(default, max_len=max(20, cols // 2))
+    prompt = f"{label} [{show_default}]: " if default else f"{label}: "
+    effective_max_len = int(max_len)
+    if effective_max_len <= 512 and any(tok in lower_label for tok in ("path", "dir", "file")):
+        effective_max_len = 4096
     y = rows - 1
     stdscr.move(y, 0)
     stdscr.clrtoeol()
@@ -2576,7 +2698,7 @@ def _prompt_str_curses(stdscr, label: str, *, default: str = "", max_len: int = 
     try:
         # Allow long paste (e.g. drag-dropped absolute paths). ncurses will scroll horizontally;
         # constraining to screen width truncates paths and makes drop feel "broken".
-        raw = stdscr.getstr(y, min(len(prompt), max(0, cols - 1)), int(max_len))
+        raw = stdscr.getstr(y, min(len(prompt), max(0, cols - 1)), effective_max_len)
     finally:
         curses.noecho()
         try:
@@ -2624,37 +2746,32 @@ def _action_entropy_add_photos(state: AppState, stdscr) -> None:
         state.status = "Failed."
         state.log_lines = [f"Entropy add failed: not found: {p}"]
         return
+    state.status = "Scanning photos..."
+    state.log_lines = [f"source: {_display_path(p, max_len=44)}"]
+    draw(stdscr, state)
     paths: List[Path] = []
     if p.is_file():
         paths = [p]
     elif p.is_dir():
-        # Deterministic scan. Bound it to keep the UI responsive.
-        for fp in sorted(p.rglob("*")):
-            try:
-                if fp.is_file() and _is_image_path(fp):
-                    paths.append(fp)
-            except OSError:
-                continue
-            if len(paths) >= 250:
-                break
+        paths = _iter_image_files_deterministic(p, limit=250)
     else:
         state.status = "Failed."
         state.log_lines = [f"Entropy add failed: not a file/dir: {p}"]
         return
 
     added = 0
-    for fp in paths:
+    total = len(paths)
+    for idx, fp in enumerate(paths, start=1):
+        if idx == 1 or idx % 20 == 0 or idx == total:
+            state.status = f"Scanning photos... {idx}/{total}"
+            draw(stdscr, state)
         try:
             sha, size = _sha256_hex_path(fp, max_bytes=100 * 1024 * 1024)
         except Exception:
             continue
         name = fp.name
-        dims = _identify_image_dims(fp)
-        meta: Dict[str, object] = {}
-        if dims:
-            meta["dims"] = dims
         state.entropy_sources.append(
-            EntropySource(kind="photo", name=name, sha256=sha, size_bytes=size, meta=meta, path=fp)
+            EntropySource(kind="photo", name=name, sha256=sha, size_bytes=size, meta={}, path=fp)
         )
         added += 1
 
@@ -2662,6 +2779,8 @@ def _action_entropy_add_photos(state: AppState, stdscr) -> None:
         _trigger_interaction_flash(state, drop_zone=False)
         state.status = "Done."
         state.log_lines = [f"Added {added} photo source(s)."]
+        if total >= 250:
+            state.log_lines.append("Scan capped at 250 images for responsiveness.")
     else:
         state.status = "Failed."
         state.log_lines = ["No valid images found or hash failed."]
@@ -2975,7 +3094,7 @@ def _action_stamp(state: AppState, stdscr) -> None:
             state.selected = state.menu.index("Entropy Sources")
         except ValueError:
             state.selected = 0
-        state.focus = "entropy"
+        state.focus = "menu"
         return
 
     state.status = "Stamp: configure..."
@@ -2987,15 +3106,15 @@ def _action_stamp(state: AppState, stdscr) -> None:
 
     default_out = str(state.last_out_dir) if state.last_out_dir is not None else "./out"
     default_in = str(state.last_input_dir) if state.last_input_dir is not None else "."
-    input_s = _prompt_str_curses(stdscr, "(EPS) input dir (or @sources)", default=default_in)
-    out_s = _prompt_str_curses(stdscr, "(EPS) out dir", default=default_out)
-    pack_id_s = _prompt_str_curses(stdscr, "(EPS) pack_id (optional)", default="")
-    notes_s = _prompt_str_curses(stdscr, "(EPS) notes (optional)", default="")
-    created_at_s = _prompt_str_curses(stdscr, "(EPS) created_at_utc (optional)", default="")
+    input_s = _prompt_str_curses(stdscr, "(EPS) input folder or @sources", default=default_in)
+    out_s = _prompt_str_curses(stdscr, "(EPS) output folder", default=default_out)
+    pack_id_s = _prompt_str_curses(stdscr, "(EPS) label (optional)", default="")
+    notes_s = _prompt_str_curses(stdscr, "(EPS) note (optional)", default="")
+    created_at_s = _prompt_str_curses(stdscr, "(EPS) timestamp UTC (optional)", default="")
     include_hidden = _prompt_bool_curses(stdscr, "(EPS) include hidden files", default=False)
     exclude_picker = False
     if input_s.strip() != "@sources":
-        exclude_picker = _prompt_bool_curses(stdscr, "(EPS) exclude artifacts before stamping (picker)", default=False)
+        exclude_picker = _prompt_bool_curses(stdscr, "(EPS) pick files to exclude before stamp", default=False)
     zip_pack = _prompt_bool_curses(stdscr, "(EPS) write entropy_pack.zip", default=True)
     derive_seed = _prompt_bool_curses(stdscr, "(EPS) derive seed", default=bool(state.insane))
     mix_sources = False
@@ -3003,27 +3122,26 @@ def _action_stamp(state: AppState, stdscr) -> None:
     mixed_sources: List[EntropySource] = []
     seed_path_label: Optional[str] = None
     if derive_seed and state.entropy_sources:
-        mix_sources = _prompt_bool_curses(stdscr, "(EPS) mix staged entropy sources into seed", default=True)
+        mix_sources = _prompt_bool_curses(stdscr, "(EPS) use staged sources in seed", default=True)
         if mix_sources:
             mixed_sources = _lockdown_eligible_sources(state.entropy_sources)
             if len(mixed_sources) < int(state.entropy_min_sources):
                 need_more = int(state.entropy_min_sources) - len(mixed_sources)
                 state.status = "Failed."
                 state.log_lines = [
-                    "Stamp blocked: not enough entropy sources.",
-                    f"Need {state.entropy_min_sources} eligible unique sources, have {len(mixed_sources)}.",
-                    f"Staged sources total: {len(state.entropy_sources)}.",
-                    f"Tap sources require >= {LOCKDOWN_MIN_TAP_EVENTS} events.",
-                    f"Add {need_more} more (photos/text/tap), then try again.",
+                    "Stamp blocked: not enough eligible sources.",
+                    f"Need {state.entropy_min_sources}, have {len(mixed_sources)}.",
+                    f"Add {need_more} more unique sources.",
+                    f"Tap sources need >= {LOCKDOWN_MIN_TAP_EVENTS} key events.",
                 ]
                 # Guide the user back to the deterministic path: go stage more sources now.
                 try:
                     state.selected = state.menu.index("Entropy Sources")
                 except ValueError:
                     state.selected = 0
-                state.focus = "entropy"
+                state.focus = "menu"
                 return
-            seed_path_label = "LOCKDOWN mixed-source derivation"
+            seed_path_label = "mixed-source seed"
             pool_sha = _entropy_pool_sha256(mixed_sources)
         else:
             seed_path_label = "root-only seed"
@@ -3035,14 +3153,14 @@ def _action_stamp(state: AppState, stdscr) -> None:
     write_sources = (
         _prompt_bool_curses(
             stdscr,
-            "(EPS) write entropy_sources into pack (excluded from entropy_pack.zip)",
+            "(EPS) write entropy source audit into pack",
             default=write_sources_default,
         )
         if derive_seed
         else False
     )
     evidence_default = bool(derive_seed)
-    evidence_bundle = _prompt_bool_curses(stdscr, "(EPS) write evidence bundle zip (tamper-evident)", default=evidence_default)
+    evidence_bundle = _prompt_bool_curses(stdscr, "(EPS) write evidence bundle zip", default=evidence_default)
 
     tmp_payload_dir: Optional[Path] = None
     sources_for_audit: Sequence[EntropySource] = mixed_sources if mix_sources else state.entropy_sources
@@ -3126,6 +3244,9 @@ def _action_stamp(state: AppState, stdscr) -> None:
         if state.insane:
             res = _stamp_with_insane_fx(stdscr, state, _do_stamp, min_stamping_s=5.0, created_s=5.0)
         else:
+            state.status = "Stamping..."
+            state.log_lines = ["Building pack..."]
+            draw(stdscr, state)
             res = _do_stamp()
     except Exception as exc:
         state.log_lines = ["Stamp failed.", f"- {exc}"]
@@ -3147,9 +3268,9 @@ def _action_stamp(state: AppState, stdscr) -> None:
     evidence_sha = getattr(res, "evidence_bundle_sha256", None)
     state.log_lines = [
         "Stamp complete.",
-        f"input_dir: {input_dir.resolve()}",
-        f"out_dir: {out_dir.resolve()}",
-        f"pack_dir: {res.pack_dir}",
+        f"input: {_display_path(input_dir, max_len=44)}",
+        f"out: {_display_path(out_dir, max_len=44)}",
+        f"pack: {_display_path(res.pack_dir, max_len=44)}",
         f"pack_root_sha256: {pack_root}",
     ]
     if payload_root:
@@ -3170,11 +3291,11 @@ def _action_stamp(state: AppState, stdscr) -> None:
     for w in audit_warnings:
         state.log_lines.append(f"warning: entropy_sources audit: {w}")
     if audit_dir_path is not None:
-        state.log_lines.append(f"entropy_sources_dir: {audit_dir_path}")
+        state.log_lines.append(f"entropy_sources_dir: {_display_path(audit_dir_path, max_len=44)}")
     if zip_path is not None:
-        state.log_lines.append(f"entropy_pack_zip: {zip_path}")
+        state.log_lines.append(f"entropy_pack_zip: {_display_path(zip_path, max_len=44)}")
     if evidence_path is not None:
-        state.log_lines.append(f"evidence_bundle: {evidence_path}")
+        state.log_lines.append(f"evidence_bundle: {_display_path(evidence_path, max_len=44)}")
     if evidence_sha:
         state.log_lines.append(f"evidence_bundle_sha256: {evidence_sha}")
     if show_seed and res.seed_master is not None:
@@ -3188,6 +3309,7 @@ def _action_verify(state: AppState, stdscr) -> None:
     default = str(state.last_pack_dir) if state.last_pack_dir is not None else (str(state.last_out_dir) if state.last_out_dir is not None else "./out")
     pack_s = _prompt_str_curses(stdscr, "(EPS) pack path (dir or .zip)", default=default)
     pack = Path(pack_s).expanduser()
+    auto_selected = False
     allow_large_manifest = _prompt_bool_curses(
         stdscr,
         "(EPS) allow large manifest.json (32 MiB cap)",
@@ -3202,10 +3324,13 @@ def _action_verify(state: AppState, stdscr) -> None:
         if candidates:
             candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
             picked = candidates[0]
-            state.log_lines = [f"Auto-selected pack dir: {picked}"]
+            auto_selected = True
+            state.log_lines = [f"Auto-selected recent pack: {_display_path(picked, max_len=44)}"]
             pack = picked
     try:
         cap = (32 * 1024 * 1024) if allow_large_manifest else int(DEFAULT_MAX_MANIFEST_BYTES)
+        state.status = "Verifying..."
+        draw(stdscr, state)
         res = verify_pack(pack, max_manifest_bytes=int(cap))
     except Exception as exc:
         state.log_lines = ["Verify failed.", f"- {exc}"]
@@ -3214,12 +3339,15 @@ def _action_verify(state: AppState, stdscr) -> None:
     if res.ok:
         state.log_lines = [
             "Verify ok.",
+            f"verified_path: {_display_path(pack, max_len=44)}",
             f"pack_root_sha256: {res.root_sha256}",
             f"artifact_count_verified: {res.file_count}",
             f"artifact_bytes_verified: {res.total_bytes}",
         ]
+        if auto_selected:
+            state.log_lines.insert(1, "used most recent pack in that folder")
         if res.payload_root_sha256:
-            state.log_lines.insert(2, f"payload_root_sha256: {res.payload_root_sha256}")
+            state.log_lines.insert(3 if auto_selected else 2, f"payload_root_sha256: {res.payload_root_sha256}")
         state.status = "Done."
     else:
         state.log_lines = ["Verify failed."] + [f"- {e}" for e in res.errors]
@@ -3317,7 +3445,10 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
     # Focus toggle.
     if ch in (9, getattr(curses, "KEY_BTAB", -999)):
         if label == "Entropy Sources":
-            state.focus = "entropy" if state.focus == "menu" else "menu"
+            if state.focus == "menu" and state.entropy_sources:
+                state.focus = "entropy"
+            else:
+                state.focus = "menu"
         else:
             state.focus = "menu"
         return True
@@ -3370,11 +3501,11 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
 
     # Entropy Sources mode has its own navigation/actions.
     if label == "Entropy Sources":
-        if ch in (curses.KEY_UP, ord("k")) and state.focus == "entropy":
+        if ch in (curses.KEY_UP, ord("k")) and state.focus == "entropy" and state.entropy_sources:
             state.entropy_selected = max(0, state.entropy_selected - 1)
             state.status = "Ready."
             return True
-        if ch in (curses.KEY_DOWN, ord("j")) and state.focus == "entropy":
+        if ch in (curses.KEY_DOWN, ord("j")) and state.focus == "entropy" and state.entropy_sources:
             state.entropy_selected = min(max(0, len(state.entropy_sources) - 1), state.entropy_selected + 1)
             state.status = "Ready."
             return True
@@ -3393,10 +3524,17 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
         if ch in (ord("c"), ord("C")):
             _action_entropy_clear(state)
             return True
-        if ch in (curses.KEY_ENTER, 10, 13) and state.focus == "entropy":
+        if ch in (curses.KEY_ENTER, 10, 13) and state.focus == "entropy" and state.entropy_sources:
             if state.insane:
                 _start_ui_select_sfx_best_effort()
             _action_entropy_preview(state)
+            return True
+        if ch in (curses.KEY_ENTER, 10, 13) and state.focus == "menu":
+            if state.entropy_sources:
+                state.focus = "entropy"
+                state.status = "Ready."
+            else:
+                state.status = "Add a source with A, T, or Space."
             return True
 
     if ch in (curses.KEY_UP, ord("k")):
@@ -3404,8 +3542,7 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
         state.selected = max(0, state.selected - 1)
         if state.selected != old and state.insane:
             _start_ui_move_sfx_best_effort()
-        label2 = state.menu[state.selected] if 0 <= state.selected < len(state.menu) else ""
-        state.focus = "entropy" if label2 == "Entropy Sources" else "menu"
+        state.focus = "menu"
         state.status = "Ready."
         state.log_lines = []
         return True
@@ -3414,8 +3551,7 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
         state.selected = min(len(state.menu) - 1, state.selected + 1)
         if state.selected != old and state.insane:
             _start_ui_move_sfx_best_effort()
-        label2 = state.menu[state.selected] if 0 <= state.selected < len(state.menu) else ""
-        state.focus = "entropy" if label2 == "Entropy Sources" else "menu"
+        state.focus = "menu"
         state.status = "Ready."
         state.log_lines = []
         return True
@@ -3438,7 +3574,10 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
         if label == "Entropy Sources":
             # With focus on the menu, Enter toggles focus into the entropy list.
             if state.focus == "menu":
-                state.focus = "entropy"
+                if state.entropy_sources:
+                    state.focus = "entropy"
+                else:
+                    state.status = "Add a source with A, T, or Space."
             return True
         if label == "Drop Zone":
             return True
