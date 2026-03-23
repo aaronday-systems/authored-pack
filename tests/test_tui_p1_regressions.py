@@ -23,6 +23,9 @@ def _load_eps_tui_module():
 
 
 class DummyStdScr:
+    def __init__(self, inputs: list[int] | None = None) -> None:
+        self.inputs = list(inputs or [])
+
     def getmaxyx(self) -> tuple[int, int]:
         return (24, 80)
 
@@ -39,6 +42,17 @@ class DummyStdScr:
         return None
 
     def addstr(self, *_args, **_kwargs) -> None:
+        return None
+
+    def getch(self) -> int:
+        if self.inputs:
+            return self.inputs.pop(0)
+        return -1
+
+    def nodelay(self, *_args, **_kwargs) -> None:
+        return None
+
+    def timeout(self, *_args, **_kwargs) -> None:
         return None
 
 
@@ -294,21 +308,37 @@ class TestTuiP1Regressions(unittest.TestCase):
             state.drop_dir = drop_dir
             call_count = {"n": 0}
 
-            orig_apply = m._apply_drop_paths
+            orig_prepare = m._prepare_drop_actions
 
-            def fake_apply_drop_paths(_state, paths, *, max_apply=None):
+            def fake_prepare_drop_actions(paths, *, seen_keys=None, max_apply=None):
                 call_count["n"] += 1
                 if call_count["n"] == 1:
-                    return [f"Text add failed: {paths[0]}: busy"]
-                return [f"Text source added: {Path(paths[0]).name}"]
+                    return [
+                        m.DropPreparedAction(
+                            message=f"Text add failed: {paths[0]}: busy",
+                            success=False,
+                            terminal=False,
+                            seen_key=seen_keys[0] if seen_keys else None,
+                        )
+                    ]
+                return [
+                    m.DropPreparedAction(
+                        message=f"Text source added: {Path(paths[0]).name}",
+                        success=True,
+                        seen_key=seen_keys[0] if seen_keys else None,
+                        source=m.EntropySource(kind="text", name="landed.txt", sha256="a" * 64, size_bytes=5, text="hello"),
+                    )
+                ]
 
             try:
-                m._apply_drop_paths = fake_apply_drop_paths
+                m._prepare_drop_actions = fake_prepare_drop_actions
                 m._poll_drop_dir(state)
+                m._drain_drop_results(state)
                 self.assertEqual(state.drop_seen, set())
                 m._poll_drop_dir(state)
+                m._drain_drop_results(state)
             finally:
-                m._apply_drop_paths = orig_apply
+                m._prepare_drop_actions = orig_prepare
 
             self.assertTrue(any("landed.txt" in msg for msg in state.drop_last_msgs))
             self.assertEqual(len(state.drop_seen), 1)
@@ -325,22 +355,36 @@ class TestTuiP1Regressions(unittest.TestCase):
             state.drop_dir = drop_dir
             call_count = {"n": 0}
 
-            orig_apply = m._apply_drop_paths
+            orig_prepare = m._prepare_drop_actions
 
-            def fake_apply_drop_paths(_state, paths, *, max_apply=None):
+            def fake_prepare_drop_actions(paths, *, seen_keys=None, max_apply=None):
                 call_count["n"] += 1
-                return [f"Not usable: {paths[0]}"]
+                return [
+                    m.DropPreparedAction(
+                        message=f"Not usable: {paths[0]}",
+                        success=False,
+                        terminal=True,
+                        seen_key=seen_keys[0] if seen_keys else None,
+                    )
+                ]
 
             try:
-                m._apply_drop_paths = fake_apply_drop_paths
+                m._prepare_drop_actions = fake_prepare_drop_actions
                 m._poll_drop_dir(state)
+                m._drain_drop_results(state)
                 m._poll_drop_dir(state)
+                m._drain_drop_results(state)
             finally:
-                m._apply_drop_paths = orig_apply
+                m._prepare_drop_actions = orig_prepare
 
             self.assertEqual(call_count["n"], 1)
             self.assertEqual(len(state.drop_seen), 1)
             self.assertTrue(any("bad.txt" in msg for msg in state.drop_last_msgs))
+
+    def test_prompt_str_curses_returns_none_on_escape(self) -> None:
+        m = self.m
+        stdscr = DummyStdScr(inputs=[27])
+        self.assertIsNone(m._prompt_str_curses(stdscr, "(EPS) path", default="."))
 
     def test_entropy_sources_menu_navigation_stays_on_menu_until_explicit_focus(self) -> None:
         m = self.m

@@ -210,6 +210,15 @@ def _finalize_public_artifacts(
     return zip_path, evidence_path, evidence_sha
 
 
+def _load_existing_receipt(pack_dir: Path) -> Dict[str, object]:
+    receipt_path = pack_dir / "receipt.json"
+    raw = _read_file_bytes_limited(receipt_path, max_bytes=DEFAULT_MAX_MANIFEST_BYTES)
+    data = json.loads(raw.decode("utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("existing receipt.json is not an object")
+    return data
+
+
 def _verify_one_artifact_in_dir(pack_dir: Path, *, idx: int, rel_s: str, size: int, sha: str) -> Optional[str]:
     rel_path = Path(rel_s)
     target = pack_dir / rel_path
@@ -595,6 +604,7 @@ def stamp_pack(
                             + (strict.errors[0] if strict.errors else "unknown error")
                         )
                     zip_path = pack_dir / "entropy_pack.zip"
+                    existing_zip_path: Optional[Path] = None
                     if zip_path.is_file():
                         if zip_path.is_symlink():
                             raise ValueError("existing entropy_pack.zip is a symlink")
@@ -604,41 +614,12 @@ def stamp_pack(
                                 "existing entropy_pack.zip failed verification: "
                                 + (zip_res.errors[0] if zip_res.errors else "unknown error")
                             )
-                    if derive_seed and write_seed_files and seed_master is not None:
-                        seed_hex = seed_master.hex()
-                        seed_b64 = base64.b64encode(seed_master).decode("ascii")
-                        _safe_write_text(pack_dir / "seed_master.hex", seed_hex + "\n")
-                        _safe_write_text(pack_dir / "seed_master.b64", seed_b64 + "\n")
-                        _chmod_600(pack_dir / "seed_master.hex")
-                        _chmod_600(pack_dir / "seed_master.b64")
-                    _write_root_alias_files(pack_dir, root_sha)
-                    extra_receipt_fields: Optional[Dict[str, object]] = None
-                    if before_finalize is not None:
-                        raw_extra = before_finalize(pack_dir)
-                        if raw_extra is not None:
-                            if not isinstance(raw_extra, dict):
-                                raise ValueError("before_finalize must return a dict or None")
-                            extra_receipt_fields = dict(raw_extra)
-                    effective_zip = bool(zip_pack or (pack_dir / "entropy_pack.zip").is_file())
-                    effective_evidence = bool(
-                        evidence_bundle or _existing_evidence_bundle_path(pack_dir, root_sha) is not None
-                    )
-                    receipt = _build_receipt(
-                        root_sha256=root_sha,
-                        payload_root_sha256=payload_root,
-                        pack_id=pack_id,
-                        artifact_entries=artifact_entries,
-                        zip_path=Path("entropy_pack.zip") if effective_zip else None,
-                        derivation=derivation,
-                        seed_master=seed_master,
-                        extra_fields=extra_receipt_fields,
-                    )
-                    zip_path, ev_path, ev_sha = _finalize_public_artifacts(
-                        pack_dir,
-                        receipt=receipt,
-                        zip_pack=effective_zip,
-                        evidence_bundle=effective_evidence,
-                    )
+                        existing_zip_path = zip_path
+                    receipt = _load_existing_receipt(pack_dir)
+                    ev_path = _existing_evidence_bundle_path(pack_dir, root_sha)
+                    ev_sha: Optional[str] = None
+                    if ev_path is not None:
+                        ev_sha = sha256_hex(ev_path.read_bytes())
                     if print_seed and seed_master is not None:
                         _print_seed_material(seed_master)
                     try:
@@ -649,9 +630,9 @@ def stamp_pack(
                         pack_dir=pack_dir,
                         root_sha256=root_sha,
                         payload_root_sha256=payload_root,
-                        receipt=receipt,
+                        receipt=dict(receipt),
                         seed_master=seed_master,
-                        zip_path=zip_path,
+                        zip_path=existing_zip_path,
                         evidence_bundle_path=ev_path,
                         evidence_bundle_sha256=ev_sha,
                     )

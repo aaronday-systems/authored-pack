@@ -27,6 +27,7 @@ import hashlib
 import json
 import math
 import os
+import queue
 import random
 import re
 import shutil
@@ -288,6 +289,8 @@ def _artifact_exclude_picker(stdscr, state: "AppState", *, input_dir: Path, incl
             continue
         if ch == ord("/"):
             q2 = _prompt_str_curses(stdscr, "(EPS) filter substring", default=query, max_len=200)
+            if q2 is None:
+                continue
             query = q2.strip()
             filtered = _filtered_indices()
             sel = 0
@@ -500,6 +503,24 @@ class EntropySource:
 
 
 @dataclass
+class DropPreparedAction:
+    message: str
+    success: bool = False
+    terminal: bool = False
+    seen_key: Optional[str] = None
+    input_dir: Optional[Path] = None
+    source: Optional[EntropySource] = None
+
+
+@dataclass
+class DropBatchRequest:
+    paths: List[str]
+    seen_keys: List[Optional[str]]
+    play_sfx: bool
+    max_apply: Optional[int] = None
+
+
+@dataclass
 class AppState:
     theme: Theme
     insane: bool = False
@@ -527,6 +548,9 @@ class AppState:
     drop_import_count: int = 0
     drop_last_msgs: List[str] = field(default_factory=list)
     drop_last_msgs_ticks: int = 0
+    drop_pending_requests: List[DropBatchRequest] = field(default_factory=list)
+    drop_results: "queue.SimpleQueue[Tuple[List[DropPreparedAction], bool]]" = field(default_factory=queue.SimpleQueue)
+    drop_worker_busy: bool = False
     focus: str = "menu"  # "menu" | "entropy"
     reward_ticks: int = 0
     menu: List[str] = field(
@@ -855,31 +879,63 @@ def _split_drop_payload(s: str) -> List[str]:
     return out
 
 
-def _apply_drop_paths(state: AppState, paths: Sequence[str], *, max_apply: Optional[int] = None) -> List[str]:
+def _prepare_drop_actions(
+    paths: Sequence[str],
+    *,
+    seen_keys: Optional[Sequence[Optional[str]]] = None,
+    max_apply: Optional[int] = None,
+) -> List[DropPreparedAction]:
     """
-    Apply dropped paths: set default input dir and/or import entropy sources.
-    Returns log lines for what happened.
+    Resolve dropped paths into actions without mutating AppState.
+    Heavy filesystem/hash work lives here so it can run off the UI thread.
     """
-    msgs: List[str] = []
+    actions: List[DropPreparedAction] = []
+    keys = list(seen_keys) if seen_keys is not None else [None] * len(paths)
     for idx, v in enumerate(paths):
+        seen_key = keys[idx] if idx < len(keys) else None
         if max_apply is not None and idx >= int(max_apply):
-            msgs.append(f"Rejected (limit {int(max_apply)} per burst): {v}")
+            actions.append(
+                DropPreparedAction(
+                    message=f"Rejected (limit {int(max_apply)} per burst): {_display_path(v, max_len=44)}",
+                    terminal=True,
+                    seen_key=seen_key,
+                )
+            )
             continue
+
         p = Path(v).expanduser()
         if p.exists() and p.is_dir():
-            state.last_input_dir = p.resolve()
-            msgs.append(f"Input dir set: {_display_path(state.last_input_dir, max_len=44)}")
+            resolved = p.resolve()
+            actions.append(
+                DropPreparedAction(
+                    message=f"Input dir set: {_display_path(resolved, max_len=44)}",
+                    success=True,
+                    seen_key=seen_key,
+                    input_dir=resolved,
+                )
+            )
             continue
         if p.exists() and p.is_file() and _is_image_path(p):
             try:
                 sha, size = _sha256_hex_path(p, max_bytes=100 * 1024 * 1024)
-                state.entropy_sources.append(
-                    EntropySource(kind="photo", name=p.name, sha256=sha, size_bytes=size, meta={}, path=p)
+                actions.append(
+                    DropPreparedAction(
+                        message=f"Photo source added: {p.name}",
+                        success=True,
+                        seen_key=seen_key,
+                        source=EntropySource(kind="photo", name=p.name, sha256=sha, size_bytes=size, meta={}, path=p),
+                    )
                 )
-                msgs.append(f"Photo source added: {p.name}")
                 continue
             except Exception as exc:
-                msgs.append(f"Photo add failed: {p.name}: {exc}")
+                actions.append(
+                    DropPreparedAction(
+                        message=f"Photo add failed: {p.name}: {exc}",
+                        success=False,
+                        terminal=False,
+                        seen_key=seen_key,
+                    )
+                )
                 continue
         if p.exists() and p.is_file() and p.suffix.lower() in (".txt", ".md", ".markdown"):
             try:
@@ -887,22 +943,109 @@ def _apply_drop_paths(state: AppState, paths: Sequence[str], *, max_apply: Optio
                 if len(data) > 2_000_000:
                     data = data[:2_000_000]
                 txt = data.decode("utf-8", errors="ignore")
-                sha = hashlib.sha256(txt.encode("utf-8", errors="ignore")).hexdigest()
-                state.entropy_sources.append(
-                    EntropySource(kind="text", name=p.name, sha256=sha, size_bytes=len(txt.encode("utf-8")), text=txt)
+                raw = txt.encode("utf-8", errors="ignore")
+                sha = hashlib.sha256(raw).hexdigest()
+                actions.append(
+                    DropPreparedAction(
+                        message=f"Text source added: {p.name}",
+                        success=True,
+                        seen_key=seen_key,
+                        source=EntropySource(kind="text", name=p.name, sha256=sha, size_bytes=len(raw), text=txt),
+                    )
                 )
-                msgs.append(f"Text source added: {p.name}")
                 continue
             except Exception as exc:
-                msgs.append(f"Text add failed: {p.name}: {exc}")
+                actions.append(
+                    DropPreparedAction(
+                        message=f"Text add failed: {p.name}: {exc}",
+                        success=False,
+                        terminal=False,
+                        seen_key=seen_key,
+                    )
+                )
                 continue
-        msgs.append(f"Not usable: {_display_path(p, max_len=44)}")
+        actions.append(
+            DropPreparedAction(
+                message=f"Not usable: {_display_path(p, max_len=44)}",
+                success=False,
+                terminal=True,
+                seen_key=seen_key,
+            )
+        )
+    return actions
 
+
+def _apply_drop_paths(state: AppState, paths: Sequence[str], *, max_apply: Optional[int] = None) -> List[str]:
+    """
+    Apply dropped paths: set default input dir and/or import entropy sources.
+    Returns log lines for what happened.
+    """
+    actions = _prepare_drop_actions(paths, max_apply=max_apply)
+    return _apply_drop_actions_to_state(state, actions, play_sfx=False)
+
+
+def _apply_drop_actions_to_state(state: AppState, actions: Sequence[DropPreparedAction], *, play_sfx: bool) -> List[str]:
+    msgs: List[str] = []
+    for act in actions:
+        msgs.append(act.message)
+        if act.success:
+            if act.input_dir is not None:
+                state.last_input_dir = act.input_dir
+            if act.source is not None:
+                state.entropy_sources.append(act.source)
+        if act.seen_key is not None and (act.success or act.terminal):
+            state.drop_seen.add(act.seen_key)
     if msgs:
-        # Keep selection in bounds if list grew.
         if state.entropy_sources:
             state.entropy_selected = max(0, min(state.entropy_selected, len(state.entropy_sources) - 1))
+        _apply_drop_feedback(state, msgs, play_sfx=play_sfx)
     return msgs
+
+
+def _start_drop_worker_if_idle(state: AppState) -> None:
+    if state.drop_worker_busy or not state.drop_pending_requests:
+        return
+    req = state.drop_pending_requests.pop(0)
+    state.drop_worker_busy = True
+    state.status = "Importing drop items..."
+
+    def _worker() -> None:
+        actions = _prepare_drop_actions(req.paths, seen_keys=req.seen_keys, max_apply=req.max_apply)
+        state.drop_results.put((actions, bool(req.play_sfx)))
+
+    threading.Thread(target=_worker, name="eps_drop_import", daemon=True).start()
+
+
+def _queue_drop_paths(
+    state: AppState,
+    paths: Sequence[str],
+    *,
+    seen_keys: Optional[Sequence[Optional[str]]] = None,
+    play_sfx: bool,
+    max_apply: Optional[int] = None,
+) -> None:
+    if not paths:
+        return
+    keys = list(seen_keys) if seen_keys is not None else [None] * len(paths)
+    state.drop_pending_requests.append(
+        DropBatchRequest(paths=[str(p) for p in paths], seen_keys=keys, play_sfx=bool(play_sfx), max_apply=max_apply)
+    )
+    _start_drop_worker_if_idle(state)
+
+
+def _drain_drop_results(state: AppState) -> None:
+    changed = False
+    while True:
+        try:
+            actions, play_sfx = state.drop_results.get_nowait()
+        except queue.Empty:
+            break
+        _apply_drop_actions_to_state(state, actions, play_sfx=play_sfx)
+        changed = True
+        state.drop_worker_busy = False
+    if changed and not state.drop_pending_requests:
+        state.status = "Ready."
+    _start_drop_worker_if_idle(state)
 
 
 def _count_drop_success(msgs: Sequence[str]) -> int:
@@ -1036,8 +1179,8 @@ def _poll_drop_dir(state: AppState) -> None:
     state.drop_last_count = len(names)
     state.drop_last_names = names[:10]
 
-    changed = False
-    imported_this_poll = 0
+    unseen_paths: List[str] = []
+    unseen_keys: List[str] = []
     for p in items:
         if p.name in (".DS_Store",):
             continue
@@ -1047,47 +1190,22 @@ def _poll_drop_dir(state: AppState) -> None:
             key = str(p)
         if key in state.drop_seen:
             continue
-        msgs = _apply_drop_paths(state, [str(p)])
-        ok = _count_drop_success(msgs)
-        if ok > 0:
-            state.drop_seen.add(key)
-            _apply_drop_feedback(state, msgs, play_sfx=False)
-            changed = True
-            imported_this_poll += ok
-            # Keep the UI responsive if the user drops a ton of files.
-            if imported_this_poll >= 7:
-                # Reject the rest of this poll burst so they do not get processed on later ticks.
-                rejected = 0
-                for p2 in items:
-                    if p2.name in (".DS_Store",):
-                        continue
-                    try:
-                        key2 = str(p2.resolve())
-                    except Exception:
-                        key2 = str(p2)
-                    if key2 in state.drop_seen:
-                        continue
-                    state.drop_seen.add(key2)
-                    rejected += 1
-                if rejected > 0:
-                    state.drop_last_msgs = [f"Rejected extras (limit 7 per burst): {rejected}"]
-                    state.drop_last_msgs_ticks = 40
-                break
-        elif _drop_result_is_terminal(msgs):
-            state.drop_seen.add(key)
-            state.drop_last_msgs = list(msgs)[:4]
-            state.drop_last_msgs_ticks = 40
-        else:
-            # Transient failure: keep it eligible for a later retry.
-            state.drop_last_msgs = list(msgs)[:4]
-            state.drop_last_msgs_ticks = 40
+        unseen_paths.append(str(p))
+        unseen_keys.append(key)
 
-    if changed:
-        if state.insane:
-            _start_drop_import_sfx_best_effort(duration_s=1.3)
-        # Keep selection in bounds if list grew/shrank.
-        if state.entropy_sources:
-            state.entropy_selected = max(0, min(state.entropy_selected, len(state.entropy_sources) - 1))
+    if not unseen_paths:
+        return
+
+    accepted = unseen_paths[:7]
+    accepted_keys = unseen_keys[:7]
+    extras = len(unseen_paths) - len(accepted)
+    if extras > 0:
+        for key in unseen_keys[7:]:
+            state.drop_seen.add(key)
+        state.drop_last_msgs = [f"Rejected extras (limit 7 per burst): {extras}"]
+        state.drop_last_msgs_ticks = 40
+
+    _queue_drop_paths(state, accepted, seen_keys=accepted_keys, play_sfx=bool(state.insane), max_apply=None)
 
 
 def _load_wordlist_from_text_file(path: Path, *, max_bytes: int = 5_000_000) -> List[str]:
@@ -2675,7 +2793,7 @@ def _run_outside_curses(stdscr, fn: Callable[[], None]) -> None:
             pass
 
 
-def _prompt_str_curses(stdscr, label: str, *, default: str = "", max_len: int = 512) -> str:
+def _prompt_str_curses(stdscr, label: str, *, default: str = "", max_len: int = 512) -> Optional[str]:
     rows, cols = stdscr.getmaxyx()
     lower_label = str(label).lower()
     show_default = str(default)
@@ -2686,36 +2804,98 @@ def _prompt_str_curses(stdscr, label: str, *, default: str = "", max_len: int = 
     if effective_max_len <= 512 and any(tok in lower_label for tok in ("path", "dir", "file")):
         effective_max_len = 4096
     y = rows - 1
-    stdscr.move(y, 0)
-    stdscr.clrtoeol()
-    safe_addstr(stdscr, y, 0, prompt[:cols], curses.A_REVERSE)
-    stdscr.refresh()
+    buf: List[str] = []
+    cursor = 0
+    truncated = False
     try:
         curses.curs_set(1)
     except curses.error:
         pass
-    curses.echo()
     try:
-        # Allow long paste (e.g. drag-dropped absolute paths). ncurses will scroll horizontally;
-        # constraining to screen width truncates paths and makes drop feel "broken".
-        raw = stdscr.getstr(y, min(len(prompt), max(0, cols - 1)), effective_max_len)
+        stdscr.nodelay(False)
+        stdscr.timeout(-1)
+    except curses.error:
+        pass
+    try:
+        while True:
+            current = "".join(buf)
+            visible_w = max(0, cols - len(prompt) - 1)
+            visible = current
+            cursor_x = len(prompt) + cursor
+            if visible_w > 0 and len(visible) > visible_w:
+                start = max(0, cursor - visible_w + 1)
+                end = start + visible_w
+                visible = visible[start:end]
+                cursor_x = len(prompt) + max(0, cursor - start)
+            stdscr.move(y, 0)
+            stdscr.clrtoeol()
+            safe_addstr(stdscr, y, 0, prompt[:cols], curses.A_REVERSE)
+            if visible_w > 0:
+                safe_addstr(stdscr, y, len(prompt), visible[:visible_w], curses.A_REVERSE)
+            if truncated and cols > 8:
+                hint = " [truncated]"
+                safe_addstr(stdscr, y, max(0, cols - len(hint)), hint[:cols], curses.A_REVERSE)
+            try:
+                stdscr.move(y, min(max(0, cursor_x), max(0, cols - 1)))
+            except curses.error:
+                pass
+            stdscr.refresh()
+
+            try:
+                ch = stdscr.getch()
+            except curses.error:
+                ch = -1
+            if ch in (27,):
+                return None
+            if ch in (10, 13, curses.KEY_ENTER):
+                out = "".join(buf).strip()
+                return out if out else str(default)
+            if ch in (curses.KEY_BACKSPACE, 127, 8):
+                if cursor > 0:
+                    del buf[cursor - 1]
+                    cursor -= 1
+                continue
+            if ch == curses.KEY_DC:
+                if cursor < len(buf):
+                    del buf[cursor]
+                continue
+            if ch == curses.KEY_LEFT:
+                cursor = max(0, cursor - 1)
+                continue
+            if ch == curses.KEY_RIGHT:
+                cursor = min(len(buf), cursor + 1)
+                continue
+            if ch == curses.KEY_HOME:
+                cursor = 0
+                continue
+            if ch == curses.KEY_END:
+                cursor = len(buf)
+                continue
+            if 32 <= ch <= 126:
+                if len(buf) >= effective_max_len:
+                    truncated = True
+                    continue
+                buf.insert(cursor, chr(int(ch)))
+                cursor += 1
+                continue
     finally:
-        curses.noecho()
         try:
             curses.curs_set(0)
         except curses.error:
             pass
-    s = ""
-    try:
-        s = raw.decode("utf-8", errors="ignore").strip()
-    except Exception:
-        s = str(raw).strip()
-    return s if s else str(default)
+        try:
+            stdscr.nodelay(False)
+            stdscr.timeout(100)
+        except curses.error:
+            pass
 
 
-def _prompt_bool_curses(stdscr, label: str, *, default: bool = False) -> bool:
+def _prompt_bool_curses(stdscr, label: str, *, default: bool = False) -> Optional[bool]:
     d = "y" if default else "n"
-    s = _prompt_str_curses(stdscr, f"{label} (y/n)", default=d, max_len=5).strip().lower()
+    raw = _prompt_str_curses(stdscr, f"{label} (y/n)", default=d, max_len=5)
+    if raw is None:
+        return None
+    s = raw.strip().lower()
     if not s:
         return bool(default)
     return s.startswith("y") or s in ("1", "true", "yes")
@@ -2741,6 +2921,10 @@ def _identify_image_dims(path: Path) -> Optional[str]:
 
 def _action_entropy_add_photos(state: AppState, stdscr) -> None:
     p_s = _prompt_str_curses(stdscr, "(EPS) photo path (file or dir)", default=".")
+    if p_s is None:
+        state.status = "Ready."
+        state.log_lines = ["Add photos cancelled."]
+        return
     p = Path(p_s).expanduser()
     if not p.exists():
         state.status = "Failed."
@@ -2788,7 +2972,15 @@ def _action_entropy_add_photos(state: AppState, stdscr) -> None:
 
 def _action_entropy_add_text(state: AppState, stdscr) -> None:
     label = _prompt_str_curses(stdscr, "(EPS) text label", default="note")
+    if label is None:
+        state.status = "Ready."
+        state.log_lines = ["Add text cancelled."]
+        return
     text = _prompt_str_curses(stdscr, "(EPS) text (one line)", default="", max_len=4096)
+    if text is None:
+        state.status = "Ready."
+        state.log_lines = ["Add text cancelled."]
+        return
     raw = text.encode("utf-8", errors="ignore")
     sha = hashlib.sha256(raw).hexdigest()
     state.entropy_sources.append(
@@ -3107,22 +3299,62 @@ def _action_stamp(state: AppState, stdscr) -> None:
     default_out = str(state.last_out_dir) if state.last_out_dir is not None else "./out"
     default_in = str(state.last_input_dir) if state.last_input_dir is not None else "."
     input_s = _prompt_str_curses(stdscr, "(EPS) input folder or @sources", default=default_in)
+    if input_s is None:
+        state.status = "Ready."
+        state.log_lines = ["Stamp cancelled."]
+        return
     out_s = _prompt_str_curses(stdscr, "(EPS) output folder", default=default_out)
+    if out_s is None:
+        state.status = "Ready."
+        state.log_lines = ["Stamp cancelled."]
+        return
     pack_id_s = _prompt_str_curses(stdscr, "(EPS) label (optional)", default="")
+    if pack_id_s is None:
+        state.status = "Ready."
+        state.log_lines = ["Stamp cancelled."]
+        return
     notes_s = _prompt_str_curses(stdscr, "(EPS) note (optional)", default="")
+    if notes_s is None:
+        state.status = "Ready."
+        state.log_lines = ["Stamp cancelled."]
+        return
     created_at_s = _prompt_str_curses(stdscr, "(EPS) timestamp UTC (optional)", default="")
+    if created_at_s is None:
+        state.status = "Ready."
+        state.log_lines = ["Stamp cancelled."]
+        return
     include_hidden = _prompt_bool_curses(stdscr, "(EPS) include hidden files", default=False)
+    if include_hidden is None:
+        state.status = "Ready."
+        state.log_lines = ["Stamp cancelled."]
+        return
     exclude_picker = False
     if input_s.strip() != "@sources":
         exclude_picker = _prompt_bool_curses(stdscr, "(EPS) pick files to exclude before stamp", default=False)
+        if exclude_picker is None:
+            state.status = "Ready."
+            state.log_lines = ["Stamp cancelled."]
+            return
     zip_pack = _prompt_bool_curses(stdscr, "(EPS) write entropy_pack.zip", default=True)
+    if zip_pack is None:
+        state.status = "Ready."
+        state.log_lines = ["Stamp cancelled."]
+        return
     derive_seed = _prompt_bool_curses(stdscr, "(EPS) derive seed", default=bool(state.insane))
+    if derive_seed is None:
+        state.status = "Ready."
+        state.log_lines = ["Stamp cancelled."]
+        return
     mix_sources = False
     pool_sha = None
     mixed_sources: List[EntropySource] = []
     seed_path_label: Optional[str] = None
     if derive_seed and state.entropy_sources:
         mix_sources = _prompt_bool_curses(stdscr, "(EPS) use staged sources in seed", default=True)
+        if mix_sources is None:
+            state.status = "Ready."
+            state.log_lines = ["Stamp cancelled."]
+            return
         if mix_sources:
             mixed_sources = _lockdown_eligible_sources(state.entropy_sources)
             if len(mixed_sources) < int(state.entropy_min_sources):
@@ -3148,7 +3380,15 @@ def _action_stamp(state: AppState, stdscr) -> None:
     elif derive_seed:
         seed_path_label = "root-only seed"
     write_seed = _prompt_bool_curses(stdscr, "(EPS) write seed files (chmod 600)", default=False) if derive_seed else False
+    if derive_seed and write_seed is None:
+        state.status = "Ready."
+        state.log_lines = ["Stamp cancelled."]
+        return
     show_seed = _prompt_bool_curses(stdscr, "(EPS) show seed in UI", default=False) if derive_seed else False
+    if derive_seed and show_seed is None:
+        state.status = "Ready."
+        state.log_lines = ["Stamp cancelled."]
+        return
     write_sources_default = bool(mix_sources)  # if sources affect the seed, default to auditing them
     write_sources = (
         _prompt_bool_curses(
@@ -3159,8 +3399,16 @@ def _action_stamp(state: AppState, stdscr) -> None:
         if derive_seed
         else False
     )
+    if derive_seed and write_sources is None:
+        state.status = "Ready."
+        state.log_lines = ["Stamp cancelled."]
+        return
     evidence_default = bool(derive_seed)
     evidence_bundle = _prompt_bool_curses(stdscr, "(EPS) write evidence bundle zip", default=evidence_default)
+    if evidence_bundle is None:
+        state.status = "Ready."
+        state.log_lines = ["Stamp cancelled."]
+        return
 
     tmp_payload_dir: Optional[Path] = None
     sources_for_audit: Sequence[EntropySource] = mixed_sources if mix_sources else state.entropy_sources
@@ -3308,6 +3556,10 @@ def _action_verify(state: AppState, stdscr) -> None:
     state.log_lines = []
     default = str(state.last_pack_dir) if state.last_pack_dir is not None else (str(state.last_out_dir) if state.last_out_dir is not None else "./out")
     pack_s = _prompt_str_curses(stdscr, "(EPS) pack path (dir or .zip)", default=default)
+    if pack_s is None:
+        state.status = "Ready."
+        state.log_lines = ["Verify cancelled."]
+        return
     pack = Path(pack_s).expanduser()
     auto_selected = False
     allow_large_manifest = _prompt_bool_curses(
@@ -3315,6 +3567,10 @@ def _action_verify(state: AppState, stdscr) -> None:
         "(EPS) allow large manifest.json (32 MiB cap)",
         default=bool(state.insane),
     )
+    if allow_large_manifest is None:
+        state.status = "Ready."
+        state.log_lines = ["Verify cancelled."]
+        return
     if pack.is_dir() and not (pack / "manifest.json").is_file():
         # If the user pointed at an out/ directory, pick the most recent pack subdir.
         try:
@@ -3480,18 +3736,19 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
                 state.drop_paste_buf = ""
                 state.drop_paste_last_ns = 0
                 if paths:
-                    msgs = _apply_drop_paths(state, paths, max_apply=7)
-                    _apply_drop_feedback(state, msgs, play_sfx=bool(state.insane))
+                    _queue_drop_paths(state, paths, play_sfx=bool(state.insane), max_apply=7)
                 return True
             # Provide a focused "landing zone" input. If the user drags a folder into the terminal,
             # many terminals will paste the path into this field.
             raw = _prompt_str_curses(stdscr, "(EPS) drop path(s)", default=str(state.last_input_dir or ""), max_len=4096)
+            if raw is None:
+                state.status = "Ready."
+                return True
             paths = _split_drop_payload(raw)
             if not paths:
                 state.status = "Ready."
                 return True
-            msgs = _apply_drop_paths(state, paths, max_apply=7)
-            _apply_drop_feedback(state, msgs, play_sfx=bool(state.insane))
+            _queue_drop_paths(state, paths, play_sfx=bool(state.insane), max_apply=7)
             return True
         # Do not swallow other keys; Up/Down should still navigate the menu.
 
@@ -3632,6 +3889,7 @@ def run_tui(stdscr, *, insane: bool = False, godel_source: Optional[str] = None)
             state.drop_last_msgs_ticks -= 1
             if state.drop_last_msgs_ticks == 0:
                 state.drop_last_msgs = []
+        _drain_drop_results(state)
         # If user drag-dropped a path into the terminal while on Drop Zone, it likely arrived as a fast paste
         # stream. Auto-commit after a short idle gap.
         if state.drop_paste_buf and state.drop_paste_last_ns:
@@ -3640,8 +3898,7 @@ def run_tui(stdscr, *, insane: bool = False, godel_source: Optional[str] = None)
                 state.drop_paste_buf = ""
                 state.drop_paste_last_ns = 0
                 if paths:
-                    msgs = _apply_drop_paths(state, paths, max_apply=7)
-                    _apply_drop_feedback(state, msgs, play_sfx=bool(state.insane))
+                    _queue_drop_paths(state, paths, play_sfx=bool(state.insane), max_apply=7)
         # Poll the filesystem landing zone occasionally (not every tick) to stay cheap.
         if state.tick % 4 == 0:
             _poll_drop_dir(state)
