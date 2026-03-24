@@ -1,13 +1,34 @@
 # Entropy Pack Stamper (EPS)
 
-Current release target: `v1.0.0`. Runtime version: `python3 -c 'from eps import __version__; print(__version__)'`.
-
-EPS is source-available under the Aaron Day license. It is not OSI open source.
-
 EPS stamps and verifies **EntropyPacks**: a directory (or `.zip`) containing:
 - `manifest.json` (canonical, deterministic JSON)
 - `receipt.json` (required for new v2 packs)
 - payload artifacts (bytes)
+
+It does not create entropy. It packages, commits, and verifies operator-supplied entropy-bearing inputs, then optionally derives reproducible material from the rooted pack state.
+
+It is not an RNG, not automatic secrecy, not signed provenance, and not sealed break-glass storage.
+
+State: live `v1.0.0` deterministic core. Sealed/break-glass mode is deferred design work, not current runtime behavior.
+
+Run next: `python3 -m eps --help`
+
+Safe first live run: copy disposable sample inputs into `./bins/entropy_bin` or another throwaway bin, then use `stamp-bin` there. Do not point `stamp-bin` at a source-of-truth folder.
+
+Fastest operator path: subtractive `stamp-bin` randomly selects 7 files from an entropy bin, moves them into a new pack, and refuses low-water bins by default.
+
+Repo-local bins (pre-created, contents ignored by git):
+- `./bins/entropy_bin`
+- `./bins/eps_out`
+
+Read next:
+- the `Fastest Path: Subtractive stamp-bin` section below for the live operator path
+- the V1 contract below for the live surface
+- `docs/SEALED_PACK_ARCHITECTURE.md` for deferred work only
+
+Current release: `v1.0.0`. Runtime version: `python3 -c 'from eps import __version__; print(__version__)'`.
+
+EPS is source-available under the Aaron Day license. It is not OSI open source.
 
 New stamps emit:
 - `manifest.json` with schema `entropy.pack.v2`
@@ -16,11 +37,9 @@ New stamps emit:
 It produces:
 - `pack_root_sha256` (hex): `sha256(canonical_manifest_json)`
 - `payload_root_sha256` (hex): `sha256(canonical_payload_artifact_record)`
+- `pack_root_sha256` ignores operational metadata such as receipt timestamps; those do not change the rooted pack identity
 - legacy alias `entropy_root_sha256` for older tooling that still expects the older name
 - optional reproducible derived seed material (32 bytes; compatibility alias `seed_master`) from HKDF over the pack root
-
-EPS does not create entropy. It packages, commits, and verifies operator-supplied entropy-bearing inputs, then
-optionally derives reproducible material from the rooted pack state.
 
 ## V1 Contract
 
@@ -47,6 +66,22 @@ What is stable in V1:
 What is deferred:
 - sealed break-glass mode remains future design only
 - see `docs/SEALED_PACK_ARCHITECTURE.md`
+
+## Fastest Path: Subtractive `stamp-bin`
+
+This is the push-button path for agents/operators who do not want to stage inputs manually.
+
+```bash
+python3 -m eps stamp-bin \
+  --entropy-bin "./bins/entropy_bin" \
+  --out "./bins/eps_out"
+```
+
+- It randomly selects **7 files** from an entropy bin.
+- It **moves** (consumes) those files into a new pack.
+- Point it at a disposable bin or copied inputs, not at your only source-of-truth folder.
+- By default, it refuses to run if it would leave fewer than **50 files** in the bin after consuming 7.
+- Use `--allow-low-bin` to proceed anyway (prints a warning).
 
 ## Why EPS Exists
 
@@ -90,7 +125,7 @@ Design goals:
   - `payload_root_sha256` identifies the payload artifact record independently of pack-level metadata.
 - **Deterministic root**: `pack_root_sha256` is deterministic; operational metadata (e.g. `receipt.json:stamped_at_utc`) does not affect the root.
 - **No external deps**: stdlib-only Python.
-- **Operator TUI**: default mode is the supported workflow-first path; noisy mode is intentionally experimental.
+- **Operator interfaces**: CLI and TUI are both supported; noisy mode is intentionally experimental.
 
 ## Install
 
@@ -142,32 +177,6 @@ Outputs are written under `--out/<pack_root_sha256>/`:
 `pack_id` is manifest metadata only. It does not select the output directory name.
 Evidence bundles are local tamper-evident adjuncts, not signed provenance.
 
-### Push-button mode: stamp from an entropy bin (subtractive)
-
-This mode is for agents/operators who do not want to manage inputs manually.
-It randomly selects **7 files** from an entropy bin, **moves** (consumes) them, and stamps them into a new pack.
-
-```bash
-python3 -m eps stamp-bin \
-  --entropy-bin "/ABSOLUTE/PATH/TO/ENTROPY_BIN" \
-  --out "./out"
-```
-
-By default, it refuses to run if it would leave fewer than **50 files** in the bin after consuming 7.
-Use `--allow-low-bin` to proceed anyway (prints a warning).
-
-#### Repo-local bins (pre-created)
-
-This repo includes pre-created bins (contents ignored by git):
-- `./bins/entropy_bin` (drop entropy files here)
-- `./bins/eps_out` (stamped outputs go here)
-
-Quick run:
-
-```bash
-python3 -m eps stamp-bin --json
-```
-
 ### Verify a pack (dir or zip)
 
 ```bash
@@ -209,7 +218,7 @@ Do not describe `seed_master` as a secret unless you have added a separate secre
 
 ## TUI Modes
 
-Default mode is the supported operator path.
+The TUI is a supported interface for staged/manual workflows.
 Noisy mode is experimental and may diverge in visuals, motion, and local audio cues without changing pack outputs.
 
 ## License
