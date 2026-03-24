@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import os
 import stat
+import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 from typing import BinaryIO, Iterator, Optional, Tuple
@@ -97,14 +98,28 @@ def trusted_copy_with_sha256(src: Path, dst: Path, *, max_bytes: Optional[int] =
     dst.parent.mkdir(parents=True, exist_ok=True)
     h = hashlib.sha256()
     n = 0
-    with trusted_binary_reader(src) as handle, dst.open("wb") as out:
-        while True:
-            chunk = handle.read(_CHUNK_SIZE)
-            if not chunk:
-                break
-            n += len(chunk)
-            if max_bytes is not None and n > int(max_bytes):
-                raise ValueError(f"stream exceeded max_bytes ({n} > {max_bytes})")
-            h.update(chunk)
-            out.write(chunk)
-    return h.hexdigest(), n
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{dst.name}.", dir=str(dst.parent))
+    tmp_path = Path(tmp_name)
+    try:
+        try:
+            os.fchmod(fd, 0o644)
+        except OSError:
+            pass
+        with trusted_binary_reader(src) as handle, os.fdopen(fd, "wb") as out:
+            while True:
+                chunk = handle.read(_CHUNK_SIZE)
+                if not chunk:
+                    break
+                n += len(chunk)
+                if max_bytes is not None and n > int(max_bytes):
+                    raise ValueError(f"stream exceeded max_bytes ({n} > {max_bytes})")
+                h.update(chunk)
+                out.write(chunk)
+        os.replace(tmp_path, dst)
+        return h.hexdigest(), n
+    except Exception:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+        raise

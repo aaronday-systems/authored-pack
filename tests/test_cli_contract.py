@@ -234,6 +234,51 @@ class TestCliContract(unittest.TestCase):
             self.assertEqual(payload["command"], "stamp-bin")
             self.assertEqual(payload["result"]["mode"], "entropy_bin")
             self.assertEqual(payload["result"]["consumed_count"], 1)
+            self.assertEqual(payload["result"]["warnings"], [])
+            self.assertEqual(payload["result"]["policy"]["would_violate_low_watermark"], False)
+            self.assertEqual(len(payload["result"]["consumed"]), 1)
+            consumed = payload["result"]["consumed"][0]
+            self.assertEqual(consumed["src_relpath"], "a.bin")
+            self.assertTrue(consumed["src_path"].endswith("a.bin"))
+            self.assertTrue(consumed["staged_name"].endswith("__a.bin"))
+
+    def test_stamp_bin_json_success_includes_low_watermark_warning_and_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            entropy_bin = tmp_path / "entropy_bin"
+            out_dir = tmp_path / "out"
+            entropy_bin.mkdir()
+            out_dir.mkdir()
+            (entropy_bin / "a.bin").write_bytes(b"entropy")
+            (entropy_bin / "b.bin").write_bytes(b"entropy-2")
+
+            rc, stdout, stderr = self._run_cli(
+                [
+                    "stamp-bin",
+                    "--entropy-bin",
+                    str(entropy_bin),
+                    "--out",
+                    str(out_dir),
+                    "--count",
+                    "1",
+                    "--min-remaining",
+                    "2",
+                    "--allow-low-bin",
+                    "--json",
+                ]
+            )
+
+            self.assertEqual(rc, 0)
+            self.assertEqual(stderr, "")
+            payload = json.loads(stdout)
+            self.assertEqual(payload["ok"], True)
+            self.assertEqual(payload["command"], "stamp-bin")
+            self.assertEqual(payload["result"]["policy"]["projected_remaining_after_count"], 1)
+            self.assertEqual(payload["result"]["policy"]["min_remaining"], 2)
+            self.assertEqual(payload["result"]["policy"]["allow_low_bin"], True)
+            self.assertEqual(payload["result"]["policy"]["would_violate_low_watermark"], True)
+            self.assertEqual(len(payload["result"]["warnings"]), 1)
+            self.assertIn("low-watermark", payload["result"]["warnings"][0])
 
     def test_json_usage_failure_without_subcommand_reports_eps_command(self) -> None:
         rc, stdout, stderr = self._run_cli(["--json"])

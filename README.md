@@ -190,7 +190,9 @@ All `--json` commands emit one envelope shape:
 {"ok":false,"command":"stamp","error":{"type":"ValueError","message":"..."}}
 ```
 
-For `stamp` and `stamp-bin`, the `result` object includes `pack_dir`, `pack_root_sha256`, `payload_root_sha256`, legacy alias `entropy_root_sha256`, and `receipt`. Evidence bundle metadata, when present, is returned alongside the receipt instead of being written back into `receipt.json`.
+For `stamp`, the `result` object includes `pack_dir`, `pack_root_sha256`, `payload_root_sha256`, legacy alias `entropy_root_sha256`, and `receipt`.
+For `stamp-bin`, the `result` object also includes `consumed`, `warnings`, and `policy` so machine callers can audit what was consumed and whether low-water rules were crossed.
+Evidence bundle metadata, when present, is returned alongside the receipt instead of being written back into `receipt.json`.
 For `verify`, the `result` object includes verification counts and any verifier errors.
 
 ## Trust Boundary Notes

@@ -210,6 +210,14 @@ def _stamp_bin(args: argparse.Namespace) -> int:
         derive_seed=bool(args.derive_seed),
         evidence_bundle=bool(args.evidence_bundle),
     )
+    projected_after = int(res.bin_files_before) - int(args.count)
+    low_watermark_violation = projected_after < int(args.min_remaining)
+    warnings: List[str] = []
+    if low_watermark_violation:
+        warnings.append(
+            f"entropy bin low-watermark: {res.bin_files_before} files before, consuming {args.count}, "
+            f"min_remaining={args.min_remaining}"
+        )
 
     if args.json:
         payload = {
@@ -218,6 +226,22 @@ def _stamp_bin(args: argparse.Namespace) -> int:
             "bin_files_before": int(res.bin_files_before),
             "bin_files_after": int(res.bin_files_after),
             "consumed_count": len(res.consumed),
+            "consumed": [
+                {
+                    "src_path": str(item.src_path),
+                    "src_relpath": item.src_path.relative_to(res.entropy_bin).as_posix(),
+                    "staged_name": item.staged_path.name,
+                }
+                for item in res.consumed
+            ],
+            "warnings": warnings,
+            "policy": {
+                "count": int(args.count),
+                "min_remaining": int(args.min_remaining),
+                "allow_low_bin": bool(args.allow_low_bin),
+                "projected_remaining_after_count": int(projected_after),
+                "would_violate_low_watermark": bool(low_watermark_violation),
+            },
             "pack_dir": str(res.stamp.pack_dir),
             "pack_root_sha256": res.stamp.pack_root_sha256,
             "entropy_root_sha256": res.stamp.root_sha256,
@@ -234,10 +258,9 @@ def _stamp_bin(args: argparse.Namespace) -> int:
         return 0
 
     # Human-readable.
-    if (res.bin_files_before - int(args.count)) < int(args.min_remaining):
+    if low_watermark_violation:
         print(
-            f"warning: entropy bin low-watermark: {res.bin_files_before} files before, consuming {args.count}, "
-            f"min_remaining={args.min_remaining}",
+            f"warning: {warnings[0]}",
             file=sys.stderr,
         )
     print("mode: entropy_bin")
