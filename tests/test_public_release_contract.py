@@ -39,6 +39,20 @@ class TestPublicReleaseContract(unittest.TestCase):
         text = (ROOT / ".gitignore").read_text(encoding="utf-8")
         self.assertIn(".claude/", text)
 
+    def test_internal_process_docs_are_not_shipped(self) -> None:
+        for rel in (
+            "docs/CHATGPT_PRO_REDTEAM_ENTROPY_DOSSIER.md",
+            "docs/CLEAR_DECK_PLAN.md",
+            "docs/CROSS_AGENT_CONTROL_PLANE_PROMPT.md",
+            "docs/DEVLOG.md",
+        ):
+            self.assertFalse((ROOT / rel).exists(), msg=rel)
+
+    def test_readme_does_not_reference_internal_contract_paths(self) -> None:
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertNotIn("ssot/ui/", readme)
+        self.assertNotIn("fresh, unpredictable bits", readme)
+
 
 if __name__ == "__main__":
     unittest.main()

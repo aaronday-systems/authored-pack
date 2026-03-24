@@ -17,7 +17,7 @@ It produces:
 - `pack_root_sha256` (hex): `sha256(canonical_manifest_json)`
 - `payload_root_sha256` (hex): `sha256(canonical_payload_artifact_record)`
 - legacy alias `entropy_root_sha256` for older tooling that still expects the older name
-- optional reproducible derived seed material (`seed_master`, 32 bytes) from HKDF over the pack root
+- optional reproducible derived seed material (32 bytes; compatibility alias `seed_master`) from HKDF over the pack root
 
 EPS does not create entropy. It packages, commits, and verifies operator-supplied entropy-bearing inputs, then
 optionally derives reproducible material from the rooted pack state.
@@ -50,14 +50,8 @@ What is deferred:
 
 ## Why EPS Exists
 
-Many agents are highly reproducible: given the same prompt, the same model, and the same inputs, you often get the same behavior.
-That is useful, but it breaks down when an agent needs **fresh, unpredictable bits** for things like:
-- generating keys/tokens/nonces
-- creating one-time secrets for downstream systems
-- preventing "replay" (the same run producing the same secret again)
-
-In most environments you should use the OS CSPRNG (for example, `/dev/urandom` via your language runtime).
-EPS exists for situations where you want **operator-supplied entropy-bearing material with auditability**: you can prove what bytes were packaged, and you can verify the resulting pack later.
+In most environments, use the OS CSPRNG for fresh randomness, keys, tokens, and nonces.
+EPS exists for a different job: **package operator-supplied entropy-bearing material with auditability** so you can prove what bytes were packaged, reproduce the same rooted identity later, and verify the pack in another environment.
 
 ## Why Seven Inputs
 
@@ -96,7 +90,7 @@ Design goals:
   - `payload_root_sha256` identifies the payload artifact record independently of pack-level metadata.
 - **Deterministic root**: `pack_root_sha256` is deterministic; operational metadata (e.g. `receipt.json:stamped_at_utc`) does not affect the root.
 - **No external deps**: stdlib-only Python.
-- **Operator TUI**: default mode follows the Control Plane TUI baseline (`ssot/ui/*`); noisy mode is intentionally non-conforming.
+- **Operator TUI**: default mode is the supported workflow-first path; noisy mode is intentionally experimental.
 
 ## Install
 
@@ -213,15 +207,10 @@ Do not describe `seed_master` as a secret unless you have added a separate secre
 - `docs/RELEASE_NOTES_v1.0.0.md` and `CHANGELOG.md` describe the public release surface.
 - `CONTRIBUTING.md` and `SECURITY.md` define contribution and disclosure expectations for the public repo.
 
-## TUI Contract
+## TUI Modes
 
-Normative reference for EPS UI behavior:
-- `ssot/ui/TUI_STANDARD_v0.1.0.md`
-
-Historical/reference-only:
-- `ssot/ui/TUI_CONTRACT_v0.0.4.md`
-
-Default mode follows the baseline contract. Noisy mode is intentionally non-conforming and is allowed to diverge for experimental visuals and motion.
+Default mode is the supported operator path.
+Noisy mode is experimental and may diverge in visuals, motion, and local audio cues without changing pack outputs.
 
 ## License
 
