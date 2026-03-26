@@ -694,6 +694,16 @@ def _iter_image_files_deterministic(root: Path, *, limit: int) -> List[Path]:
     return out
 
 
+def _sample_photo_import_paths(paths: Sequence[Path], *, target_count: int) -> List[Path]:
+    sample_n = max(1, int(target_count))
+    pool = list(paths)
+    if len(pool) <= sample_n:
+        return pool
+    rng = random.SystemRandom()
+    chosen = rng.sample(pool, sample_n)
+    return sorted(chosen, key=lambda p: p.as_posix())
+
+
 def _sha256_hex_path(path: Path, *, max_bytes: Optional[int] = None) -> Tuple[str, int]:
     h = hashlib.sha256()
     n = 0
@@ -3180,10 +3190,15 @@ def _action_entropy_add_photos(state: AppState, stdscr) -> None:
     state.log_lines = [f"source: {_display_path(p, max_len=44)}"]
     draw(stdscr, state)
     paths: List[Path] = []
+    sampled_from_dir = False
+    total_found = 0
     if p.is_file():
         paths = [p]
     elif p.is_dir():
-        paths = _iter_image_files_deterministic(p, limit=250)
+        found = _iter_image_files_deterministic(p, limit=250)
+        total_found = len(found)
+        paths = _sample_photo_import_paths(found, target_count=int(state.entropy_min_sources))
+        sampled_from_dir = True
     else:
         state.status = "Failed."
         state.log_lines = [f"Entropy add failed: not a file/dir: {p}"]
@@ -3208,8 +3223,11 @@ def _action_entropy_add_photos(state: AppState, stdscr) -> None:
     if added:
         _trigger_interaction_flash(state, drop_zone=False)
         state.status = "Done."
-        state.log_lines = [f"Added {added} photo source(s)."]
-        if total >= 250:
+        if sampled_from_dir:
+            state.log_lines = [f"Added {added} photo source(s) sampled from {total_found} image(s)."]
+        else:
+            state.log_lines = [f"Added {added} photo source(s)."]
+        if total_found >= 250:
             state.log_lines.append("Scan capped at 250 images for responsiveness.")
     else:
         state.status = "Failed."

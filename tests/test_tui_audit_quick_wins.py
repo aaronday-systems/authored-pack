@@ -118,6 +118,34 @@ class TestTuiAuditQuickWins(unittest.TestCase):
 
             self.assertEqual(normalized, str(dropped))
 
+    def test_sample_photo_import_paths_caps_directory_to_seven(self) -> None:
+        m = self.m
+        paths = [Path(f"/tmp/p{i}.jpg") for i in range(10)]
+
+        with mock.patch.object(m.random, "SystemRandom") as system_random:
+            system_random.return_value.sample.return_value = paths[:7]
+            chosen = m._sample_photo_import_paths(paths, target_count=7)
+
+        self.assertEqual(len(chosen), 7)
+        self.assertEqual(chosen, sorted(paths[:7], key=lambda p: p.as_posix()))
+
+    def test_action_entropy_add_photos_samples_directory_instead_of_importing_all(self) -> None:
+        m = self.m
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            photo_dir = tmp_path / "images 2025"
+            photo_dir.mkdir()
+            for idx in range(10):
+                (photo_dir / f"{idx:02d}.jpg").write_bytes(f"img-{idx}".encode("utf-8"))
+
+            state = self._state()
+            with mock.patch.object(m, "_prompt_str_curses", return_value=str(photo_dir)):
+                m._action_entropy_add_photos(state, RecordingStdScr())
+
+            self.assertEqual(state.status, "Done.")
+            self.assertEqual(len(state.entropy_sources), 7)
+            self.assertTrue(any("sampled from 10 image(s)" in line for line in state.log_lines))
+
     def test_footer_is_rendered_with_reverse_video_and_compact_legend(self) -> None:
         m = self.m
         state = self._state()
