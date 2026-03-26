@@ -888,6 +888,51 @@ def _clean_dropped_path(s: str) -> str:
     return v.strip()
 
 
+def _recover_existing_path_suffix(s: str) -> str:
+    """
+    Some terminal drag/drop flows can paste a duplicated absolute-path prefix.
+    If the cleaned path does not exist, recover the last existing absolute-looking suffix.
+    """
+    v = (s or "").strip()
+    if not v or v == "@sources":
+        return v
+    try:
+        if Path(v).expanduser().exists():
+            return v
+    except OSError:
+        return v
+
+    positions: set[int] = set()
+    for marker in ("/Users/", "/Volumes/", "/private/", "/tmp/", "/var/", "~/"):
+        start = 1 if marker.startswith("/") else 0
+        pos = v.find(marker, start)
+        while pos != -1:
+            positions.add(pos)
+            pos = v.find(marker, pos + 1)
+
+    for pos in sorted(positions, reverse=True):
+        candidate = v[pos:]
+        try:
+            if Path(candidate).expanduser().exists():
+                return candidate
+        except OSError:
+            continue
+    return v
+
+
+def _normalize_single_path_input(raw: str, *, allow_sources: bool = False) -> str:
+    text = (raw or "").strip()
+    if not text:
+        return ""
+    if allow_sources and text == "@sources":
+        return "@sources"
+
+    parts = _split_drop_payload(text)
+    if parts:
+        return _recover_existing_path_suffix(parts[0])
+    return _recover_existing_path_suffix(_clean_dropped_path(text))
+
+
 def _split_drop_payload(s: str) -> List[str]:
     """
     Some terminals paste multiple drop paths separated by whitespace (or newlines).
@@ -3124,7 +3169,7 @@ def _action_entropy_add_photos(state: AppState, stdscr) -> None:
         state.status = "Ready."
         state.log_lines = ["Add photos cancelled."]
         return
-    p = Path(p_s).expanduser()
+    p = Path(_normalize_single_path_input(p_s)).expanduser()
     if not p.exists():
         state.status = "Failed."
         state.log_lines = [f"Entropy add failed: not found: {p}"]
@@ -3627,12 +3672,13 @@ def _edit_stamp_input(state: AppState, stdscr, cfg: Optional[StampConfig] = None
     if raw is None:
         state.status = "Ready."
         return False
-    if raw.strip() == "@sources":
+    normalized = _normalize_single_path_input(raw, allow_sources=True)
+    if normalized == "@sources":
         cfg.input_mode = "sources"
         cfg.input_path = ""
     else:
         cfg.input_mode = "folder"
-        cfg.input_path = raw.strip()
+        cfg.input_path = normalized
     state.status = "Stamp input updated."
     return True
 
@@ -3643,7 +3689,7 @@ def _edit_stamp_output(state: AppState, stdscr, cfg: Optional[StampConfig] = Non
     if raw is None:
         state.status = "Ready."
         return False
-    cfg.out_path = raw.strip() or "./out"
+    cfg.out_path = _normalize_single_path_input(raw) or "./out"
     state.status = "Stamp output updated."
     return True
 
@@ -3719,7 +3765,7 @@ def _edit_verify_path(state: AppState, stdscr) -> bool:
     if raw is None:
         state.status = "Ready."
         return False
-    state.verify_config.pack_path = raw.strip()
+    state.verify_config.pack_path = _normalize_single_path_input(raw)
     state.log_lines = []
     state.status = "Verify target updated."
     return True
@@ -3761,7 +3807,7 @@ def _run_stamp_plan(
     try:
         input_dir: Path
         exclude_relpaths: Optional[Set[str]] = None
-        input_choice = input_s.strip()
+        input_choice = _normalize_single_path_input(input_s.strip(), allow_sources=True)
         if input_choice == "@sources":
             if not state.entropy_sources:
                 state.status = "Failed."
@@ -3789,7 +3835,7 @@ def _run_stamp_plan(
                     return
                 exclude_relpaths = set(picked)
 
-        out_dir = Path(out_s).expanduser()
+        out_dir = Path(_normalize_single_path_input(out_s)).expanduser()
         pack_id = pack_id_s.strip() or None
         notes = notes_s.strip() or None
         created_at = created_at_s.strip() or None
@@ -4110,7 +4156,7 @@ def _action_stamp(state: AppState, stdscr) -> None:
 def _run_verify_plan(state: AppState, stdscr, *, pack_s: str, allow_large_manifest: bool) -> None:
     state.status = "Verify: review..."
     state.log_lines = []
-    pack = Path(pack_s).expanduser()
+    pack = Path(_normalize_single_path_input(pack_s)).expanduser()
     auto_selected = False
     if pack.is_dir() and not (pack / "manifest.json").is_file():
         try:
@@ -4190,7 +4236,8 @@ def _action_verify(state: AppState, stdscr) -> None:
         state.status = "Ready."
         state.log_lines = ["Verify cancelled."]
         return
-    state.verify_config.pack_path = pack_s.strip()
+    pack_s = _normalize_single_path_input(pack_s)
+    state.verify_config.pack_path = pack_s
     state.verify_config.allow_large_manifest = bool(allow_large_manifest)
     _run_verify_plan(state, stdscr, pack_s=pack_s, allow_large_manifest=bool(allow_large_manifest))
 

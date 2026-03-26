@@ -88,6 +88,26 @@ class TestTuiAuditQuickWins(unittest.TestCase):
 
         self.assertEqual(result, "abcx")
 
+    def test_normalize_single_path_input_unescapes_finder_dropped_spaces(self) -> None:
+        m = self.m
+        with tempfile.TemporaryDirectory() as tmp:
+            dropped = Path(tmp) / "images 2025"
+            dropped.mkdir()
+
+            normalized = m._normalize_single_path_input(str(dropped).replace(" ", "\\ "))
+
+            self.assertEqual(normalized, str(dropped))
+
+    def test_normalize_single_path_input_accepts_file_url_drop(self) -> None:
+        m = self.m
+        with tempfile.TemporaryDirectory() as tmp:
+            dropped = Path(tmp) / "pack dir"
+            dropped.mkdir()
+
+            normalized = m._normalize_single_path_input(dropped.as_uri())
+
+            self.assertEqual(normalized, str(dropped))
+
     def test_footer_is_rendered_with_reverse_video_and_compact_legend(self) -> None:
         m = self.m
         state = self._state()

@@ -387,6 +387,27 @@ class TestTuiP1Regressions(unittest.TestCase):
         stdscr = DummyStdScr(inputs=[27])
         self.assertIsNone(m._prompt_str_curses(stdscr, "(EPS) path", default="."))
 
+    def test_run_stamp_from_config_accepts_finder_escaped_folder_path(self) -> None:
+        m = self.m
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "images 2025"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            out_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            state = m.AppState(theme=m.Theme(normal=0, reverse=0, header=0))
+            state.stamp_config.input_mode = "folder"
+            state.stamp_config.input_path = str(input_dir).replace(" ", "\\ ")
+            state.stamp_config.out_path = str(out_dir)
+
+            m._run_stamp_from_config(state, DummyStdScr())
+
+            self.assertEqual(state.status, "Done.")
+            self.assertIsNotNone(state.last_pack_dir)
+            self.assertTrue(state.last_pack_dir is not None and (state.last_pack_dir / "manifest.json").is_file())
+
     def test_entropy_sources_menu_navigation_stays_on_menu_until_explicit_focus(self) -> None:
         m = self.m
         state = m.AppState(theme=m.Theme(normal=0, reverse=0, header=0))
