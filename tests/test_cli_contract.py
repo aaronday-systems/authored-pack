@@ -289,6 +289,21 @@ class TestCliContract(unittest.TestCase):
         self.assertEqual(payload["ok"], False)
         self.assertEqual(payload["command"], "eps")
 
+    def test_bare_cli_prints_help(self) -> None:
+        rc, stdout, stderr = self._run_cli([])
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(stderr, "")
+        self.assertIn("usage: eps", stdout)
+        self.assertIn("First clean success", stdout)
+
+    def test_cli_version_flag_prints_runtime_version(self) -> None:
+        rc, stdout, stderr = self._run_cli(["--version"])
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(stderr, "")
+        self.assertEqual(stdout.strip(), f"eps {cli.__version__}")
+
     def test_python_module_help_smoke(self) -> None:
         proc = subprocess.run(
             [sys.executable, "-m", "eps", "--help"],

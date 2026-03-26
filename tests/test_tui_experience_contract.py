@@ -87,9 +87,23 @@ class TestTuiExperienceContract(unittest.TestCase):
     def test_sources_card_prioritizes_empty_state_and_readiness_meter(self) -> None:
         joined = self._preview("Sources")
         self.assertIn("Add a photo, text note, or tap sample.", joined)
-        self.assertIn("Mixed-source seed readiness: 0/7", joined)
+        self.assertIn("SLOT RAIL [photo 0] [text 0] [tap 0] ready 0/7", joined)
         self.assertIn("No sources yet.", joined)
         self.assertIn("Menu focus", joined)
+
+    def test_sources_card_keeps_the_slot_rail_ascii_and_type_counts_visible(self) -> None:
+        state = self._state()
+        state.entropy_sources = [
+            SimpleNamespace(kind="photo", name="photo.jpg", sha256="a" * 64, size_bytes=1, meta={}),
+            SimpleNamespace(kind="text", name="note", sha256="b" * 64, size_bytes=2, meta={}, text="x"),
+            SimpleNamespace(kind="tap", name="tap", sha256="c" * 64, size_bytes=16, meta={"events": 16}),
+        ]
+
+        joined = "\n".join(self.m._entropy_sources_preview(state, width=200, height=40))
+        rail_line = next(line for line in joined.splitlines() if line.startswith("SLOT RAIL"))
+
+        self.assertIn("SLOT RAIL [photo 1] [text 1] [tap 1] ready 3/7", joined)
+        self.assertTrue(all(ord(ch) < 128 for ch in rail_line))
 
     def test_stamp_card_summarizes_review_before_advanced_prompts(self) -> None:
         joined = self._preview("Stamp")

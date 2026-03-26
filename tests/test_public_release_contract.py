@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import subprocess
+import sys
 import tomllib
 import unittest
 from pathlib import Path
@@ -24,6 +26,7 @@ class TestPublicReleaseContract(unittest.TestCase):
         self.assertIn("macOS terminals", readme)
         self.assertIn("Linux terminals", readme)
         self.assertIn("best-effort", readme)
+        self.assertNotIn("--insane", readme)
 
     def test_sealed_architecture_doc_is_marked_future_only(self) -> None:
         text = (ROOT / "docs" / "SEALED_PACK_ARCHITECTURE.md").read_text(encoding="utf-8")
@@ -60,6 +63,29 @@ class TestPublicReleaseContract(unittest.TestCase):
             "scripts/demo_v1.sh",
         ):
             self.assertTrue((ROOT / rel).is_file(), msg=rel)
+
+    def test_tui_help_hides_legacy_insane_alias_but_parser_still_accepts_it(self) -> None:
+        help_proc = subprocess.run(
+            [sys.executable, "-B", "bin/eps.py", "--help"],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(help_proc.returncode, 0, msg=help_proc.stderr)
+        self.assertIn("--noisy", help_proc.stdout)
+        self.assertNotIn("--insane", help_proc.stdout)
+
+        insane_proc = subprocess.run(
+            [sys.executable, "-B", "bin/eps.py", "--insane"],
+            cwd=ROOT,
+            stdin=subprocess.DEVNULL,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotIn("unrecognized arguments", insane_proc.stderr.lower())
+        self.assertIn("no tty detected", insane_proc.stderr.lower())
 
 
 if __name__ == "__main__":

@@ -15,7 +15,6 @@ ASCII-first: no box-drawing or emoji in calm mode. Color is optional.
 
 To start directly in the louder profile, run:
 - `python3 -B bin/eps.py --noisy`
-- `python3 -B bin/eps.py --insane` (legacy alias)
 """
 
 from __future__ import annotations
@@ -1788,6 +1787,28 @@ def _help_summary_lines(_state: AppState) -> List[str]:
     ]
 
 
+def _entropy_source_kind_counts(sources: Sequence["EntropySource"]) -> Dict[str, int]:
+    counts = {"photo": 0, "text": 0, "tap": 0}
+    for s in sources:
+        kind = str(getattr(s, "kind", "")).lower()
+        if kind in counts:
+            counts[kind] += 1
+    return counts
+
+
+def _source_slot_rail_line(state: AppState, *, width: int) -> str:
+    counts = _entropy_source_kind_counts(state.entropy_sources)
+    ready = len(_lockdown_eligible_sources(state.entropy_sources))
+    line = (
+        "SLOT RAIL "
+        f"[photo {counts['photo']}] "
+        f"[text {counts['text']}] "
+        f"[tap {counts['tap']}] "
+        f"ready {ready}/{int(state.entropy_min_sources)}"
+    )
+    return line[: max(0, int(width))]
+
+
 def _selection_preview(state: AppState, label: str, *, width: int, height: int) -> List[str]:
     if label == "Start":
         preview = _quickstart_lines()
@@ -2710,13 +2731,9 @@ def _entropy_sources_preview(state: AppState, *, width: int, height: int) -> Lis
     Right-pane content for the Sources screen.
     """
     min_n = int(state.entropy_min_sources)
-    n = len(state.entropy_sources)
-    eligible = _lockdown_eligible_sources(state.entropy_sources)
-    n_eligible = len(eligible)
+    eligible = len(_lockdown_eligible_sources(state.entropy_sources))
     header = "SOURCES // stage photos, text, or taps"
-    lines: List[str] = [header, ""]
-    lines.append(f"Mixed-source seed readiness: {n_eligible}/{min_n}")
-    lines.append("")
+    lines: List[str] = [header, _source_slot_rail_line(state, width=width), ""]
     if state.focus == "entropy" and state.entropy_sources:
         lines.append("List focus. Up/Down moves sources. Tab returns to menu.")
     else:
@@ -2728,7 +2745,7 @@ def _entropy_sources_preview(state: AppState, *, width: int, height: int) -> Lis
         lines.append("Advanced: watched folder intake is still available.")
         lines.append(f"Drop folder: {_display_path(state.drop_dir, max_len=max(24, width - 14))}")
         return lines[:height]
-    need = max(0, min_n - n_eligible)
+    need = max(0, min_n - eligible)
     if need > 0:
         lines.append(f"Need {need} more eligible unique source(s) for mixed-source seed.")
         lines.append(f"Tap sources need >= {LOCKDOWN_MIN_TAP_EVENTS} events.")
@@ -4513,7 +4530,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     p.add_argument("--mode", choices=("calm", "noisy"), default="calm", help="Start in calm or noisy mode (default: calm)")
     p.add_argument("--noisy", action="store_true", help="Start in Noisy Mode")
-    p.add_argument("--insane", action="store_true", help="Legacy alias for --noisy")
+    p.add_argument("--insane", action="store_true", help=argparse.SUPPRESS)
     p.add_argument(
         "--godel-source",
         default=None,

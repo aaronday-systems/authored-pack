@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
+from . import __version__
 from .binmode import stamp_from_entropy_bin
 from .manifest import DEFAULT_DERIVATION_VERSION, stable_dumps
 from .pack import StampResult, _output_would_self_ingest_input, stamp_pack, verify_pack
@@ -293,6 +294,7 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=CLI_EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     stamp = sub.add_parser("stamp", help="Operator path: turn a directory into a deterministic verifiable pack")
@@ -370,6 +372,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     argv_list = list(argv) if argv is not None else list(sys.argv[1:])
     json_mode = "--json" in argv_list
     parser = build_parser()
+    if not argv_list:
+        parser.print_help()
+        return 0
+    if argv_list in (["--version"], ["-V"]):
+        print(f"eps {__version__}")
+        return 0
     try:
         ns = parser.parse_args(argv_list)
         if not hasattr(ns, "func"):

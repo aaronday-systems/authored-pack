@@ -1,27 +1,27 @@
 # Entropy Pack Stamper (EPS)
 
-EPS is a small deterministic pack/verify tool for operator-supplied entropy-bearing inputs.
+EPS is a deterministic pack/verify tool for operator-supplied entropy-bearing inputs.
 
 ## Start Here
 
-Human first path in an interactive terminal:
-1. Start the TUI: `python3 -B bin/eps.py`
-2. Stage sources if you need them.
+Start here in an interactive terminal:
+1. Run the TUI: `python3 -B bin/eps.py`
+2. Stage sources if you want a deliberate input set.
 3. Stamp a folder, then verify the resulting pack.
 4. Use Noisy Mode only if you want ceremony cues.
 
-The human TUI is the discoverability path. CLI remains available, but the first screen should help a stranger reach `stamp -> verify` before they read the deeper docs.
+The TUI is the primary discoverability path. CLI remains available, but the first screen should help a stranger reach `stamp -> verify` before they read the deeper docs.
 
-EPS stamps and verifies **EntropyPacks**: a directory (or `.zip`) containing:
-- `manifest.json` (canonical, deterministic JSON)
-- `receipt.json` (required for new v2 packs)
-- payload artifacts (bytes)
+EPS stamps and verifies **EntropyPacks**: a directory or `.zip` containing:
+- `manifest.json` with canonical, deterministic JSON
+- `receipt.json` for new v2 packs
+- payload artifacts
 
-It does not create entropy. It packages, commits, and verifies operator-supplied inputs, then optionally derives reproducible material from the rooted pack state.
+It does not create entropy. It packages operator-supplied inputs, records a deterministic contract, and can optionally derive reproducible material from the rooted pack state.
 
 It is not an RNG, not automatic secrecy, not signed provenance, and not sealed break-glass storage.
 
-State: live `v1.0.0` deterministic core. Sealed/break-glass mode is deferred design work, not current runtime behavior.
+Current state: live `v1.0.0` deterministic core. Sealed/break-glass mode is deferred design work, not current runtime behavior.
 
 Run next: `python3 -m eps --help`
 
@@ -37,7 +37,7 @@ New stamps emit:
 - `manifest.json` with schema `entropy.pack.v2`
 - `receipt.json` with schema `eps.receipt.v2`
 
-It produces:
+Pack roots and derived material:
 - `pack_root_sha256` (hex): `sha256(canonical_manifest_json)`
 - `payload_root_sha256` (hex): `sha256(canonical_payload_artifact_record)`
 - `pack_root_sha256` ignores operational metadata such as receipt timestamps; those do not change the rooted pack identity
@@ -74,7 +74,7 @@ What is deferred:
 
 The TUI supports staging sources like photos, text, and tap timing. Use it when a person should make the input deliberate and auditable.
 
-The practical human flow is:
+Practical flow:
 1. Stage sources or point `stamp` at a folder.
 2. `stamp` the inputs into a content-addressed pack.
 3. `verify` the resulting pack later or after handoff.
@@ -83,13 +83,13 @@ That is the path to optimize for in the TUI and in the docs that introduce it.
 
 ## Canonical Demo
 
-Run one honest demo end to end:
+Run the honest end-to-end demo first:
 
 ```bash
 bash scripts/demo_v1.sh
 ```
 
-That demo:
+It:
 - creates a tiny disposable input set
 - stamps it into a pack and zip
 - verifies the directory pack
@@ -163,7 +163,6 @@ No install required. Run with system Python 3.11+:
 
 - TUI: `python3 -B bin/eps.py`
 - TUI (noisy skin): `python3 -B bin/eps.py --noisy`
-- TUI (legacy alias): `python3 -B bin/eps.py --insane`
 - CLI: `python3 -m eps --help`
 - Installed package entrypoint: `eps --help`
 
