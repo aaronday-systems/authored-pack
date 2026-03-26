@@ -489,6 +489,21 @@ class TestTuiP1Regressions(unittest.TestCase):
             self.assertTrue(any("pack path not found:" in line for line in state.log_lines))
             self.assertFalse(any("unsupported pack path" in line for line in state.log_lines))
 
+    def test_failed_verify_of_plain_directory_does_not_poison_remembered_pack_path(self) -> None:
+        m = self.m
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            bad_dir = tmp_path / "not-a-pack"
+            bad_dir.mkdir()
+            state = m.AppState(theme=m.Theme(normal=0, reverse=0, header=0))
+            state.verify_config.pack_path = ""
+
+            m._run_verify_plan(state, DummyStdScr(), pack_s=str(bad_dir), allow_large_manifest=False)
+
+            self.assertEqual(state.status, "Failed.")
+            self.assertEqual(state.verify_config.pack_path, "")
+            self.assertIsNone(state.last_pack_dir)
+
     def test_noisy_mode_does_not_block_folder_stamp_without_staged_sources(self) -> None:
         m = self.m
         with tempfile.TemporaryDirectory() as tmp:

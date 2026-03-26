@@ -26,7 +26,8 @@ Human path:
   stage sources if you need them, then stamp and verify
 
 Machine path:
-  eps stamp-bin --json
+  eps stamp --input /ABS/PATH/TO/DIR --out ./out --json
+  stamp-bin is subtractive and uses repo-relative defaults
 
 Trust boundary:
   use OS randomness for ordinary secret generation

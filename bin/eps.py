@@ -2946,7 +2946,7 @@ def _draw_footer(stdscr, state: AppState, rows: int, cols: int) -> None:
     label = state.menu[state.selected] if 0 <= state.selected < len(state.menu) else ""
     if label == "Sources":
         if state.focus == "entropy" and state.entropy_sources:
-            legend = "Up/Down: list  Tab: menu  Enter: preview  D/C: edit  Esc: back"
+            legend = "Up/Down: list  Tab: menu  Enter: preview  D: delete  C: clear  Esc: back"
         else:
             legend = "Up/Down: menu  Tab: list  A/T/Space/P: add  M: mode  Q: quit"
     elif label == "Stamp":
@@ -3393,6 +3393,7 @@ def _action_entropy_tap(state: AppState, stdscr) -> None:
     meta: Dict[str, object] = {"events": int(count), "sample": sample_events[:16]}
     # size_bytes tracks the conceptual size of the captured timing/code stream.
     state.entropy_sources.append(EntropySource(kind="tap", name="tap", sha256=digest, size_bytes=count * 8, meta=meta))
+    _prefer_sources_input_mode(state)
     # Reward hook: stub out where we will play a sound effect later.
     _trigger_interaction_flash(state, drop_zone=False)
     state.reward_ticks = max(state.reward_ticks, 18)
@@ -3410,6 +3411,8 @@ def _action_entropy_delete_selected(state: AppState) -> None:
     idx = max(0, min(int(state.entropy_selected), len(state.entropy_sources) - 1))
     removed = state.entropy_sources.pop(idx)
     state.entropy_selected = max(0, min(state.entropy_selected, len(state.entropy_sources) - 1))
+    if not state.entropy_sources:
+        state.focus = "menu"
     state.status = "Done."
     state.log_lines = [f"Removed source: [{removed.kind}] {removed.name}."]
 
@@ -3418,6 +3421,7 @@ def _action_entropy_clear(state: AppState) -> None:
     n = len(state.entropy_sources)
     state.entropy_sources.clear()
     state.entropy_selected = 0
+    state.focus = "menu"
     state.stamp_config.mix_sources = False
     if state.stamp_panel_draft is not None:
         state.stamp_panel_draft.mix_sources = False
@@ -4280,9 +4284,13 @@ def _run_verify_plan(state: AppState, stdscr, *, pack_s: str, allow_large_manife
         state.log_lines = ["Verify failed.", f"- {exc}"]
         state.status = "Failed."
         return
-    state.verify_config.pack_path = str(pack)
+    remember_pack = auto_selected or (pack.is_dir() and (pack / "manifest.json").is_file()) or (
+        pack.is_file() and pack.suffix.lower() == ".zip"
+    )
+    if remember_pack:
+        state.verify_config.pack_path = str(pack)
     state.verify_config.allow_large_manifest = bool(allow_large_manifest)
-    if pack.is_dir():
+    if res.ok and pack.is_dir():
         state.last_pack_dir = pack
     if res.ok:
         state.log_lines = [

@@ -67,6 +67,12 @@ class TestPublicReleaseContract(unittest.TestCase):
         ):
             self.assertTrue((ROOT / rel).is_file(), msg=rel)
 
+    def test_public_copy_assets_keep_verify_and_link_language_honest(self) -> None:
+        text = (ROOT / "docs" / "PUBLIC_COPY_ASSETS.md").read_text(encoding="utf-8")
+        self.assertNotIn("prove what bytes were packaged", text)
+        self.assertNotIn("entropy-bearing inputs", text)
+        self.assertNotIn("Repo + demo: add link", text)
+
     def test_tui_help_hides_legacy_insane_alias_but_parser_still_accepts_it(self) -> None:
         help_proc = subprocess.run(
             [sys.executable, "-B", "bin/eps.py", "--help"],

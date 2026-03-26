@@ -180,6 +180,31 @@ class TestTuiAuditQuickWins(unittest.TestCase):
         self.assertEqual(state.stamp_config.input_mode, "sources")
         self.assertEqual(state.stamp_config.input_path, "")
 
+    def test_action_entropy_tap_prefers_sources_mode(self) -> None:
+        m = self.m
+        state = self._state()
+        state.stamp_config.input_mode = "folder"
+        state.stamp_config.input_path = "/tmp/input"
+        stdscr = RecordingStdScr(inputs=[ord("x")] * 16 + [27])
+
+        m._action_entropy_tap(state, stdscr)
+
+        self.assertEqual(state.status, "Entropy collected.")
+        self.assertEqual(len(state.entropy_sources), 1)
+        self.assertEqual(state.stamp_config.input_mode, "sources")
+        self.assertEqual(state.stamp_config.input_path, "")
+
+    def test_deleting_last_source_returns_focus_to_menu(self) -> None:
+        m = self.m
+        state = self._state()
+        state.focus = "entropy"
+        state.entropy_sources.append(SimpleNamespace(kind="text", name="n", sha256="a" * 64, size_bytes=1, meta={}, text="x"))
+
+        m._action_entropy_delete_selected(state)
+
+        self.assertEqual(state.focus, "menu")
+        self.assertEqual(state.entropy_sources, [])
+
     def test_footer_is_rendered_with_reverse_video_and_compact_legend(self) -> None:
         m = self.m
         state = self._state()
@@ -195,6 +220,21 @@ class TestTuiAuditQuickWins(unittest.TestCase):
         self.assertEqual(attr, state.theme.reverse)
         self.assertIn("Enter: stamp", line)
         self.assertIn("M: mode", line)
+
+    def test_sources_footer_spells_out_delete_and_clear(self) -> None:
+        m = self.m
+        state = self._state()
+        state.selected = state.menu.index("Sources")
+        state.focus = "entropy"
+        state.entropy_sources.append(SimpleNamespace(kind="text", name="n", sha256="a" * 64, size_bytes=1, meta={}, text="x"))
+        stdscr = RecordingStdScr()
+
+        m._draw_footer(stdscr, state, 24, 100)
+
+        footer_calls = [call for call in stdscr.calls if call[0] == 23 and call[1] == 0]
+        _, _, line, _ = footer_calls[-1]
+        self.assertIn("D: delete", line)
+        self.assertIn("C: clear", line)
 
     def test_start_enter_moves_to_stamp_without_running(self) -> None:
         m = self.m

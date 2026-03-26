@@ -2,11 +2,11 @@
 
 ## Short Product Description
 
-Entropy Pack Stamper is a small deterministic tool for packaging and verifying operator-supplied entropy-bearing inputs. It produces legible packs with stable roots, receipts, and verifiable payload records.
+Entropy Pack Stamper is a small deterministic tool for packaging and verifying operator-supplied inputs. It produces legible packs with stable roots, receipts, and verifiable payload records.
 
 ## Medium Product Description
 
-Entropy Pack Stamper packages a folder of operator-supplied inputs into a deterministic pack with a canonical manifest, a receipt, and stable rooted identities. You can verify the pack later as a directory or zip and prove what bytes were packaged. It is useful when you want a small honest tool for deliberate human input, auditability, and handoff integrity. It is not an RNG, not automatic secrecy, and not signed provenance.
+Entropy Pack Stamper packages a folder of operator-supplied inputs into a deterministic pack with a canonical manifest, a receipt, and stable rooted identities. You can verify the pack later as a directory or zip and check that the presented bytes still match the pack contract. It is useful when you want a small honest tool for deliberate human input, auditability, and handoff integrity. It is not an RNG, not automatic secrecy, and not signed provenance.
 
 ## Website Copy Block
 
@@ -14,7 +14,7 @@ Entropy Pack Stamper is a small deterministic pack/verify tool. Give it a folder
 
 ## X / Twitter Draft
 
-I released a small deterministic tool for packaging and verifying operator-supplied entropy-bearing inputs.
+I released a small deterministic tool for packaging and verifying operator-supplied inputs.
 
 It makes a legible pack with:
 - a canonical manifest
@@ -24,11 +24,11 @@ It makes a legible pack with:
 
 It is not an RNG, not secrecy theater, and not a platform claim. Just a small honest tool.
 
-Repo + demo: add link
+Repo + demo: <add public link>
 
 ## LinkedIn Draft
 
-I released Entropy Pack Stamper, a small deterministic tool for packaging and verifying operator-supplied entropy-bearing inputs.
+I released Entropy Pack Stamper, a small deterministic tool for packaging and verifying operator-supplied inputs.
 
 The point is not “AI magic” or a grand security story. The point is a legible artifact: a pack with a canonical manifest, a receipt, stable rooted identity, and a clear verify step.
 

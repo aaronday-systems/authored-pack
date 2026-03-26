@@ -55,6 +55,19 @@ class TestCliContract(unittest.TestCase):
             self.assertNotIn("entropy_root_sha256", payload["result"]["receipt"])
             self.assertTrue(payload["result"]["pack_dir"])
 
+    def test_help_machine_path_uses_non_destructive_json_example(self) -> None:
+        proc = subprocess.run(
+            [sys.executable, "-m", "eps", "--help"],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+        self.assertIn("eps stamp --input /ABS/PATH/TO/DIR --out ./out --json", proc.stdout)
+        self.assertIn("stamp-bin is subtractive", proc.stdout)
+
     def test_verify_json_emits_failure_envelope(self) -> None:
         rc, stdout, stderr = self._run_cli(["verify", "--pack", "/no/such/path", "--json"])
 
