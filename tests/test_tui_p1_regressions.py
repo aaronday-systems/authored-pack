@@ -463,17 +463,18 @@ class TestTuiP1Regressions(unittest.TestCase):
             self.assertTrue(any(line.startswith("verified_path: ") for line in state.log_lines))
             self.assertTrue(any("used most recent pack in that folder" == line for line in state.log_lines))
 
-    def test_effective_verify_path_falls_back_from_missing_hash_dir_to_parent_out(self) -> None:
+    def test_effective_verify_path_preserves_missing_hash_dir_request(self) -> None:
         m = self.m
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             out_dir = tmp_path / "out"
             out_dir.mkdir()
+            missing = out_dir / ("a" * 64)
 
             state = m.AppState(theme=m.Theme(normal=0, reverse=0, header=0))
-            state.verify_config.pack_path = str(out_dir / ("a" * 64))
+            state.verify_config.pack_path = str(missing)
 
-            self.assertEqual(m._effective_verify_path(state), str(out_dir))
+            self.assertEqual(m._effective_verify_path(state), str(missing))
 
     def test_run_verify_plan_reports_missing_pack_path_cleanly(self) -> None:
         m = self.m

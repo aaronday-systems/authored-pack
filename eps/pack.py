@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import os
+import stat
 import shutil
 import tempfile
 import zipfile
@@ -257,6 +258,9 @@ def _verify_one_artifact_in_zip(zf: zipfile.ZipFile, *, idx: int, rel_s: str, si
         return f"missing artifact file in zip: {rel_s}"
     if info.is_dir():
         return f"artifact[{idx}] is a directory in zip: {rel_s}"
+    mode = (int(getattr(info, "external_attr", 0)) >> 16) & 0xFFFF
+    if stat.S_IFMT(mode) == stat.S_IFLNK:
+        return f"artifact[{idx}] is a symlink in zip: {rel_s}"
     zip_size = int(getattr(info, "file_size", -1))
     if zip_size != size:
         return f"size mismatch: {rel_s} expected={size} actual={zip_size}"
@@ -299,6 +303,9 @@ def _verify_manifest_artifacts(
             errors.append(f"artifact[{i}].path invalid")
             continue
         rel_s = rel_path.as_posix()
+        if rel_s in expected_payload_relpaths:
+            errors.append(f"duplicate artifact path: {rel_s}")
+            continue
         expected_payload_relpaths.add(rel_s)
         if not isinstance(sha, str) or len(sha) != 64:
             errors.append(f"artifact[{i}].sha256 invalid")

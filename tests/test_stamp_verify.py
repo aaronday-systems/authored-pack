@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import stat
 import tempfile
 import unittest
 import warnings
@@ -379,6 +380,77 @@ class TestStampVerify(unittest.TestCase):
             rz = verify_pack(zip_path)
             self.assertFalse(rz.ok)
             self.assertTrue(any("path" in e and "invalid" in e for e in rz.errors), msg=f"errors: {rz.errors}")
+
+    def test_verify_rejects_symlink_entries_in_zip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            data = b"hello"
+            manifest = {
+                "schema_version": "entropy.pack.v1",
+                "artifacts": [
+                    {
+                        "path": "payload/link.txt",
+                        "sha256": hashlib.sha256(data).hexdigest(),
+                        "size_bytes": len(data),
+                    }
+                ],
+            }
+            root = manifest_root_sha256(manifest)
+            zip_path = tmp_path / "symlink.zip"
+
+            zi = zipfile.ZipInfo("payload/link.txt")
+            zi.compress_type = zipfile.ZIP_DEFLATED
+            zi.external_attr = (stat.S_IFLNK | 0o777) << 16
+
+            with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr("manifest.json", stable_dumps(manifest))
+                zf.writestr("entropy_root_sha256.txt", root + "\n")
+                zf.writestr(zi, data)
+
+            res = verify_pack(zip_path)
+            self.assertFalse(res.ok)
+            self.assertTrue(any("symlink" in e for e in res.errors), msg=f"errors: {res.errors}")
+
+    def test_verify_rejects_duplicate_manifest_artifact_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            pack_dir = tmp_path / "dup_paths"
+            payload_dir = pack_dir / "payload"
+            payload_dir.mkdir(parents=True)
+            data = b"hello"
+            (payload_dir / "a.txt").write_bytes(data)
+            manifest = {
+                "schema_version": "entropy.pack.v1",
+                "artifacts": [
+                    {
+                        "path": "payload/a.txt",
+                        "sha256": hashlib.sha256(data).hexdigest(),
+                        "size_bytes": len(data),
+                    },
+                    {
+                        "path": "payload/a.txt",
+                        "sha256": hashlib.sha256(data).hexdigest(),
+                        "size_bytes": len(data),
+                    },
+                ],
+            }
+            root = manifest_root_sha256(manifest)
+            (pack_dir / "manifest.json").write_text(stable_dumps(manifest), encoding="utf-8")
+            (pack_dir / "entropy_root_sha256.txt").write_text(root + "\n", encoding="utf-8")
+
+            dir_result = verify_pack(pack_dir)
+            self.assertFalse(dir_result.ok)
+            self.assertTrue(any("duplicate artifact path" in e for e in dir_result.errors), msg=f"errors: {dir_result.errors}")
+
+            zip_path = tmp_path / "dup_paths.zip"
+            with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr("manifest.json", stable_dumps(manifest))
+                zf.writestr("entropy_root_sha256.txt", root + "\n")
+                zf.writestr("payload/a.txt", data)
+
+            zip_result = verify_pack(zip_path)
+            self.assertFalse(zip_result.ok)
+            self.assertTrue(any("duplicate artifact path" in e for e in zip_result.errors), msg=f"errors: {zip_result.errors}")
 
     def test_verify_rejects_duplicate_zip_members(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
