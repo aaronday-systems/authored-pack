@@ -463,6 +463,32 @@ class TestTuiP1Regressions(unittest.TestCase):
             self.assertTrue(any(line.startswith("verified_path: ") for line in state.log_lines))
             self.assertTrue(any("used most recent pack in that folder" == line for line in state.log_lines))
 
+    def test_effective_verify_path_falls_back_from_missing_hash_dir_to_parent_out(self) -> None:
+        m = self.m
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            out_dir = tmp_path / "out"
+            out_dir.mkdir()
+
+            state = m.AppState(theme=m.Theme(normal=0, reverse=0, header=0))
+            state.verify_config.pack_path = str(out_dir / ("a" * 64))
+
+            self.assertEqual(m._effective_verify_path(state), str(out_dir))
+
+    def test_run_verify_plan_reports_missing_pack_path_cleanly(self) -> None:
+        m = self.m
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            missing = tmp_path / "missing-pack"
+            state = m.AppState(theme=m.Theme(normal=0, reverse=0, header=0))
+
+            m._run_verify_plan(state, DummyStdScr(), pack_s=str(missing), allow_large_manifest=False)
+
+            self.assertEqual(state.status, "Failed.")
+            self.assertEqual(state.log_lines[0], "Verify failed.")
+            self.assertTrue(any("pack path not found:" in line for line in state.log_lines))
+            self.assertFalse(any("unsupported pack path" in line for line in state.log_lines))
+
     def test_noisy_mode_does_not_block_folder_stamp_without_staged_sources(self) -> None:
         m = self.m
         with tempfile.TemporaryDirectory() as tmp:

@@ -946,6 +946,11 @@ def _normalize_single_path_input(raw: str, *, allow_sources: bool = False) -> st
     return _recover_existing_path_suffix(_clean_dropped_path(text))
 
 
+def _looks_like_sha256_dir_name(name: str) -> bool:
+    v = (name or "").strip().lower()
+    return len(v) == 64 and all(ch in "0123456789abcdef" for ch in v)
+
+
 def _split_drop_payload(s: str) -> List[str]:
     """
     Some terminals paste multiple drop paths separated by whitespace (or newlines).
@@ -1724,7 +1729,15 @@ def _effective_stamp_output(state: AppState, cfg: Optional[StampConfig] = None) 
 def _effective_verify_path(state: AppState) -> str:
     val = str(state.verify_config.pack_path or "").strip()
     if val:
-        return val
+        candidate = Path(_normalize_single_path_input(val)).expanduser()
+        if candidate.exists():
+            return str(candidate)
+        if _looks_like_sha256_dir_name(candidate.name) and candidate.parent.is_dir():
+            return str(candidate.parent)
+    if state.last_pack_dir is not None and state.last_pack_dir.exists():
+        return str(state.last_pack_dir)
+    if state.last_out_dir is not None and state.last_out_dir.exists():
+        return str(state.last_out_dir)
     if state.last_pack_dir is not None:
         return str(state.last_pack_dir)
     if state.last_out_dir is not None:
@@ -4239,6 +4252,14 @@ def _run_verify_plan(state: AppState, stdscr, *, pack_s: str, allow_large_manife
     state.log_lines = []
     pack = Path(_normalize_single_path_input(pack_s)).expanduser()
     auto_selected = False
+    if not pack.exists():
+        if _looks_like_sha256_dir_name(pack.name) and pack.parent.is_dir():
+            state.log_lines = [f"Verify target missing; checking parent folder: {_display_path(pack.parent, max_len=44)}"]
+            pack = pack.parent
+        else:
+            state.log_lines = ["Verify failed.", f"- pack path not found: {_display_path(pack, max_len=44)}"]
+            state.status = "Failed."
+            return
     if pack.is_dir() and not (pack / "manifest.json").is_file():
         try:
             candidates = [p for p in pack.iterdir() if p.is_dir() and (p / "manifest.json").is_file()]
