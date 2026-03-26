@@ -8,7 +8,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 from . import __version__
 from .binmode import stamp_from_entropy_bin
 from .manifest import DEFAULT_DERIVATION_VERSION, stable_dumps
-from .pack import StampResult, _output_would_self_ingest_input, stamp_pack, verify_pack
+from .pack import StampResult, _output_would_self_ingest_input, inspect_pack, stamp_pack, verify_pack
 
 CLI_DESCRIPTION = (
     "Entropy Pack Stamper (EPS) is a small deterministic pack/verify tool for operator-supplied inputs. "
@@ -103,7 +103,7 @@ def _validate_seed_flags(args: argparse.Namespace) -> None:
 
 
 def _command_name_from_argv(argv_list: Sequence[str]) -> str:
-    known = {"stamp", "verify", "stamp-bin"}
+    known = {"stamp", "verify", "inspect", "stamp-bin"}
     for item in argv_list:
         token = str(item).strip()
         if token in known:
@@ -201,6 +201,53 @@ def _verify(args: argparse.Namespace) -> int:
             print(f"payload_root_sha256: {res.payload_root_sha256}")
         print(f"artifact_count_verified: {res.file_count}")
         print(f"artifact_bytes_verified: {res.total_bytes}")
+    return 0
+
+
+def _inspect(args: argparse.Namespace) -> int:
+    max_manifest_bytes = int(args.max_manifest_mib) * 1024 * 1024
+    summary = inspect_pack(
+        Path(args.pack),
+        max_manifest_bytes=max_manifest_bytes,
+        artifact_preview_limit=int(args.artifact_preview),
+    )
+
+    if args.json:
+        print(_json_success("inspect", summary))
+    else:
+        print(f"inspected_path: {summary['inspected_path']}")
+        print(f"pack_type: {summary['pack_type']}")
+        print(f"pack_root_sha256: {summary['pack_root_sha256']}")
+        payload_root = str(summary.get("payload_root_sha256", "") or "")
+        if payload_root:
+            print(f"payload_root_sha256: {payload_root}")
+        print(f"manifest_schema_version: {summary['manifest_schema_version']}")
+        print(f"artifact_count: {summary['artifact_count']}")
+        print(f"artifact_bytes: {summary['artifact_bytes']}")
+        print(f"verification_ok: {str(bool(summary['verification_ok'])).lower()}")
+        if summary.get("receipt_summary"):
+            receipt_summary = summary["receipt_summary"]
+            if isinstance(receipt_summary, dict):
+                schema = receipt_summary.get("schema_version")
+                if schema:
+                    print(f"receipt_schema_version: {schema}")
+                layout = receipt_summary.get("pack_layout")
+                if layout:
+                    print(f"pack_layout: {layout}")
+        preview = summary.get("artifact_preview")
+        if isinstance(preview, list) and preview:
+            print("artifact_preview:")
+            for item in preview:
+                if not isinstance(item, dict):
+                    continue
+                path = str(item.get("path", ""))
+                size = item.get("size_bytes")
+                print(f"- {path} ({size} bytes)" if isinstance(size, int) else f"- {path}")
+        errors = summary.get("verification_errors")
+        if isinstance(errors, list) and errors:
+            print("verification_errors:")
+            for err in errors:
+                print(f"- {err}")
     return 0
 
 
@@ -327,6 +374,13 @@ def build_parser() -> argparse.ArgumentParser:
     verify.add_argument("--max-manifest-mib", type=int, default=4, help="Maximum manifest.json size to accept (default: 4)")
     verify.add_argument("--json", action="store_true", help="Emit JSON envelope to stdout")
     verify.set_defaults(func=_verify)
+
+    inspect = sub.add_parser("inspect", help="Summarize a stamped pack directory or .zip for machine or human review")
+    inspect.add_argument("--pack", required=True, help="Path to pack dir or entropy_pack.zip")
+    inspect.add_argument("--max-manifest-mib", type=int, default=4, help="Maximum manifest.json size to accept while inspecting (default: 4)")
+    inspect.add_argument("--artifact-preview", type=int, default=20, help="How many artifact entries to include in the summary preview (default: 20)")
+    inspect.add_argument("--json", action="store_true", help="Emit JSON envelope to stdout")
+    inspect.set_defaults(func=_inspect)
 
     stamp_bin = sub.add_parser("stamp-bin", help="Machine sidecar: subtractively consume entropy-bin files and emit receipts")
     stamp_bin.add_argument(

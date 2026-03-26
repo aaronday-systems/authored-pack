@@ -82,6 +82,69 @@ class TestCliContract(unittest.TestCase):
         self.assertIsInstance(payload["error"]["details"]["errors"], list)
         self.assertEqual(payload["error"]["details"]["limits"]["max_manifest_mib"], 4)
 
+    def test_inspect_json_emits_summary_for_pack_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+            (input_dir / "b.txt").write_text("world", encoding="utf-8")
+
+            stamped = stamp_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=True, derive_seed=True)
+
+            rc, stdout, stderr = self._run_cli(["inspect", "--pack", str(stamped.pack_dir), "--json"])
+
+            self.assertEqual(rc, 0)
+            self.assertEqual(stderr, "")
+            payload = json.loads(stdout)
+            self.assertEqual(payload["ok"], True)
+            self.assertEqual(payload["command"], "inspect")
+            result = payload["result"]
+            self.assertEqual(result["pack_type"], "directory")
+            self.assertEqual(result["pack_root_sha256"], stamped.pack_root_sha256)
+            self.assertEqual(result["payload_root_sha256"], stamped.payload_root_sha256)
+            self.assertEqual(result["artifact_count"], 2)
+            self.assertTrue(result["has_receipt"])
+            self.assertTrue(result["has_zip"])
+            self.assertTrue(result["verification_ok"])
+            self.assertIn("receipt_summary", result)
+            self.assertIsInstance(result["artifact_preview"], list)
+
+    def test_inspect_json_emits_summary_for_pack_zip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            stamped = stamp_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=True, derive_seed=False)
+
+            rc, stdout, stderr = self._run_cli(["inspect", "--pack", str(stamped.zip_path), "--json"])
+
+            self.assertEqual(rc, 0)
+            self.assertEqual(stderr, "")
+            payload = json.loads(stdout)
+            self.assertEqual(payload["ok"], True)
+            self.assertEqual(payload["command"], "inspect")
+            result = payload["result"]
+            self.assertEqual(result["pack_type"], "zip")
+            self.assertTrue(result["has_zip"])
+            self.assertFalse(result["has_evidence_bundle"])
+            self.assertTrue(result["verification_ok"])
+
+    def test_inspect_json_missing_pack_emits_failure_envelope(self) -> None:
+        rc, stdout, stderr = self._run_cli(["inspect", "--pack", "/no/such/path", "--json"])
+
+        self.assertEqual(rc, 1)
+        self.assertEqual(stderr, "")
+        payload = json.loads(stdout)
+        self.assertEqual(payload["ok"], False)
+        self.assertEqual(payload["command"], "inspect")
+        self.assertEqual(payload["error"]["type"], "ValueError")
+        self.assertIn("unsupported pack path", payload["error"]["message"])
+
     def test_verify_json_failure_preserves_all_errors(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -334,6 +397,7 @@ class TestCliContract(unittest.TestCase):
         self.assertIn("Entropy Pack Stamper", proc.stdout)
         self.assertIn("python3 -B bin/eps.py", proc.stdout)
         self.assertIn("not automatic secrecy", proc.stdout)
+        self.assertIn("inspect", proc.stdout)
         stamp_help = cli.build_parser()._subparsers._group_actions[0].choices["stamp"].format_help()
         self.assertIn("Emit JSON envelope to stdout", stamp_help)
 

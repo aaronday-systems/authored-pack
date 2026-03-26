@@ -58,6 +58,7 @@ Identity model:
 ```bash
 python3 -m eps verify --pack /path/to/pack_dir
 python3 -m eps verify --pack /path/to/entropy_pack.zip
+python3 -m eps inspect --pack /path/to/pack_dir --json
 ```
 
 Verification proves self-consistency of the presented pack against its manifest.
@@ -152,6 +153,7 @@ All `--json` commands emit one envelope shape:
 For `stamp`, the `result` object includes `pack_dir`, `pack_root_sha256`, `payload_root_sha256`, and `receipt`.
 For `stamp-bin`, the `result` object also includes `consumed`, `warnings`, and `policy`.
 For `verify`, the `result` object includes verification counts and verifier errors.
+For `inspect`, the `result` object includes pack roots, schema summary, verification status, and an artifact preview.
 
 ## Public Release Boundary
 

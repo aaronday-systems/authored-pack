@@ -220,6 +220,141 @@ def _load_existing_receipt(pack_dir: Path) -> Dict[str, object]:
     return data
 
 
+def _read_manifest_and_receipt(
+    pack_path: Path,
+    *,
+    max_manifest_bytes: int,
+) -> Tuple[str, Dict[str, object], Optional[Dict[str, object]]]:
+    if pack_path.is_dir():
+        raw_manifest = _read_file_bytes_limited(pack_path / "manifest.json", max_bytes=max_manifest_bytes)
+        manifest = json.loads(raw_manifest.decode("utf-8"))
+        if not isinstance(manifest, dict):
+            raise ValueError("manifest.json must be an object")
+        receipt: Optional[Dict[str, object]] = None
+        receipt_path = pack_path / "receipt.json"
+        if receipt_path.is_file():
+            raw_receipt = _read_file_bytes_limited(receipt_path, max_bytes=max_manifest_bytes)
+            loaded_receipt = json.loads(raw_receipt.decode("utf-8"))
+            if not isinstance(loaded_receipt, dict):
+                raise ValueError("receipt.json must be an object")
+            receipt = loaded_receipt
+        return "directory", manifest, receipt
+
+    if pack_path.is_file() and pack_path.suffix.lower() == ".zip":
+        with zipfile.ZipFile(pack_path, "r") as zf:
+            raw_manifest = _read_zip_member_bytes_limited(zf, "manifest.json", max_bytes=max_manifest_bytes)
+            manifest = json.loads(raw_manifest.decode("utf-8"))
+            if not isinstance(manifest, dict):
+                raise ValueError("manifest.json must be an object")
+            receipt = None
+            try:
+                raw_receipt = _read_zip_member_bytes_limited(zf, "receipt.json", max_bytes=max_manifest_bytes)
+            except KeyError:
+                raw_receipt = None
+            if raw_receipt is not None:
+                loaded_receipt = json.loads(raw_receipt.decode("utf-8"))
+                if not isinstance(loaded_receipt, dict):
+                    raise ValueError("receipt.json must be an object")
+                receipt = loaded_receipt
+            return "zip", manifest, receipt
+
+    raise ValueError(f"unsupported pack path: {pack_path}")
+
+
+def inspect_pack(
+    pack_path: Path,
+    *,
+    max_manifest_bytes: int = DEFAULT_MAX_MANIFEST_BYTES,
+    artifact_preview_limit: int = 20,
+) -> Dict[str, object]:
+    pack_path = Path(pack_path).resolve()
+    pack_type, manifest, receipt = _read_manifest_and_receipt(pack_path, max_manifest_bytes=int(max_manifest_bytes))
+
+    artifacts_obj = manifest.get("artifacts")
+    if not isinstance(artifacts_obj, list):
+        raise ValueError("manifest.artifacts missing or invalid")
+
+    preview_limit = max(0, int(artifact_preview_limit))
+    artifact_preview: List[Dict[str, object]] = []
+    artifact_bytes = 0
+    for item in artifacts_obj:
+        if not isinstance(item, dict):
+            continue
+        size = item.get("size_bytes")
+        if isinstance(size, int) and size >= 0:
+            artifact_bytes += int(size)
+        if len(artifact_preview) >= preview_limit:
+            continue
+        preview_item: Dict[str, object] = {}
+        path = item.get("path")
+        sha = item.get("sha256")
+        if isinstance(path, str):
+            preview_item["path"] = path
+        if isinstance(size, int):
+            preview_item["size_bytes"] = int(size)
+        if isinstance(sha, str):
+            preview_item["sha256"] = sha
+        if preview_item:
+            artifact_preview.append(preview_item)
+
+    verify_result = verify_pack(pack_path, max_manifest_bytes=int(max_manifest_bytes))
+
+    has_zip = False
+    has_evidence_bundle = False
+    if pack_type == "directory":
+        has_zip = (pack_path / "entropy_pack.zip").is_file()
+        has_evidence_bundle = any(pack_path.glob("eps_evidence_*.zip"))
+    else:
+        has_zip = True
+        has_evidence_bundle = False
+
+    receipt_summary: Optional[Dict[str, object]] = None
+    if isinstance(receipt, dict):
+        receipt_summary = {}
+        for key in (
+            "schema_version",
+            "tool",
+            "tool_version",
+            "pack_layout",
+            "stamped_at_utc",
+            "artifact_count",
+            "artifact_bytes",
+        ):
+            value = receipt.get(key)
+            if value is not None:
+                receipt_summary[key] = value
+        if isinstance(receipt.get("derivation"), dict):
+            receipt_summary["derivation"] = dict(receipt["derivation"])
+        if "entropy_sources_audit_status" in receipt:
+            receipt_summary["entropy_sources_audit_status"] = receipt.get("entropy_sources_audit_status")
+
+    summary: Dict[str, object] = {
+        "inspected_path": str(pack_path),
+        "pack_type": pack_type,
+        "pack_root_sha256": manifest_root_sha256(manifest),
+        "payload_root_sha256": str(manifest.get("payload_root_sha256", "")),
+        "manifest_schema_version": str(manifest.get("schema_version", "")),
+        "artifact_count": len(artifacts_obj),
+        "artifact_bytes": int(artifact_bytes),
+        "artifact_preview": artifact_preview,
+        "artifact_preview_truncated": len(artifacts_obj) > len(artifact_preview),
+        "has_receipt": isinstance(receipt, dict),
+        "has_zip": bool(has_zip),
+        "has_evidence_bundle": bool(has_evidence_bundle),
+        "verification_ok": bool(verify_result.ok),
+        "verification_errors": list(verify_result.errors),
+        "artifact_count_verified": int(verify_result.file_count),
+        "artifact_bytes_verified": int(verify_result.total_bytes),
+    }
+    if isinstance(manifest.get("pack_id"), str):
+        summary["pack_id"] = manifest["pack_id"]
+    if isinstance(manifest.get("derivation"), dict):
+        summary["derivation"] = dict(manifest["derivation"])
+    if receipt_summary is not None:
+        summary["receipt_summary"] = receipt_summary
+    return summary
+
+
 def _verify_one_artifact_in_dir(pack_dir: Path, *, idx: int, rel_s: str, size: int, sha: str) -> Optional[str]:
     rel_path = Path(rel_s)
     target = pack_dir / rel_path
