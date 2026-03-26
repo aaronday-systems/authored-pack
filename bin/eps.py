@@ -921,15 +921,17 @@ def _recover_existing_path_suffix(s: str) -> str:
 
 
 def _normalize_single_path_input(raw: str, *, allow_sources: bool = False) -> str:
-    text = (raw or "").strip()
+    text = (raw or "").replace("\r\n", "\n").replace("\r", "\n").strip()
     if not text:
         return ""
     if allow_sources and text == "@sources":
         return "@sources"
-
-    parts = _split_drop_payload(text)
-    if parts:
-        return _recover_existing_path_suffix(parts[0])
+    if "\n" in text:
+        for line in text.split("\n"):
+            candidate = _clean_dropped_path(line)
+            if candidate:
+                return _recover_existing_path_suffix(candidate)
+        return ""
     return _recover_existing_path_suffix(_clean_dropped_path(text))
 
 

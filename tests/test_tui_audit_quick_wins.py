@@ -98,6 +98,16 @@ class TestTuiAuditQuickWins(unittest.TestCase):
 
             self.assertEqual(normalized, str(dropped))
 
+    def test_normalize_single_path_input_preserves_plain_spaces(self) -> None:
+        m = self.m
+        with tempfile.TemporaryDirectory() as tmp:
+            dropped = Path(tmp) / "images 2025"
+            dropped.mkdir()
+
+            normalized = m._normalize_single_path_input(str(dropped))
+
+            self.assertEqual(normalized, str(dropped))
+
     def test_normalize_single_path_input_accepts_file_url_drop(self) -> None:
         m = self.m
         with tempfile.TemporaryDirectory() as tmp:
