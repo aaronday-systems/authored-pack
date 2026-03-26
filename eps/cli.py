@@ -10,9 +10,9 @@ from .manifest import DEFAULT_DERIVATION_VERSION, stable_dumps
 from .pack import StampResult, _output_would_self_ingest_input, stamp_pack, verify_pack
 
 CLI_DESCRIPTION = (
-    "Entropy Pack Stamper (EPS) stamps operator-supplied entropy-bearing file sets into deterministic, "
-    "verifiable packs. It can derive reproducible seed material from rooted pack state and emits receipts "
-    "that other tools can consume."
+    "Entropy Pack Stamper (EPS) is a small deterministic pack/verify tool for operator-supplied inputs. "
+    "It turns a directory into a verifiable pack with a manifest and receipt, and can optionally derive "
+    "reproducible seed material from the pack root."
 )
 
 CLI_EPILOG = """\
@@ -20,14 +20,17 @@ First clean success:
   eps stamp --input /ABS/PATH/TO/DIR --out ./out --zip
   eps verify --pack ./out/<pack_root_sha256>
 
-Then choose the path that fits the moment:
-  busy humans -> stamp, then verify
-  nervous humans -> stage sources in the TUI, then stamp
-  machines -> eps stamp-bin --json
+Human path:
+  python3 -B bin/eps.py
+  stage sources if you need them, then stamp and verify
+
+Machine path:
+  eps stamp-bin --json
 
 Trust boundary:
   use OS randomness for ordinary secret generation
-  EPS is for auditable deterministic packaging and verification, not RNG
+  EPS is not an RNG, not automatic secrecy, not signed provenance,
+  and not sealed storage
 """
 
 
@@ -151,10 +154,14 @@ def _stamp(args: argparse.Namespace) -> int:
         print(f"pack_dir: {res.pack_dir}")
         print(f"pack_root_sha256: {res.pack_root_sha256}")
         print(f"payload_root_sha256: {res.payload_root_sha256}")
+        if res.zip_path is not None:
+            print(f"zip_path: {res.zip_path}")
         if args.derive_seed:
             fp = res.receipt.get("derived_seed_fingerprint_sha256") or res.receipt.get("seed_fingerprint_sha256")
             if isinstance(fp, str) and fp:
                 print(f"derived_seed_fingerprint_sha256: {fp}")
+        if res.evidence_bundle_path is not None:
+            print(f"evidence_bundle_path: {res.evidence_bundle_path}")
         if res.evidence_bundle_sha256:
             print(f"evidence_bundle_sha256: {res.evidence_bundle_sha256}")
     return 0
@@ -312,13 +319,13 @@ def build_parser() -> argparse.ArgumentParser:
     stamp.add_argument("--print-seed", action="store_true", help="Print derived seed material as seed_master.{hex,b64} to stdout (requires --derive-seed, incompatible with --json)")
     stamp.add_argument("--evidence-bundle", action="store_true", help="Write eps_evidence_<root>.zip + .sha256 (tamper-evident local audit bundle)")
 
-    stamp.add_argument("--json", action="store_true", help="Emit receipt JSON to stdout")
+    stamp.add_argument("--json", action="store_true", help="Emit JSON envelope to stdout")
     stamp.set_defaults(func=_stamp)
 
     verify = sub.add_parser("verify", help="Post-run audit: verify a stamped pack directory or .zip")
     verify.add_argument("--pack", required=True, help="Path to pack dir or entropy_pack.zip")
     verify.add_argument("--max-manifest-mib", type=int, default=4, help="Maximum manifest.json size to accept (default: 4)")
-    verify.add_argument("--json", action="store_true", help="Emit verification JSON to stdout")
+    verify.add_argument("--json", action="store_true", help="Emit JSON envelope to stdout")
     verify.set_defaults(func=_verify)
 
     stamp_bin = sub.add_parser("stamp-bin", help="Machine sidecar: subtractively consume entropy-bin files and emit receipts")
@@ -353,7 +360,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=True,
         help="Write eps_evidence_<root>.zip + .sha256 (tamper-evident) (default: on)",
     )
-    stamp_bin.add_argument("--json", action="store_true", help="Emit JSON to stdout")
+    stamp_bin.add_argument("--json", action="store_true", help="Emit JSON envelope to stdout")
     stamp_bin.set_defaults(func=_stamp_bin)
 
     return p

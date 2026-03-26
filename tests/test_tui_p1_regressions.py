@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -389,19 +390,19 @@ class TestTuiP1Regressions(unittest.TestCase):
     def test_entropy_sources_menu_navigation_stays_on_menu_until_explicit_focus(self) -> None:
         m = self.m
         state = m.AppState(theme=m.Theme(normal=0, reverse=0, header=0))
-        state.selected = state.menu.index("Entropy Sources")
+        state.selected = state.menu.index("Sources")
         state.focus = "menu"
 
         keep_running = m.handle_key(DummyStdScr(), state, m.curses.KEY_DOWN)
 
         self.assertTrue(keep_running)
         self.assertEqual(state.focus, "menu")
-        self.assertEqual(state.menu[state.selected], "Drop Zone")
+        self.assertEqual(state.menu[state.selected], "Stamp")
 
     def test_tab_on_empty_entropy_sources_keeps_menu_focus(self) -> None:
         m = self.m
         state = m.AppState(theme=m.Theme(normal=0, reverse=0, header=0))
-        state.selected = state.menu.index("Entropy Sources")
+        state.selected = state.menu.index("Sources")
         state.focus = "menu"
 
         keep_running = m.handle_key(DummyStdScr(), state, 9)
@@ -409,7 +410,7 @@ class TestTuiP1Regressions(unittest.TestCase):
         self.assertTrue(keep_running)
         self.assertEqual(state.focus, "menu")
 
-    def test_action_verify_logs_verified_path(self) -> None:
+    def test_verify_from_config_logs_verified_path(self) -> None:
         m = self.m
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -418,17 +419,8 @@ class TestTuiP1Regressions(unittest.TestCase):
             (pack_dir / "manifest.json").write_text("{}", encoding="utf-8")
 
             state = m.AppState(theme=m.Theme(normal=0, reverse=0, header=0))
-            state.last_out_dir = tmp_path / "out"
-
-            orig_prompt_str = m._prompt_str_curses
-            orig_prompt_bool = m._prompt_bool_curses
+            state.verify_config.pack_path = str(tmp_path / "out")
             orig_verify_pack = m.verify_pack
-
-            def fake_prompt_str(*_args, **_kwargs) -> str:
-                return str(tmp_path / "out")
-
-            def fake_prompt_bool(*_args, **_kwargs) -> bool:
-                return False
 
             def fake_verify_pack(_pack, **_kwargs):
                 return SimpleNamespace(
@@ -441,18 +433,70 @@ class TestTuiP1Regressions(unittest.TestCase):
                 )
 
             try:
-                m._prompt_str_curses = fake_prompt_str
-                m._prompt_bool_curses = fake_prompt_bool
                 m.verify_pack = fake_verify_pack
-                m._action_verify(state, DummyStdScr())
+                m._run_verify_from_config(state, DummyStdScr())
             finally:
-                m._prompt_str_curses = orig_prompt_str
-                m._prompt_bool_curses = orig_prompt_bool
                 m.verify_pack = orig_verify_pack
 
             self.assertEqual(state.status, "Done.")
             self.assertTrue(any(line.startswith("verified_path: ") for line in state.log_lines))
             self.assertTrue(any("used most recent pack in that folder" == line for line in state.log_lines))
+
+    def test_noisy_mode_does_not_block_folder_stamp_without_staged_sources(self) -> None:
+        m = self.m
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            out_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            state = m.AppState(theme=m.Theme(normal=0, reverse=0, header=0), insane=True)
+            state.stamp_config.input_mode = "folder"
+            state.stamp_config.input_path = str(input_dir)
+            state.stamp_config.out_path = str(out_dir)
+            orig_stamp_pack = m.stamp_pack
+            orig_stamp_with_fx = m._stamp_with_insane_fx
+
+            def fake_stamp_pack(**_kwargs):
+                pack_dir = out_dir / ("a" * 64)
+                pack_dir.mkdir(parents=True, exist_ok=True)
+                return SimpleNamespace(
+                    pack_dir=pack_dir,
+                    root_sha256="a" * 64,
+                    pack_root_sha256="a" * 64,
+                    payload_root_sha256="b" * 64,
+                    receipt={},
+                    seed_master=None,
+                    zip_path=None,
+                    evidence_bundle_path=None,
+                    evidence_bundle_sha256=None,
+                )
+
+            def fake_stamp_with_fx(_stdscr, _state, do_stamp, **_kwargs):
+                return do_stamp()
+
+            try:
+                m.stamp_pack = fake_stamp_pack
+                m._stamp_with_insane_fx = fake_stamp_with_fx
+                m._run_stamp_from_config(state, DummyStdScr())
+            finally:
+                m.stamp_pack = orig_stamp_pack
+                m._stamp_with_insane_fx = orig_stamp_with_fx
+
+            self.assertEqual(state.status, "Done.")
+            self.assertTrue(any(line == "Stamp complete." for line in state.log_lines))
+
+    def test_verify_config_edits_clear_old_log_lines(self) -> None:
+        m = self.m
+        state = m.AppState(theme=m.Theme(normal=0, reverse=0, header=0))
+        state.log_lines = ["Verify ok."]
+
+        with mock.patch.object(m, "_prompt_str_curses", return_value="/tmp/example.pack"):
+            self.assertTrue(m._edit_verify_path(state, DummyStdScr()))
+
+        self.assertEqual(state.log_lines, [])
 
     def test_audit_writer_skips_unwritable_entries_and_stays_transactional(self) -> None:
         m = self.m

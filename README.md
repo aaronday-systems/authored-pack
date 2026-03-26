@@ -1,11 +1,23 @@
 # Entropy Pack Stamper (EPS)
 
+EPS is a small deterministic pack/verify tool for operator-supplied entropy-bearing inputs.
+
+## Start Here
+
+Human first path in an interactive terminal:
+1. Start the TUI: `python3 -B bin/eps.py`
+2. Stage sources if you need them.
+3. Stamp a folder, then verify the resulting pack.
+4. Use Noisy Mode only if you want ceremony cues.
+
+The human TUI is the discoverability path. CLI remains available, but the first screen should help a stranger reach `stamp -> verify` before they read the deeper docs.
+
 EPS stamps and verifies **EntropyPacks**: a directory (or `.zip`) containing:
 - `manifest.json` (canonical, deterministic JSON)
 - `receipt.json` (required for new v2 packs)
 - payload artifacts (bytes)
 
-It does not create entropy. It packages, commits, and verifies operator-supplied entropy-bearing inputs, then optionally derives reproducible material from the rooted pack state.
+It does not create entropy. It packages, commits, and verifies operator-supplied inputs, then optionally derives reproducible material from the rooted pack state.
 
 It is not an RNG, not automatic secrecy, not signed provenance, and not sealed break-glass storage.
 
@@ -13,18 +25,9 @@ State: live `v1.0.0` deterministic core. Sealed/break-glass mode is deferred des
 
 Run next: `python3 -m eps --help`
 
-Safe first live run: copy disposable sample inputs into `./bins/entropy_bin` or another throwaway bin, then use `stamp-bin` there. Do not point `stamp-bin` at a source-of-truth folder.
-
-Fastest operator path: subtractive `stamp-bin` randomly selects 7 files from an entropy bin, moves them into a new pack, and refuses low-water bins by default.
-
 Repo-local bins (pre-created, contents ignored by git):
 - `./bins/entropy_bin`
 - `./bins/eps_out`
-
-Read next:
-- the `Fastest Path: Subtractive stamp-bin` section below for the live operator path
-- the V1 contract below for the live surface
-- `docs/SEALED_PACK_ARCHITECTURE.md` for deferred work only
 
 Current release: `v1.0.0`. Runtime version: `python3 -c 'from eps import __version__; print(__version__)'`.
 
@@ -67,9 +70,39 @@ What is deferred:
 - sealed break-glass mode remains future design only
 - see `docs/SEALED_PACK_ARCHITECTURE.md`
 
-## Fastest Path: Subtractive `stamp-bin`
+## Human Workflow
 
-This is the push-button path for agents/operators who do not want to stage inputs manually.
+The TUI supports staging sources like photos, text, and tap timing. Use it when a person should make the input deliberate and auditable.
+
+The practical human flow is:
+1. Stage sources or point `stamp` at a folder.
+2. `stamp` the inputs into a content-addressed pack.
+3. `verify` the resulting pack later or after handoff.
+
+That is the path to optimize for in the TUI and in the docs that introduce it.
+
+## Canonical Demo
+
+Run one honest demo end to end:
+
+```bash
+bash scripts/demo_v1.sh
+```
+
+That demo:
+- creates a tiny disposable input set
+- stamps it into a pack and zip
+- verifies the directory pack
+- verifies the zip pack
+
+Reference walkthrough:
+- `docs/CANONICAL_DEMO.md`
+
+## Machine Sidecar
+
+`stamp-bin` is the push-button, subtractive sidecar for agents or operators who already have a disposable entropy bin.
+
+Safe first live run: copy disposable sample inputs into `./bins/entropy_bin` or another throwaway bin first. `stamp-bin` move-consumes files on success.
 
 ```bash
 python3 -m eps stamp-bin \
@@ -97,18 +130,15 @@ Why multiple sources:
 - Mixing several sources makes it harder for one weak source to dominate the outcome.
 - Operationally, it encourages a repeatable checklist for humans and for agents.
 
-The TUI supports staging sources like photos, text, and tap timing. The headless `stamp-bin` mode selects seven files at random from an entropy bin and moves them into a pack path.
+## What EPS Does
 
-## What EPS Does (Plain English)
-
-EPS treats each artifact as a **byte stream**:
+In plain English:
 1. It walks the input directory deterministically.
-2. For each file, it computes `sha256(bytes)` and records `size_bytes`.
-3. It writes a canonical `manifest.json` (sorted, stable JSON).
-4. The pack identity is `pack_root_sha256 = sha256(canonical_manifest_json)`.
-5. EPS also records `payload_root_sha256`, which stays stable for the payload artifact record even when pack-level metadata changes.
-
-Optionally, EPS derives a 32-byte `seed_master` via HKDF from the rooted pack identity. When you choose to mix staged entropy sources, EPS also roots the derivation mode and staged-sources hash into the manifest so the pack identity and the derived seed both change if the mixed-source set changes.
+2. It hashes each artifact and records path plus size.
+3. It writes a canonical `manifest.json` and a readable `receipt.json`.
+4. It computes `pack_root_sha256` for the full pack contract.
+5. It computes `payload_root_sha256` for the payload artifact record.
+6. It can optionally derive reproducible seed material from the rooted pack state.
 
 ### Deterministic Derived Seed Model
 
@@ -213,6 +243,8 @@ Do not describe `seed_master` as a secret unless you have added a separate secre
 - Public repo scope is the deterministic pack/verify tool only.
 - Sealed mode is not implemented in V1.
 - `docs/SEALED_PACK_ARCHITECTURE.md` is design work for a future versioned mode, not a promise about current runtime behavior.
+- `docs/CANONICAL_DEMO.md` is the short runnable walkthrough.
+- `docs/PUBLIC_COPY_ASSETS.md` is the source copy for posts, screenshots, and short demos.
 - `docs/RELEASE_NOTES_v1.0.0.md` and `CHANGELOG.md` describe the public release surface.
 - `CONTRIBUTING.md` and `SECURITY.md` define contribution and disclosure expectations for the public repo.
 

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import sys
+import tempfile
 import unittest
-from unittest import mock
+from itertools import chain, repeat
 from pathlib import Path
-
-from eps import cli
+from types import SimpleNamespace
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,48 +23,153 @@ def _load_eps_tui_module():
     return module
 
 
+class DummyStdScr:
+    def __init__(self, inputs: list[int] | None = None) -> None:
+        self.inputs = list(inputs or [])
+
+    def getmaxyx(self) -> tuple[int, int]:
+        return (24, 80)
+
+    def move(self, *_args, **_kwargs) -> None:
+        return None
+
+    def clrtoeol(self) -> None:
+        return None
+
+    def refresh(self) -> None:
+        return None
+
+    def erase(self) -> None:
+        return None
+
+    def addstr(self, *_args, **_kwargs) -> None:
+        return None
+
+    def getch(self) -> int:
+        if self.inputs:
+            return self.inputs.pop(0)
+        return -1
+
+    def nodelay(self, *_args, **_kwargs) -> None:
+        return None
+
+    def timeout(self, *_args, **_kwargs) -> None:
+        return None
+
+
 class TestTuiExperienceContract(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.m = _load_eps_tui_module()
 
-    def test_menu_leads_with_quickstart_and_experience_mode(self) -> None:
-        m = self.m
-        state = m.AppState(theme=m.Theme(normal=0, reverse=0, header=0))
-        self.assertEqual(state.menu[:2], ["90-Second Start", "Experience Mode"])
+    def _state(self):
+        return self.m.AppState(theme=self.m.Theme(normal=0, reverse=0, header=0))
 
-    def test_quickstart_preview_prioritizes_stamp_then_verify_and_machine_path(self) -> None:
-        m = self.m
-        state = m.AppState(theme=m.Theme(normal=0, reverse=0, header=0))
-        preview = m._selection_preview(state, "90-Second Start", width=200, height=40)
-        joined = "\n".join(preview)
-        self.assertIn("python3 -m eps stamp", joined)
-        self.assertIn("python3 -m eps verify", joined)
-        self.assertIn("stamp-bin --json", joined)
-        self.assertIn("not an RNG", joined)
+    def _preview(self, label: str, *, width: int = 200, height: int = 40) -> str:
+        preview = self.m._selection_preview(self._state(), label, width=width, height=height)
+        return "\n".join(preview)
 
-    def test_experience_preview_describes_calm_and_noisy_without_entropy_claims(self) -> None:
-        m = self.m
-        state = m.AppState(theme=m.Theme(normal=0, reverse=0, header=0))
-        preview = m._selection_preview(state, "Experience Mode", width=200, height=40)
-        joined = "\n".join(preview)
-        self.assertIn("Current profile: Calm", joined)
-        self.assertIn("Calm -> quiet guidance", joined)
-        self.assertIn("Noisy -> optional ceremony cues", joined)
-        self.assertIn("local audio feedback when supported", joined)
-        self.assertIn("does not improve entropy quality", joined)
+    def test_main_nav_collapses_to_workflow_actions(self) -> None:
+        state = self._state()
+        self.assertEqual(state.menu[:5], ["Start", "Sources", "Stamp", "Verify", "Help"])
+        self.assertNotIn("Experience Mode", state.menu)
+        self.assertNotIn("View README", state.menu)
+        self.assertNotIn("View TUI Standard", state.menu)
+        self.assertNotIn("View TUI Contract", state.menu)
 
-    def test_drop_zone_preview_uses_platform_neutral_language(self) -> None:
+    def test_start_card_leads_with_the_first_success_path(self) -> None:
+        joined = self._preview("Start")
+        self.assertIn("Turn a folder or staged sources into a verifiable pack.", joined)
+        self.assertIn("stamp a normal directory", joined.lower())
+        self.assertIn("verify the resulting pack", joined.lower())
+        self.assertIn("machine-sidecar route", joined)
+
+    def test_sources_card_prioritizes_empty_state_and_readiness_meter(self) -> None:
+        joined = self._preview("Sources")
+        self.assertIn("Add a photo, text note, or tap sample.", joined)
+        self.assertIn("Mixed-source seed readiness: 0/7", joined)
+        self.assertIn("No sources yet.", joined)
+        self.assertIn("Menu focus", joined)
+
+    def test_stamp_card_summarizes_review_before_advanced_prompts(self) -> None:
+        joined = self._preview("Stamp")
+        self.assertIn("Current defaults:", joined)
+        self.assertIn("- input: not set", joined)
+        self.assertIn("Enter -> open review panel", joined)
+        self.assertIn("Creates a content-addressed pack and optional zip.", joined)
+        self.assertIn("prompt ladder", joined)
+
+    def test_verify_card_focuses_on_integrity_audit(self) -> None:
+        joined = self._preview("Verify")
+        self.assertIn("Checks pack root, payload hashes, and pack integrity.", joined)
+        self.assertIn("Enter -> Verify selected pack", joined)
+        self.assertIn("- pack: not set", joined)
+        self.assertIn("later integrity audit", joined.lower())
+
+    def test_help_card_is_curated_not_raw_docs(self) -> None:
+        joined = self._preview("Help")
+        self.assertIn("what EPS is", joined)
+        self.assertIn("human workflow", joined)
+        self.assertIn("trust boundary", joined)
+        self.assertIn("where to read more", joined)
+        self.assertIn("R README", joined)
+        self.assertNotIn("View README", joined)
+        self.assertNotIn("View TUI Standard", joined)
+        self.assertNotIn("View TUI Contract", joined)
+        self.assertNotIn("historical contract", joined)
+
+    def test_help_shortcut_opens_readme_viewer(self) -> None:
+        state = self._state()
+        state.selected = state.menu.index("Help")
+        keep_running = self.m.handle_key(DummyStdScr(), state, ord("r"))
+        self.assertTrue(keep_running)
+        self.assertIsNotNone(state.viewer)
+        self.assertEqual(state.viewer.title if state.viewer is not None else None, "README.md")
+
+    def test_stamp_enter_opens_inline_review_panel_without_prompt_ladder(self) -> None:
         m = self.m
-        state = m.AppState(theme=m.Theme(normal=0, reverse=0, header=0))
-        preview = m._selection_preview(state, "Drop Zone", width=200, height=40)
-        joined = "\n".join(preview)
-        self.assertIn("Terminal drag-drop / paste", joined)
-        self.assertIn("Many terminals will paste the absolute path for you.", joined)
-        self.assertIn("Watched drop folder (deterministic)", joined)
-        self.assertIn("Enter opens path input", joined)
-        self.assertNotIn("macOS", joined)
-        self.assertNotIn("Finder", joined)
+        state = self._state()
+        state.selected = state.menu.index("Stamp")
+
+        with mock.patch.object(m, "_prompt_str_curses", side_effect=AssertionError("stamp Enter should not prompt immediately")), mock.patch.object(
+            m, "_prompt_bool_curses", side_effect=AssertionError("stamp Enter should not prompt immediately")
+        ), mock.patch.object(m, "stamp_pack", side_effect=AssertionError("stamp Enter should not execute immediately")):
+            keep_running = m.handle_key(DummyStdScr(), state, m.curses.KEY_ENTER)
+
+        self.assertTrue(keep_running)
+        self.assertIsNone(state.viewer)
+        self.assertIsNotNone(state.stamp_panel_draft)
+        self.assertIn("review", state.status.lower())
+        self.assertEqual(state.log_lines, [])
+
+    def test_stamp_panel_shortcuts_stay_in_panel_without_prompt_ladder(self) -> None:
+        m = self.m
+        state = self._state()
+        state.selected = state.menu.index("Stamp")
+
+        keep_running = m.handle_key(DummyStdScr(), state, ord("i"))
+
+        self.assertTrue(keep_running)
+        self.assertIsNone(state.viewer)
+        self.assertIsNotNone(state.stamp_panel_draft)
+        self.assertIn("input", state.status.lower())
+
+    def test_stamp_panel_confirm_runs_stamp_from_config(self) -> None:
+        m = self.m
+        state = self._state()
+        state.selected = state.menu.index("Stamp")
+
+        keep_running = m.handle_key(DummyStdScr(), state, m.curses.KEY_ENTER)
+        self.assertTrue(keep_running)
+        self.assertIsNotNone(state.stamp_panel_draft)
+        state.stamp_panel_selected = len(m._stamp_panel_rows(state)) - 1
+
+        with mock.patch.object(m, "_run_stamp_from_config") as run_from_config:
+            keep_running = m.handle_key(DummyStdScr(), state, m.curses.KEY_ENTER)
+
+        self.assertTrue(keep_running)
+        run_from_config.assert_called_once()
+        self.assertIsNone(state.stamp_panel_draft)
 
     def test_audio_player_command_supports_linux_stub_backend_selection(self) -> None:
         m = self.m
@@ -80,13 +187,6 @@ class TestTuiExperienceContract(unittest.TestCase):
             side_effect=lambda name: "/usr/bin/aplay" if name == "aplay" else None,
         ):
             self.assertEqual(m._audio_player_command(wav_path), ["aplay", "-q", str(wav_path)])
-
-    def test_cli_help_mentions_first_success_path_and_machine_mode(self) -> None:
-        help_text = cli.build_parser().format_help()
-        self.assertIn("eps stamp --input /ABS/PATH/TO/DIR --out ./out --zip", help_text)
-        self.assertIn("eps verify --pack ./out/<pack_root_sha256>", help_text)
-        self.assertIn("eps stamp-bin --json", help_text)
-        self.assertIn("not RNG", help_text)
 
 
 if __name__ == "__main__":

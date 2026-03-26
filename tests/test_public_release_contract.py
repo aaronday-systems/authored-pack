@@ -17,7 +17,7 @@ class TestPublicReleaseContract(unittest.TestCase):
 
     def test_readme_states_public_v1_boundary(self) -> None:
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
-        self.assertIn("Current release target: `v1.0.0`", readme)
+        self.assertIn("Current release: `v1.0.0`", readme)
         self.assertIn("source-available", readme)
         self.assertIn("not OSI open source", readme)
         self.assertIn("Sealed mode is not implemented in V1", readme)
@@ -52,6 +52,14 @@ class TestPublicReleaseContract(unittest.TestCase):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertNotIn("ssot/ui/", readme)
         self.assertNotIn("fresh, unpredictable bits", readme)
+
+    def test_public_demo_and_copy_assets_exist(self) -> None:
+        for rel in (
+            "docs/CANONICAL_DEMO.md",
+            "docs/PUBLIC_COPY_ASSETS.md",
+            "scripts/demo_v1.sh",
+        ):
+            self.assertTrue((ROOT / rel).is_file(), msg=rel)
 
 
 if __name__ == "__main__":
