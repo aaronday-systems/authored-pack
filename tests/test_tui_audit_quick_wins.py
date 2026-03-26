@@ -144,7 +144,41 @@ class TestTuiAuditQuickWins(unittest.TestCase):
 
             self.assertEqual(state.status, "Done.")
             self.assertEqual(len(state.entropy_sources), 7)
+            self.assertEqual(state.stamp_config.input_mode, "sources")
+            self.assertEqual(state.stamp_config.input_path, "")
             self.assertTrue(any("sampled from 10 image(s)" in line for line in state.log_lines))
+
+    def test_apply_drop_paths_samples_photo_directory_into_sources_mode(self) -> None:
+        m = self.m
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            photo_dir = tmp_path / "images 2025"
+            photo_dir.mkdir()
+            for idx in range(10):
+                (photo_dir / f"{idx:02d}.jpg").write_bytes(f"img-{idx}".encode("utf-8"))
+
+            state = self._state()
+            msgs = m._apply_drop_paths(state, [str(photo_dir)], max_apply=7)
+
+            self.assertTrue(any("Photo folder sampled:" in msg for msg in msgs))
+            self.assertEqual(len(state.entropy_sources), 7)
+            self.assertEqual(state.stamp_config.input_mode, "sources")
+            self.assertEqual(state.stamp_config.input_path, "")
+            self.assertIsNone(state.last_input_dir)
+
+    def test_action_entropy_add_text_prefers_sources_mode(self) -> None:
+        m = self.m
+        state = self._state()
+        state.stamp_config.input_mode = "folder"
+        state.stamp_config.input_path = "/tmp/input"
+
+        with mock.patch.object(m, "_prompt_str_curses", side_effect=["note", "hello"]):
+            m._action_entropy_add_text(state, RecordingStdScr())
+
+        self.assertEqual(state.status, "Done.")
+        self.assertEqual(len(state.entropy_sources), 1)
+        self.assertEqual(state.stamp_config.input_mode, "sources")
+        self.assertEqual(state.stamp_config.input_path, "")
 
     def test_footer_is_rendered_with_reverse_video_and_compact_legend(self) -> None:
         m = self.m

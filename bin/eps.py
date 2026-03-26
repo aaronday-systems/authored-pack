@@ -72,6 +72,7 @@ _UI_SFX_LOCK = threading.Lock()
 _UI_SFX_CACHE: Dict[str, Path] = {}
 _UI_SFX_LAST_NS: Dict[str, int] = {}
 LOCKDOWN_MIN_TAP_EVENTS = 16
+DEFAULT_ENTROPY_MIN_SOURCES = 7
 
 
 def safe_addstr(stdscr, y: int, x: int, s: str, attr: int = 0) -> None:
@@ -564,7 +565,7 @@ class AppState:
     godel_last_tick: int = 0
     entropy_sources: List[EntropySource] = field(default_factory=list)
     entropy_selected: int = 0
-    entropy_min_sources: int = 7
+    entropy_min_sources: int = DEFAULT_ENTROPY_MIN_SOURCES
     last_pack_dir: Optional[Path] = None
     last_out_dir: Optional[Path] = None
     last_input_dir: Optional[Path] = None
@@ -994,6 +995,52 @@ def _prepare_drop_actions(
 
         p = Path(v).expanduser()
         if p.exists() and p.is_dir():
+            found = _iter_image_files_deterministic(p, limit=250)
+            if found:
+                sampled = _sample_photo_import_paths(found, target_count=DEFAULT_ENTROPY_MIN_SOURCES)
+                actions.append(
+                    DropPreparedAction(
+                        message=f"Photo folder sampled: {len(sampled)} of {len(found)} image(s) from {p.name}",
+                        success=True,
+                        seen_key=seen_key,
+                    )
+                )
+                for fp in sampled:
+                    try:
+                        sha, size = _sha256_hex_path(fp, max_bytes=100 * 1024 * 1024)
+                        actions.append(
+                            DropPreparedAction(
+                                message=f"Photo source added: {fp.name}",
+                                success=True,
+                                seen_key=seen_key,
+                                source=EntropySource(
+                                    kind="photo",
+                                    name=fp.name,
+                                    sha256=sha,
+                                    size_bytes=size,
+                                    meta={},
+                                    path=fp,
+                                ),
+                            )
+                        )
+                    except Exception as exc:
+                        actions.append(
+                            DropPreparedAction(
+                                message=f"Photo add failed: {fp.name}: {exc}",
+                                success=False,
+                                terminal=False,
+                                seen_key=seen_key,
+                            )
+                        )
+                if len(found) >= 250:
+                    actions.append(
+                        DropPreparedAction(
+                            message="Photo folder scan capped at 250 images for responsiveness.",
+                            success=True,
+                            seen_key=seen_key,
+                        )
+                    )
+                continue
             resolved = p.resolve()
             actions.append(
                 DropPreparedAction(
@@ -1075,6 +1122,7 @@ def _apply_drop_paths(state: AppState, paths: Sequence[str], *, max_apply: Optio
 
 def _apply_drop_actions_to_state(state: AppState, actions: Sequence[DropPreparedAction], *, play_sfx: bool) -> List[str]:
     msgs: List[str] = []
+    added_sources = False
     for act in actions:
         msgs.append(act.message)
         if act.success:
@@ -1082,11 +1130,14 @@ def _apply_drop_actions_to_state(state: AppState, actions: Sequence[DropPrepared
                 state.last_input_dir = act.input_dir
             if act.source is not None:
                 state.entropy_sources.append(act.source)
+                added_sources = True
         if act.seen_key is not None and (act.success or act.terminal):
             state.drop_seen.add(act.seen_key)
     if msgs:
         if state.entropy_sources:
             state.entropy_selected = max(0, min(state.entropy_selected, len(state.entropy_sources) - 1))
+        if added_sources:
+            _prefer_sources_input_mode(state)
         _apply_drop_feedback(state, msgs, play_sfx=play_sfx)
     return msgs
 
@@ -1650,6 +1701,14 @@ def _effective_stamp_input(state: AppState, cfg: Optional[StampConfig] = None) -
     if state.last_input_dir is not None:
         return str(state.last_input_dir)
     return ""
+
+
+def _prefer_sources_input_mode(state: AppState) -> None:
+    state.stamp_config.input_mode = "sources"
+    state.stamp_config.input_path = ""
+    if state.stamp_panel_draft is not None:
+        state.stamp_panel_draft.input_mode = "sources"
+        state.stamp_panel_draft.input_path = ""
 
 
 def _effective_stamp_output(state: AppState, cfg: Optional[StampConfig] = None) -> str:
@@ -3221,6 +3280,7 @@ def _action_entropy_add_photos(state: AppState, stdscr) -> None:
         added += 1
 
     if added:
+        _prefer_sources_input_mode(state)
         _trigger_interaction_flash(state, drop_zone=False)
         state.status = "Done."
         if sampled_from_dir:
@@ -3250,6 +3310,7 @@ def _action_entropy_add_text(state: AppState, stdscr) -> None:
     state.entropy_sources.append(
         EntropySource(kind="text", name=label.strip() or "note", sha256=sha, size_bytes=len(raw), text=text)
     )
+    _prefer_sources_input_mode(state)
     _trigger_interaction_flash(state, drop_zone=False)
     state.status = "Done."
     state.log_lines = [f"Added text source: {label.strip() or 'note'} ({_fmt_bytes(len(raw))})."]
