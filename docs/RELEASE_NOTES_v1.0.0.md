@@ -39,9 +39,9 @@ Primary public identities:
 - `pack_root_sha256`
 - `payload_root_sha256`
 
-Compatibility aliases retained in V1:
-- `entropy_root_sha256`
-- `seed_fingerprint_sha256`
+Backward compatibility:
+- verification still accepts older packs and receipts that carry `entropy_root_sha256`
+- new v1.0.0 packs emit only the primary root and derived-seed names
 
 Stable public artifacts in V1:
 - `manifest.json` (`entropy.pack.v2`)

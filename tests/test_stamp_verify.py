@@ -41,6 +41,7 @@ class TestStampVerify(unittest.TestCase):
             self.assertTrue(vr.ok, msg=f"errors: {vr.errors}")
             self.assertEqual(vr.root_sha256, res.root_sha256)
             self.assertEqual(vr.file_count, 2)
+            self.assertFalse((res.pack_dir / "entropy_root_sha256.txt").exists())
 
             zip_path = res.pack_dir / "entropy_pack.zip"
             self.assertTrue(zip_path.is_file())
@@ -61,7 +62,7 @@ class TestStampVerify(unittest.TestCase):
                 self.assertIn("manifest.json", names)
                 self.assertIn("receipt.json", names)
                 self.assertIn("pack_root_sha256.txt", names)
-                self.assertIn("entropy_root_sha256.txt", names)
+                self.assertNotIn("entropy_root_sha256.txt", names)
                 self.assertIn("evidence_manifest.json", names)
                 self.assertIn("evidence_manifest_sha256.txt", names)
 
@@ -83,6 +84,8 @@ class TestStampVerify(unittest.TestCase):
             self.assertEqual(receipt_obj["entropy_schema_version"], "entropy.pack.v2")
             self.assertEqual(receipt_obj["pack_root_sha256"], res.root_sha256)
             self.assertEqual(receipt_obj["payload_root_sha256"], res.payload_root_sha256)
+            self.assertNotIn("entropy_root_sha256", receipt_obj)
+            self.assertNotIn("seed_fingerprint_sha256", receipt_obj)
 
     def test_manifest_root_changes_when_derivation_metadata_changes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -222,7 +225,7 @@ class TestStampVerify(unittest.TestCase):
             zip_path = tmp_path / "bad_receipt.zip"
             with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
                 zf.writestr("manifest.json", (res.pack_dir / "manifest.json").read_text(encoding="utf-8"))
-                zf.writestr("entropy_root_sha256.txt", (res.pack_dir / "entropy_root_sha256.txt").read_text(encoding="utf-8"))
+                zf.writestr("pack_root_sha256.txt", (res.pack_dir / "pack_root_sha256.txt").read_text(encoding="utf-8"))
                 zf.writestr("receipt.json", receipt_path.read_text(encoding="utf-8"))
                 zf.writestr("payload/a.txt", (res.pack_dir / "payload" / "a.txt").read_bytes())
 
@@ -253,7 +256,7 @@ class TestStampVerify(unittest.TestCase):
                 names = set(zf.namelist())
                 self.assertIn("manifest.json", names)
                 self.assertIn("pack_root_sha256.txt", names)
-                self.assertIn("entropy_root_sha256.txt", names)
+                self.assertNotIn("entropy_root_sha256.txt", names)
                 self.assertIn("receipt.json", names)
                 self.assertIn("payload/a.txt", names)
                 self.assertNotIn("seed_master.hex", names)
@@ -262,6 +265,8 @@ class TestStampVerify(unittest.TestCase):
                 self.assertFalse(any(name.endswith(".sha256") for name in names))
                 zipped_receipt = json.loads(zf.read("receipt.json").decode("utf-8"))
                 self.assertEqual(zipped_receipt, on_disk_receipt)
+                self.assertNotIn("entropy_root_sha256", zipped_receipt)
+                self.assertNotIn("seed_fingerprint_sha256", zipped_receipt)
 
     def test_v2_evidence_bundle_receipt_matches_final_pack_receipt(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

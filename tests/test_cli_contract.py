@@ -50,7 +50,9 @@ class TestCliContract(unittest.TestCase):
             self.assertEqual(payload["ok"], True)
             self.assertEqual(payload["command"], "stamp")
             self.assertIn("result", payload)
-            self.assertEqual(payload["result"]["entropy_root_sha256"], payload["result"]["receipt"]["entropy_root_sha256"])
+            self.assertEqual(payload["result"]["pack_root_sha256"], payload["result"]["receipt"]["pack_root_sha256"])
+            self.assertNotIn("entropy_root_sha256", payload["result"])
+            self.assertNotIn("entropy_root_sha256", payload["result"]["receipt"])
             self.assertTrue(payload["result"]["pack_dir"])
 
     def test_verify_json_emits_failure_envelope(self) -> None:
@@ -233,6 +235,8 @@ class TestCliContract(unittest.TestCase):
             self.assertEqual(payload["ok"], True)
             self.assertEqual(payload["command"], "stamp-bin")
             self.assertEqual(payload["result"]["mode"], "entropy_bin")
+            self.assertNotIn("entropy_root_sha256", payload["result"])
+            self.assertNotIn("entropy_root_sha256", payload["result"]["receipt"])
             self.assertEqual(payload["result"]["consumed_count"], 1)
             self.assertEqual(payload["result"]["warnings"], [])
             self.assertEqual(payload["result"]["policy"]["would_violate_low_watermark"], False)
@@ -319,6 +323,23 @@ class TestCliContract(unittest.TestCase):
         self.assertIn("not automatic secrecy", proc.stdout)
         stamp_help = cli.build_parser()._subparsers._group_actions[0].choices["stamp"].format_help()
         self.assertIn("Emit JSON envelope to stdout", stamp_help)
+
+    def test_verify_json_success_omits_legacy_root_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            stamped = stamp_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=False, derive_seed=False)
+            rc, stdout, stderr = self._run_cli(["verify", "--pack", str(stamped.pack_dir), "--json"])
+
+            self.assertEqual(rc, 0)
+            self.assertEqual(stderr, "")
+            payload = json.loads(stdout)
+            self.assertEqual(payload["ok"], True)
+            self.assertNotIn("entropy_root_sha256", payload["result"])
 
     def test_human_stamp_output_includes_zip_and_evidence_paths_when_present(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -140,7 +140,6 @@ def _stamp(args: argparse.Namespace) -> int:
         payload = {
             "pack_dir": str(res.pack_dir),
             "pack_root_sha256": res.pack_root_sha256,
-            "entropy_root_sha256": res.root_sha256,
             "payload_root_sha256": res.payload_root_sha256,
             "receipt": res.receipt,
         }
@@ -187,7 +186,6 @@ def _verify(args: argparse.Namespace) -> int:
     if args.json:
         payload = {
             "pack_root_sha256": res.root_sha256,
-            "entropy_root_sha256": res.root_sha256,
             "payload_root_sha256": res.payload_root_sha256,
             "artifact_count_verified": res.file_count,
             "artifact_bytes_verified": res.total_bytes,
@@ -252,7 +250,6 @@ def _stamp_bin(args: argparse.Namespace) -> int:
             },
             "pack_dir": str(res.stamp.pack_dir),
             "pack_root_sha256": res.stamp.pack_root_sha256,
-            "entropy_root_sha256": res.stamp.root_sha256,
             "payload_root_sha256": res.stamp.payload_root_sha256,
             "receipt": res.stamp.receipt,
         }

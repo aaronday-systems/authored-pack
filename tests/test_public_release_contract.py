@@ -27,6 +27,9 @@ class TestPublicReleaseContract(unittest.TestCase):
         self.assertIn("Linux terminals", readme)
         self.assertIn("best-effort", readme)
         self.assertNotIn("--insane", readme)
+        self.assertNotIn("entropy_root_sha256", readme)
+        self.assertNotIn("seed_fingerprint_sha256", readme)
+        self.assertLess(readme.index("## Quick Start"), readme.index("## Trust Boundary"))
 
     def test_sealed_architecture_doc_is_marked_future_only(self) -> None:
         text = (ROOT / "docs" / "SEALED_PACK_ARCHITECTURE.md").read_text(encoding="utf-8")

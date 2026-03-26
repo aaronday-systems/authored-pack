@@ -170,8 +170,7 @@ def _output_would_self_ingest_input(input_dir: Path, out_dir: Path) -> bool:
 
 
 def _write_root_alias_files(pack_dir: Path, root_sha: str) -> None:
-    for name in (PACK_ROOT_ALIAS_FILENAME, LEGACY_ROOT_ALIAS_FILENAME):
-        _safe_write_text(pack_dir / name, root_sha + "\n")
+    _safe_write_text(pack_dir / PACK_ROOT_ALIAS_FILENAME, root_sha + "\n")
 
 
 def _root_alias_names_for_schema(schema_version: object) -> Tuple[str, ...]:
@@ -729,7 +728,6 @@ def _build_receipt(
         "pack_layout": PACK_LAYOUT_VERSION,
         "entropy_schema_version": MANIFEST_SCHEMA_VERSION,
         "pack_root_sha256": root_sha256,
-        "entropy_root_sha256": root_sha256,
         "payload_root_sha256": payload_root_sha256,
         "artifact_count": int(len(artifact_entries)),
         "artifact_bytes": int(total_bytes),
@@ -745,7 +743,6 @@ def _build_receipt(
     if seed_master is not None:
         fingerprint = seed_fingerprint_sha256(seed_master)
         receipt["derived_seed_fingerprint_sha256"] = fingerprint
-        receipt["seed_fingerprint_sha256"] = fingerprint
     if extra_fields:
         receipt.update(dict(extra_fields))
     return receipt
@@ -759,8 +756,8 @@ def _print_seed_material(seed_master: bytes) -> None:
 
 
 def _write_zip(pack_dir: Path, zip_path: Path) -> None:
-    # Public zip is the finalized public projection of the pack: rooted metadata aliases + payload only.
-    include_relpaths = {"manifest.json", PACK_ROOT_ALIAS_FILENAME, LEGACY_ROOT_ALIAS_FILENAME, "receipt.json"}
+    # Public zip is the finalized public projection of the pack: rooted metadata + payload only.
+    include_relpaths = {"manifest.json", PACK_ROOT_ALIAS_FILENAME, "receipt.json"}
     exclude = {
         "seed_master.hex",
         "seed_master.b64",
