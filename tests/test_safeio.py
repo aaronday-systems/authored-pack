@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from eps.safeio import trusted_copy_with_sha256
+from authored_pack.safeio import trusted_copy_with_sha256
 
 
 class TestSafeIo(unittest.TestCase):

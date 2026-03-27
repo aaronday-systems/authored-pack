@@ -10,8 +10,8 @@ import tomllib
 import unittest
 from pathlib import Path
 
-from eps import cli
-from eps.pack import stamp_pack
+from authored_pack import cli
+from authored_pack.pack import stamp_pack
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -57,7 +57,7 @@ class TestCliContract(unittest.TestCase):
 
     def test_help_machine_path_uses_non_destructive_json_example(self) -> None:
         proc = subprocess.run(
-            [sys.executable, "-m", "eps", "--help"],
+            [sys.executable, "-m", "authored_pack", "--help"],
             cwd=ROOT,
             check=False,
             capture_output=True,
@@ -283,17 +283,17 @@ class TestCliContract(unittest.TestCase):
     def test_stamp_bin_json_emits_success_envelope(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
-            entropy_bin = tmp_path / "entropy_bin"
+            source_bin = tmp_path / "source_bin"
             out_dir = tmp_path / "out"
-            entropy_bin.mkdir()
+            source_bin.mkdir()
             out_dir.mkdir()
-            (entropy_bin / "a.bin").write_bytes(b"entropy")
+            (source_bin / "a.bin").write_bytes(b"entropy")
 
             rc, stdout, stderr = self._run_cli(
                 [
                     "stamp-bin",
-                    "--entropy-bin",
-                    str(entropy_bin),
+                    "--source-bin",
+                    str(source_bin),
                     "--out",
                     str(out_dir),
                     "--count",
@@ -310,7 +310,7 @@ class TestCliContract(unittest.TestCase):
             payload = json.loads(stdout)
             self.assertEqual(payload["ok"], True)
             self.assertEqual(payload["command"], "stamp-bin")
-            self.assertEqual(payload["result"]["mode"], "entropy_bin")
+            self.assertEqual(payload["result"]["mode"], "source_bin")
             self.assertNotIn("entropy_root_sha256", payload["result"])
             self.assertNotIn("entropy_root_sha256", payload["result"]["receipt"])
             self.assertEqual(payload["result"]["consumed_count"], 1)
@@ -325,18 +325,18 @@ class TestCliContract(unittest.TestCase):
     def test_stamp_bin_json_success_includes_low_watermark_warning_and_policy(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
-            entropy_bin = tmp_path / "entropy_bin"
+            source_bin = tmp_path / "source_bin"
             out_dir = tmp_path / "out"
-            entropy_bin.mkdir()
+            source_bin.mkdir()
             out_dir.mkdir()
-            (entropy_bin / "a.bin").write_bytes(b"entropy")
-            (entropy_bin / "b.bin").write_bytes(b"entropy-2")
+            (source_bin / "a.bin").write_bytes(b"entropy")
+            (source_bin / "b.bin").write_bytes(b"entropy-2")
 
             rc, stdout, stderr = self._run_cli(
                 [
                     "stamp-bin",
-                    "--entropy-bin",
-                    str(entropy_bin),
+                    "--source-bin",
+                    str(source_bin),
                     "--out",
                     str(out_dir),
                     "--count",
@@ -386,7 +386,7 @@ class TestCliContract(unittest.TestCase):
 
     def test_python_module_help_smoke(self) -> None:
         proc = subprocess.run(
-            [sys.executable, "-m", "eps", "--help"],
+            [sys.executable, "-m", "authored_pack", "--help"],
             cwd=ROOT,
             check=False,
             capture_output=True,
@@ -394,9 +394,9 @@ class TestCliContract(unittest.TestCase):
         )
 
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
-        self.assertIn("usage: eps", proc.stdout)
+        self.assertIn("usage: authored-pack", proc.stdout)
         self.assertIn("Authored Pack", proc.stdout)
-        self.assertIn("python3 -B bin/eps.py", proc.stdout)
+        self.assertIn("python3 -B bin/authored_pack.py", proc.stdout)
         self.assertIn("not automatic secrecy", proc.stdout)
         self.assertIn("inspect", proc.stdout)
         stamp_help = cli.build_parser()._subparsers._group_actions[0].choices["stamp"].format_help()
@@ -448,8 +448,8 @@ class TestCliContract(unittest.TestCase):
     def test_console_script_metadata_present(self) -> None:
         data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
         scripts = data.get("project", {}).get("scripts", {})
-        self.assertEqual(scripts.get("authored-pack"), "eps.cli:main")
-        self.assertEqual(scripts.get("eps"), "eps.cli:main")
+        self.assertEqual(scripts.get("authored-pack"), "authored_pack.cli:main")
+        self.assertEqual(len(scripts), 1)
 
 
 if __name__ == "__main__":

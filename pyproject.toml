@@ -1,5 +1,5 @@
 [project]
-name = "entropy-pack-stamper"
+name = "authored-pack"
 version = "1.0.0"
 description = "Authored Pack is a deterministic pack/verify tool for humans and agents."
 readme = "README.md"
@@ -8,8 +8,7 @@ authors = [{ name = "Aaron Day" }]
 requires-python = ">=3.11"
 
 [project.scripts]
-authored-pack = "eps.cli:main"
-eps = "eps.cli:main"
+authored-pack = "authored_pack.cli:main"
 
 [tool.pytest.ini_options]
 addopts = "-q"

@@ -7,7 +7,7 @@ It turns a directory into a content-addressed pack with:
 - `receipt.json`
 - `pack_root_sha256`
 - `payload_root_sha256`
-- optional `entropy_pack.zip`
+- optional `authored_pack.zip`
 - optional evidence bundle
 
 It does not create entropy. It records a deterministic contract over the bytes you provide and can optionally derive reproducible material from that rooted pack state.
@@ -23,7 +23,7 @@ bash scripts/demo_v1.sh
 Or start the interactive path:
 
 ```bash
-python3 -B bin/eps.py
+python3 -B bin/authored_pack.py
 ```
 
 Or use the installed primary CLI:
@@ -32,15 +32,15 @@ Or use the installed primary CLI:
 authored-pack --help
 ```
 
-Or use the compatibility CLI directly from the repo:
+Or use the module entrypoint directly from the repo:
 
 ```bash
-python3 -m eps --help
+python3 -m authored_pack --help
 ```
 
 ## What You Provide
 
-- a directory of operator-supplied files
+- a normal folder of files
 - optionally, authored sources in the TUI if you want a more deliberate manual workflow
 
 ## What Authored Pack Produces
@@ -50,8 +50,8 @@ A stamped pack under `--out/<pack_root_sha256>/` containing:
 - `pack_root_sha256.txt`
 - `receipt.json`
 - `payload/`
-- optional `entropy_pack.zip`
-- optional `eps_evidence_<root>.zip` plus `.sha256`
+- optional `authored_pack.zip`
+- optional `authored_evidence_<root>.zip` plus `.sha256`
 
 Identity model:
 - `pack_root_sha256` is `sha256(canonical_manifest_json)`
@@ -62,9 +62,9 @@ Identity model:
 ## Verify
 
 ```bash
-python3 -m eps verify --pack /path/to/pack_dir
-python3 -m eps verify --pack /path/to/entropy_pack.zip
-python3 -m eps inspect --pack /path/to/pack_dir --json
+python3 -m authored_pack verify --pack /path/to/pack_dir
+python3 -m authored_pack verify --pack /path/to/authored_pack.zip
+python3 -m authored_pack inspect --pack /path/to/pack_dir --json
 ```
 
 Verification proves self-consistency of the presented pack against its manifest.
@@ -92,11 +92,10 @@ Do not describe it as a secret unless you add a separate secret input outside th
 
 No install required. Run with system Python 3.11+:
 
-- TUI: `python3 -B bin/eps.py`
-- TUI noisy mode: `python3 -B bin/eps.py --noisy`
+- TUI: `python3 -B bin/authored_pack.py`
+- TUI noisy mode: `python3 -B bin/authored_pack.py --noisy`
 - Installed primary entrypoint: `authored-pack --help`
-- CLI compatibility entrypoint: `python3 -m eps --help`
-- Installed compatibility entrypoint: `eps --help`
+- Module entrypoint: `python3 -m authored_pack --help`
 
 Platform support target:
 - macOS terminals
@@ -108,7 +107,7 @@ Platform support target:
 Stamp a directory:
 
 ```bash
-python3 -m eps stamp \
+python3 -m authored_pack stamp \
   --input /ABS/PATH/TO/ARTIFACTS_DIR \
   --out ./out \
   --zip \
@@ -118,8 +117,8 @@ python3 -m eps stamp \
 Verify the resulting pack:
 
 ```bash
-python3 -m eps verify --pack ./out/<pack_root_sha256>
-python3 -m eps verify --pack ./out/<pack_root_sha256>/entropy_pack.zip
+python3 -m authored_pack verify --pack ./out/<pack_root_sha256>
+python3 -m authored_pack verify --pack ./out/<pack_root_sha256>/authored_pack.zip
 ```
 
 Run tests:
@@ -133,9 +132,9 @@ pytest -q
 `stamp-bin` is the subtractive machine path for a disposable source bin.
 
 ```bash
-python3 -m eps stamp-bin \
-  --entropy-bin ./bins/entropy_bin \
-  --out ./bins/eps_out
+python3 -m authored_pack stamp-bin \
+  --source-bin ./bins/source_bin \
+  --out ./bins/authored_out
 ```
 
 Important behavior:
@@ -145,8 +144,8 @@ Important behavior:
 - use `--allow-low-bin` only when that lower-watermark policy is intentionally waived
 
 Repo-local bins are pre-created and ignored by git:
-- `./bins/entropy_bin`
-- `./bins/eps_out`
+- `./bins/source_bin`
+- `./bins/authored_out`
 
 ## JSON Contract
 

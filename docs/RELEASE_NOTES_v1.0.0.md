@@ -44,8 +44,8 @@ Backward compatibility:
 - new v1.0.0 packs emit only the primary root and derived-seed names
 
 Stable public artifacts in V1:
-- `manifest.json` (`entropy.pack.v2`)
-- `receipt.json` (`eps.receipt.v2`)
+- `manifest.json` (`authored.pack.v1`)
+- `receipt.json` (`authored.receipt.v1`)
 - public zip projection with final receipt state
 - JSON CLI envelopes for `stamp`, `verify`, and `stamp-bin`
 
@@ -60,6 +60,6 @@ Stable public artifacts in V1:
 Before tagging `v1.0.0`, confirm:
 - `pytest -q`
 - `python3 -m pytest -q`
-- `python3 -m eps --help`
+- `python3 -m authored_pack --help`
 - one real stamp/verify smoke run from the README commands
 - clean public-safe tracked file set

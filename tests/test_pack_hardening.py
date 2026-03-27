@@ -7,8 +7,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from eps import pack as pack_module
-from eps.pack import stamp_pack, verify_pack, write_evidence_bundle, _write_zip
+from authored_pack import pack as pack_module
+from authored_pack.pack import stamp_pack, verify_pack, write_evidence_bundle, _write_zip
 
 
 class TestPackHardening(unittest.TestCase):
@@ -27,7 +27,7 @@ class TestPackHardening(unittest.TestCase):
             tmp_path = Path(tmp)
             target = tmp_path / "receipt.json"
 
-            with patch("eps.pack.os.replace", side_effect=OSError("boom")):
+            with patch("authored_pack.pack.os.replace", side_effect=OSError("boom")):
                 with self.assertRaises(OSError):
                     pack_module._safe_write_json(target, {"ok": True})
 
@@ -87,7 +87,7 @@ class TestPackHardening(unittest.TestCase):
                 evidence_bundle=True,
             )
             receipt_path = first.pack_dir / "receipt.json"
-            zip_path = first.pack_dir / "entropy_pack.zip"
+            zip_path = first.pack_dir / "authored_pack.zip"
             evidence_path = first.evidence_bundle_path
             self.assertIsNotNone(evidence_path)
             assert evidence_path is not None
@@ -124,7 +124,7 @@ class TestPackHardening(unittest.TestCase):
             (payload / "link.txt").symlink_to(payload / "real.txt")
 
             with self.assertRaises(ValueError):
-                _write_zip(pack_dir, pack_dir / "entropy_pack.zip")
+                _write_zip(pack_dir, pack_dir / "authored_pack.zip")
 
             with self.assertRaises(ValueError):
                 write_evidence_bundle(pack_dir)
@@ -163,7 +163,7 @@ class TestPackHardening(unittest.TestCase):
                 Path(dst).write_text("tampered", encoding="utf-8")
                 return ("0" * 64, 8)
 
-            with patch("eps.pack.trusted_copy_with_sha256", side_effect=corrupting_copy):
+            with patch("authored_pack.pack.trusted_copy_with_sha256", side_effect=corrupting_copy):
                 with self.assertRaises(ValueError):
                     stamp_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=False, derive_seed=False)
 
@@ -194,7 +194,7 @@ class TestPackHardening(unittest.TestCase):
 
             res = stamp_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=False, derive_seed=False)
 
-            with patch("eps.pack.trusted_sha256_hex", wraps=pack_module.trusted_sha256_hex) as mocked:
+            with patch("authored_pack.pack.trusted_sha256_hex", wraps=pack_module.trusted_sha256_hex) as mocked:
                 verified = verify_pack(res.pack_dir)
 
             self.assertTrue(verified.ok, msg=verified.errors)
@@ -209,9 +209,9 @@ class TestPackHardening(unittest.TestCase):
             (input_dir / "a.txt").write_text("hello", encoding="utf-8")
 
             res = stamp_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=False, derive_seed=False)
-            zip_path = res.pack_dir / "entropy_pack.zip"
+            zip_path = res.pack_dir / "authored_pack.zip"
 
-            with patch("eps.pack.trusted_binary_reader", wraps=pack_module.trusted_binary_reader) as mocked:
+            with patch("authored_pack.pack.trusted_binary_reader", wraps=pack_module.trusted_binary_reader) as mocked:
                 _write_zip(res.pack_dir, zip_path)
 
             self.assertTrue(zip_path.is_file())

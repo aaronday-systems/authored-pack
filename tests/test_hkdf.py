@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import unittest
 
-from eps.hkdf import hkdf_sha256
-from eps.pack import derive_seed_master
+from authored_pack.hkdf import hkdf_sha256
+from authored_pack.pack import derive_seed_master
 
 
 class TestHkdf(unittest.TestCase):
@@ -24,7 +24,7 @@ class TestHkdf(unittest.TestCase):
         with self.assertRaises(ValueError):
             derive_seed_master(
                 root_sha256_hex="aa" * 32,
-                entropy_sources_sha256_hex="not-valid-hex",
+                authored_sources_sha256_hex="not-valid-hex",
             )
 
     def test_derive_seed_master_rejects_wrong_sources_length(self) -> None:
@@ -32,14 +32,14 @@ class TestHkdf(unittest.TestCase):
         with self.assertRaises(ValueError):
             derive_seed_master(
                 root_sha256_hex="aa" * 32,
-                entropy_sources_sha256_hex="11" * 31,
+                authored_sources_sha256_hex="11" * 31,
             )
 
     def test_derive_seed_master_with_valid_sources_is_deterministic(self) -> None:
         root = "aa" * 32
         sources = "11" * 32
-        a = derive_seed_master(root_sha256_hex=root, entropy_sources_sha256_hex=sources)
-        b = derive_seed_master(root_sha256_hex=root, entropy_sources_sha256_hex=sources)
+        a = derive_seed_master(root_sha256_hex=root, authored_sources_sha256_hex=sources)
+        b = derive_seed_master(root_sha256_hex=root, authored_sources_sha256_hex=sources)
         self.assertEqual(a, b)
         self.assertEqual(len(a), 32)
 

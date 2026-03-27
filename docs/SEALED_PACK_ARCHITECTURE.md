@@ -9,13 +9,13 @@ Scope: define the next object model for secret-preserving Authored Pack packs wi
 Authored Pack is not an RNG.
 
 The correct framing is:
-- the operator brings entropy-bearing or secret input material
+- the operator brings deliberate or secret input material
 - Authored Pack contributes deterministic packaging, hashing, commitment, schema, verification, and optional derivation
 - Authored Pack may then emit agent-ingestion instructions against that packaged material
 
 The correct one-line description is:
 
-> Authored Pack turns operator-supplied secret material into a legible, verifiable pack, and can optionally seal that pack for break-glass use.
+> Authored Pack turns deliberate secret material into a legible, verifiable pack, and can optionally seal that pack for break-glass use.
 
 That means Authored Pack should separate two modes clearly:
 - `public deterministic pack`: verifiable and reproducible, not secret by default
@@ -110,8 +110,8 @@ New public files for sealed mode:
 The outer object should reveal only what is safe to reveal before opening.
 
 Suggested `seal.json` fields:
-- `schema_version`: `eps.seal.v1`
-- `tool`: `eps`
+- `schema_version`: `authored.seal.v1`
+- `tool`: `authored-pack`
 - `tool_version`
 - `mode`: `sealed-break-glass`
 - `cipher_suite`
@@ -137,7 +137,7 @@ Suggested inner files:
 - optional `source_audit/**`
 
 Suggested `inner_manifest.json` fields:
-- `schema_version`: `eps.inner_manifest.v1`
+- `schema_version`: `authored.inner_manifest.v1`
 - `content_root_sha256`
 - `artifact manifest`
 - optional `derivation`
@@ -199,7 +199,7 @@ For sealed packs, the simpler approach is:
 - do not expose the inner derivation root in the outer seal
 
 That preserves the principle the user stated:
-- operator brings entropy-bearing secret inputs
+- operator brings deliberate secret inputs
 - Authored Pack contributes rigor and hashing
 - the result can remain secret until break-glass decryption
 

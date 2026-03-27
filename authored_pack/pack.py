@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
 
-from . import __version__ as EPS_VERSION
+from . import __version__ as AUTHORED_PACK_VERSION
 from .hkdf import hkdf_sha256
 from .manifest import (
     DEFAULT_DERIVATION_VERSION,
@@ -29,15 +29,21 @@ from .safeio import read_trusted_bytes_limited, trusted_copy_with_sha256
 from .safeio import trusted_binary_reader, trusted_sha256_hex
 
 
-RECEIPT_SCHEMA_VERSION = "eps.receipt.v2"
-PACK_LAYOUT_VERSION = "eps.pack_layout.v1"
+RECEIPT_SCHEMA_VERSION = "authored.receipt.v1"
+LEGACY_RECEIPT_SCHEMA_VERSION = "eps.receipt.v2"
+PACK_LAYOUT_VERSION = "authored.pack_layout.v1"
 LEGACY_MANIFEST_SCHEMA_VERSION = "entropy.pack.v1"
-SUPPORTED_MANIFEST_SCHEMA_VERSIONS = {LEGACY_MANIFEST_SCHEMA_VERSION, MANIFEST_SCHEMA_VERSION}
+PREVIOUS_MANIFEST_SCHEMA_VERSION = "entropy.pack.v2"
+SUPPORTED_MANIFEST_SCHEMA_VERSIONS = {
+    LEGACY_MANIFEST_SCHEMA_VERSION,
+    PREVIOUS_MANIFEST_SCHEMA_VERSION,
+    MANIFEST_SCHEMA_VERSION,
+}
 
 DEFAULT_MAX_MANIFEST_BYTES = 4 * 1024 * 1024  # 4 MiB
 DEFAULT_MAX_ARTIFACT_BYTES = 512 * 1024 * 1024  # 512 MiB
 DEFAULT_MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB
-EVIDENCE_SCHEMA_VERSION = "eps.evidence.v1"
+EVIDENCE_SCHEMA_VERSION = "authored.evidence.v1"
 PACK_ROOT_ALIAS_FILENAME = "pack_root_sha256.txt"
 LEGACY_ROOT_ALIAS_FILENAME = "entropy_root_sha256.txt"
 
@@ -181,7 +187,7 @@ def _root_alias_names_for_schema(schema_version: object) -> Tuple[str, ...]:
 
 
 def _evidence_bundle_path_for_root(pack_dir: Path, root_sha: str) -> Path:
-    return pack_dir / f"eps_evidence_{root_sha}.zip"
+    return pack_dir / f"authored_evidence_{root_sha}.zip"
 
 
 def _existing_evidence_bundle_path(pack_dir: Path, root_sha: str) -> Optional[Path]:
@@ -200,7 +206,7 @@ def _finalize_public_artifacts(
 
     zip_path: Optional[Path] = None
     if zip_pack:
-        zip_path = pack_dir / "entropy_pack.zip"
+        zip_path = pack_dir / "authored_pack.zip"
         _write_zip(pack_dir, zip_path)
 
     evidence_path: Optional[Path] = None
@@ -302,8 +308,8 @@ def inspect_pack(
     has_zip = False
     has_evidence_bundle = False
     if pack_type == "directory":
-        has_zip = (pack_path / "entropy_pack.zip").is_file()
-        has_evidence_bundle = any(pack_path.glob("eps_evidence_*.zip"))
+        has_zip = (pack_path / "authored_pack.zip").is_file()
+        has_evidence_bundle = any(pack_path.glob("authored_evidence_*.zip"))
     else:
         has_zip = True
         has_evidence_bundle = False
@@ -325,8 +331,8 @@ def inspect_pack(
                 receipt_summary[key] = value
         if isinstance(receipt.get("derivation"), dict):
             receipt_summary["derivation"] = dict(receipt["derivation"])
-        if "entropy_sources_audit_status" in receipt:
-            receipt_summary["entropy_sources_audit_status"] = receipt.get("entropy_sources_audit_status")
+        if "authored_sources_audit_status" in receipt:
+            receipt_summary["authored_sources_audit_status"] = receipt.get("authored_sources_audit_status")
 
     summary: Dict[str, object] = {
         "inspected_path": str(pack_path),
@@ -551,28 +557,28 @@ def derive_seed_master(
     *,
     root_sha256_hex: str,
     derivation_version: str = DEFAULT_DERIVATION_VERSION,
-    entropy_sources_sha256_hex: Optional[str] = None,
+    authored_sources_sha256_hex: Optional[str] = None,
 ) -> bytes:
     """
     Derive the 32-byte seed_master.
 
     Backwards compatible behavior:
-    - If entropy_sources_sha256_hex is None: identical to the v1 derivation (root-only).
+    - If authored_sources_sha256_hex is None: identical to the v1 derivation (root-only).
     - If provided: mix the sources hash into the HKDF salt, producing a different seed.
     """
     root_bytes = bytes.fromhex(root_sha256_hex)
     info = derivation_version.encode("utf-8")
-    salt = b"EPS-SALT-v1"
-    if entropy_sources_sha256_hex:
-        src_raw = str(entropy_sources_sha256_hex)
+    salt = b"AUTHOREDPACK-SALT-v1"
+    if authored_sources_sha256_hex:
+        src_raw = str(authored_sources_sha256_hex)
         try:
             src = bytes.fromhex(src_raw)
         except Exception as exc:
-            raise ValueError("invalid entropy_sources_sha256_hex") from exc
+            raise ValueError("invalid authored_sources_sha256_hex") from exc
         if len(src) != 32:
-            raise ValueError("entropy_sources_sha256_hex must decode to 32 bytes")
+            raise ValueError("authored_sources_sha256_hex must decode to 32 bytes")
         # Salt-mixing keeps root as the IKM, and makes the additional sources explicit.
-        salt = b"EPS-SALT-v2" + src
+        salt = b"AUTHOREDPACK-SALT-v2" + src
     return hkdf_sha256(ikm=root_bytes, length=32, salt=salt, info=info)
 
 
@@ -609,7 +615,7 @@ def _validate_manifest_payload_root(manifest: Dict[str, object]) -> Tuple[str, L
 def _build_derivation_metadata(
     *,
     derive_seed: bool,
-    entropy_sources_sha256: Optional[str],
+    authored_sources_sha256: Optional[str],
 ) -> Optional[Dict[str, object]]:
     if not derive_seed:
         return None
@@ -618,9 +624,9 @@ def _build_derivation_metadata(
         "derivation_version": DEFAULT_DERIVATION_VERSION,
         "mode": "root-only",
     }
-    if entropy_sources_sha256:
+    if authored_sources_sha256:
         derivation["mode"] = "root-plus-sources"
-        derivation["entropy_sources_sha256"] = str(entropy_sources_sha256)
+        derivation["authored_sources_sha256"] = str(authored_sources_sha256)
     return derivation
 
 
@@ -634,10 +640,13 @@ def _validate_receipt_v2(
     errors: List[str] = []
     if not isinstance(receipt, dict):
         return ["receipt.json must be an object"]
-    if receipt.get("schema_version") != RECEIPT_SCHEMA_VERSION:
+    if receipt.get("schema_version") not in {RECEIPT_SCHEMA_VERSION, LEGACY_RECEIPT_SCHEMA_VERSION}:
         errors.append("receipt.json schema_version invalid")
-    if receipt.get("entropy_schema_version") != manifest.get("schema_version"):
-        errors.append("receipt.json entropy_schema_version mismatch")
+    manifest_schema = receipt.get("manifest_schema_version")
+    if manifest_schema is None:
+        manifest_schema = receipt.get("entropy_schema_version")
+    if manifest_schema != manifest.get("schema_version"):
+        errors.append("receipt.json manifest_schema_version mismatch")
     pack_root = receipt.get("pack_root_sha256")
     legacy_root = receipt.get("entropy_root_sha256")
     if pack_root is None and legacy_root is None:
@@ -709,7 +718,7 @@ def stamp_pack(
     exclude_relpaths: Optional[Sequence[str]] = None,
     zip_pack: bool = False,
     derive_seed: bool = False,
-    entropy_sources_sha256: Optional[str] = None,
+    authored_sources_sha256: Optional[str] = None,
     evidence_bundle: bool = False,
     write_seed_files: bool = False,
     print_seed: bool = False,
@@ -728,14 +737,14 @@ def stamp_pack(
         raise ValueError("input directory contains no artifacts")
 
     # Create a unique temp pack dir to avoid partially-written packs and timestamp collisions.
-    tmp_dir = Path(tempfile.mkdtemp(prefix=".eps_tmp_", dir=str(out_dir)))
+    tmp_dir = Path(tempfile.mkdtemp(prefix=".authored_pack_tmp_", dir=str(out_dir)))
 
     try:
         artifact_entries = _copy_payload_files(input_dir=input_dir, pack_dir=tmp_dir, artifacts=raw_artifacts)
         payload_root = payload_root_sha256(artifact_entries)
         derivation = _build_derivation_metadata(
             derive_seed=bool(derive_seed),
-            entropy_sources_sha256=entropy_sources_sha256,
+            authored_sources_sha256=authored_sources_sha256,
         )
         manifest = build_manifest(
             pack_id=pack_id,
@@ -751,7 +760,7 @@ def stamp_pack(
         if derive_seed:
             seed_master = derive_seed_master(
                 root_sha256_hex=root_sha,
-                entropy_sources_sha256_hex=entropy_sources_sha256,
+                authored_sources_sha256_hex=authored_sources_sha256,
             )
 
         pack_dir = _pack_dir_for_root(out_dir, root_sha)
@@ -772,15 +781,15 @@ def stamp_pack(
                             "existing pack failed verification: "
                             + (strict.errors[0] if strict.errors else "unknown error")
                         )
-                    zip_path = pack_dir / "entropy_pack.zip"
+                    zip_path = pack_dir / "authored_pack.zip"
                     existing_zip_path: Optional[Path] = None
                     if zip_path.is_file():
                         if zip_path.is_symlink():
-                            raise ValueError("existing entropy_pack.zip is a symlink")
+                            raise ValueError("existing authored_pack.zip is a symlink")
                         zip_res = verify_pack(zip_path)
                         if not zip_res.ok:
                             raise ValueError(
-                                "existing entropy_pack.zip failed verification: "
+                                "existing authored_pack.zip failed verification: "
                                 + (zip_res.errors[0] if zip_res.errors else "unknown error")
                             )
                         existing_zip_path = zip_path
@@ -830,7 +839,7 @@ def stamp_pack(
             payload_root_sha256=payload_root,
             pack_id=pack_id,
             artifact_entries=artifact_entries,
-            zip_path=Path("entropy_pack.zip") if zip_pack else None,
+            zip_path=Path("authored_pack.zip") if zip_pack else None,
             derivation=derivation,
             seed_master=seed_master,
             extra_fields=extra_receipt_fields,
@@ -882,10 +891,10 @@ def _build_receipt(
     total_bytes = sum(int(a.get("size_bytes", 0) or 0) for a in artifact_entries)
     receipt: Dict[str, object] = {
         "schema_version": RECEIPT_SCHEMA_VERSION,
-        "tool": "eps",
-        "tool_version": str(EPS_VERSION),
+        "tool": "authored-pack",
+        "tool_version": str(AUTHORED_PACK_VERSION),
         "pack_layout": PACK_LAYOUT_VERSION,
-        "entropy_schema_version": MANIFEST_SCHEMA_VERSION,
+        "manifest_schema_version": MANIFEST_SCHEMA_VERSION,
         "pack_root_sha256": root_sha256,
         "payload_root_sha256": payload_root_sha256,
         "artifact_count": int(len(artifact_entries)),
@@ -925,9 +934,9 @@ def _write_zip(pack_dir: Path, zip_path: Path) -> None:
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for path in _iter_pack_archive_files(pack_dir, exclude_names=exclude, skip_nested_zips=False):
             rel = path.relative_to(pack_dir).as_posix()
-            if rel.startswith("entropy_sources/") or rel.startswith("entropy_sources\\"):
+            if rel.startswith("authored_sources/") or rel.startswith("authored_sources\\"):
                 continue
-            if rel.endswith(".sha256") or rel.startswith("eps_evidence_"):
+            if rel.endswith(".sha256") or rel.startswith("authored_evidence_"):
                 continue
             if rel in include_relpaths or rel.startswith("payload/"):
                 zi = zipfile.ZipInfo(filename=rel)
@@ -962,13 +971,13 @@ def write_evidence_bundle(pack_dir: Path) -> Tuple[Path, Optional[str]]:
         # Fall back to pack dir name.
         root = pack_dir.name
 
-    zip_name = f"eps_evidence_{root}.zip"
+    zip_name = f"authored_evidence_{root}.zip"
     zip_path = pack_dir / zip_name
 
     exclude_names = {
         "seed_master.hex",
         "seed_master.b64",
-        "entropy_pack.zip",
+        "authored_pack.zip",
         zip_name,
     }
 

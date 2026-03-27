@@ -78,7 +78,7 @@ What it is not:
 - one short terminal capture showing `ok`, `pack_root_sha256`, verified counts
 
 6. Pack directory glimpse
-- show `manifest.json`, `receipt.json`, `pack_root_sha256.txt`, `entropy_pack.zip`
+- show `manifest.json`, `receipt.json`, `pack_root_sha256.txt`, `authored_pack.zip`
 
 ## Short Video / Capture Plan
 

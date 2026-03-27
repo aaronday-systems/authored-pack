@@ -12,8 +12,8 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _load_eps_tui_module():
-    spec = importlib.util.spec_from_file_location("eps_tui_audit_quick_wins", ROOT / "bin" / "eps.py")
+def _load_authored_pack_tui_module():
+    spec = importlib.util.spec_from_file_location("authored_pack_tui_audit_quick_wins", ROOT / "bin" / "authored_pack.py")
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
@@ -59,7 +59,7 @@ class RecordingStdScr:
 class TestTuiAuditQuickWins(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.m = _load_eps_tui_module()
+        cls.m = _load_authored_pack_tui_module()
 
     def _state(self):
         return self.m.AppState(theme=self.m.Theme(normal=1, reverse=2, header=3))
@@ -143,7 +143,7 @@ class TestTuiAuditQuickWins(unittest.TestCase):
                 m._action_entropy_add_photos(state, RecordingStdScr())
 
             self.assertEqual(state.status, "Done.")
-            self.assertEqual(len(state.entropy_sources), 7)
+            self.assertEqual(len(state.authored_sources), 7)
             self.assertEqual(state.stamp_config.input_mode, "sources")
             self.assertEqual(state.stamp_config.input_path, "")
             self.assertTrue(any("sampled from 10 image(s)" in line for line in state.log_lines))
@@ -161,7 +161,7 @@ class TestTuiAuditQuickWins(unittest.TestCase):
             msgs = m._apply_drop_paths(state, [str(photo_dir)], max_apply=7)
 
             self.assertTrue(any("Photo folder sampled:" in msg for msg in msgs))
-            self.assertEqual(len(state.entropy_sources), 7)
+            self.assertEqual(len(state.authored_sources), 7)
             self.assertEqual(state.stamp_config.input_mode, "sources")
             self.assertEqual(state.stamp_config.input_path, "")
             self.assertIsNone(state.last_input_dir)
@@ -176,7 +176,7 @@ class TestTuiAuditQuickWins(unittest.TestCase):
             m._action_entropy_add_text(state, RecordingStdScr())
 
         self.assertEqual(state.status, "Done.")
-        self.assertEqual(len(state.entropy_sources), 1)
+        self.assertEqual(len(state.authored_sources), 1)
         self.assertEqual(state.stamp_config.input_mode, "sources")
         self.assertEqual(state.stamp_config.input_path, "")
 
@@ -190,7 +190,7 @@ class TestTuiAuditQuickWins(unittest.TestCase):
         m._action_entropy_tap(state, stdscr)
 
         self.assertEqual(state.status, "Authored source collected.")
-        self.assertEqual(len(state.entropy_sources), 1)
+        self.assertEqual(len(state.authored_sources), 1)
         self.assertEqual(state.stamp_config.input_mode, "sources")
         self.assertEqual(state.stamp_config.input_path, "")
 
@@ -198,12 +198,12 @@ class TestTuiAuditQuickWins(unittest.TestCase):
         m = self.m
         state = self._state()
         state.focus = "entropy"
-        state.entropy_sources.append(SimpleNamespace(kind="text", name="n", sha256="a" * 64, size_bytes=1, meta={}, text="x"))
+        state.authored_sources.append(SimpleNamespace(kind="text", name="n", sha256="a" * 64, size_bytes=1, meta={}, text="x"))
 
         m._action_entropy_delete_selected(state)
 
         self.assertEqual(state.focus, "menu")
-        self.assertEqual(state.entropy_sources, [])
+        self.assertEqual(state.authored_sources, [])
 
     def test_footer_is_rendered_with_reverse_video_and_compact_legend(self) -> None:
         m = self.m
@@ -226,7 +226,7 @@ class TestTuiAuditQuickWins(unittest.TestCase):
         state = self._state()
         state.selected = state.menu.index("Sources")
         state.focus = "entropy"
-        state.entropy_sources.append(SimpleNamespace(kind="text", name="n", sha256="a" * 64, size_bytes=1, meta={}, text="x"))
+        state.authored_sources.append(SimpleNamespace(kind="text", name="n", sha256="a" * 64, size_bytes=1, meta={}, text="x"))
         stdscr = RecordingStdScr()
 
         m._draw_footer(stdscr, state, 24, 100)
@@ -271,7 +271,7 @@ class TestTuiAuditQuickWins(unittest.TestCase):
     def test_clearing_sources_resets_mixed_source_flag(self) -> None:
         m = self.m
         state = self._state()
-        state.entropy_sources.append(SimpleNamespace(kind="text", name="n", sha256="a" * 64, size_bytes=1, meta={}, text="x"))
+        state.authored_sources.append(SimpleNamespace(kind="text", name="n", sha256="a" * 64, size_bytes=1, meta={}, text="x"))
         state.stamp_config.derive_seed = True
         state.stamp_config.mix_sources = True
         state.stamp_panel_draft = m.StampConfig(derive_seed=True, mix_sources=True)

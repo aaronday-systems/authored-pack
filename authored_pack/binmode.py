@@ -17,8 +17,8 @@ def _paths_overlap(a: Path, b: Path) -> bool:
 
 
 _DEFAULT_EXCLUDE_DIRS = {
-    ".eps_failed",
-    ".eps_stage",
+    ".authored_pack_failed",
+    ".authored_pack_stage",
     ".eps_used",
     "__MACOSX",
 }
@@ -38,7 +38,7 @@ class ConsumedItem:
 @dataclass(frozen=True)
 class BinStampResult:
     stamp: StampResult
-    entropy_bin: Path
+    source_bin: Path
     consumed: Tuple[ConsumedItem, ...]
     bin_files_before: int
     bin_files_after: int
@@ -48,15 +48,15 @@ class BinRecoveryError(RuntimeError):
     pass
 
 
-def _iter_entropy_bin_files(
-    entropy_bin: Path,
+def _iter_source_bin_files(
+    source_bin: Path,
     *,
     recursive: bool = True,
     include_hidden: bool = False,
     exclude_dirs: Optional[Sequence[str]] = None,
     exclude_files: Optional[Sequence[str]] = None,
 ) -> Iterable[Path]:
-    entropy_bin = Path(entropy_bin)
+    source_bin = Path(source_bin)
     ex_dirs = set(_DEFAULT_EXCLUDE_DIRS)
     ex_files = set(_DEFAULT_EXCLUDE_FILES)
     if exclude_dirs:
@@ -64,10 +64,10 @@ def _iter_entropy_bin_files(
     if exclude_files:
         ex_files |= {str(x) for x in exclude_files}
 
-    it = entropy_bin.rglob("*") if recursive else entropy_bin.glob("*")
+    it = source_bin.rglob("*") if recursive else source_bin.glob("*")
     for p in it:
         try:
-            rel_parts = p.relative_to(entropy_bin).parts
+            rel_parts = p.relative_to(source_bin).parts
         except Exception:
             rel_parts = ()
         if not include_hidden and any(str(part).startswith(".") for part in rel_parts):
@@ -99,9 +99,9 @@ def _unique_stage_name(stage_dir: Path, base_name: str) -> Path:
     return stage_dir / f"{stem}_{secrets.token_hex(4)}{suf}"
 
 
-def stamp_from_entropy_bin(
+def stamp_from_source_bin(
     *,
-    entropy_bin: Path,
+    source_bin: Path,
     out_dir: Path,
     count: int = 7,
     min_remaining: int = 50,
@@ -114,39 +114,39 @@ def stamp_from_entropy_bin(
 ) -> BinStampResult:
     """
     One-shot "push button" mode:
-    - Randomly select N files from entropy_bin
+    - Randomly select N files from source_bin
     - Move-consume them (subtractive)
-    - Stamp them as the payload of a new EntropyPack under out_dir
+    - Stamp them as the payload of a new Authored Pack under out_dir
 
     Low-watermark policy:
     - By default, refuse to run if remaining files after consumption would drop below min_remaining.
       Set allow_low_bin=True to proceed with a warning.
     """
-    entropy_bin = Path(entropy_bin).expanduser().resolve()
+    source_bin = Path(source_bin).expanduser().resolve()
     out_dir = Path(out_dir).expanduser().resolve()
-    if not entropy_bin.is_dir():
-        raise ValueError(f"--entropy-bin must be a directory: {entropy_bin}")
-    if _paths_overlap(entropy_bin, out_dir):
-        raise ValueError("--entropy-bin and --out must not overlap")
+    if not source_bin.is_dir():
+        raise ValueError(f"--source-bin must be a directory: {source_bin}")
+    if _paths_overlap(source_bin, out_dir):
+        raise ValueError("--source-bin and --out must not overlap")
     if count <= 0:
         raise ValueError(f"--count must be > 0, got: {count}")
     if min_remaining < 0:
         raise ValueError(f"--min-remaining must be >= 0, got: {min_remaining}")
 
     candidates = list(
-        _iter_entropy_bin_files(
-            entropy_bin,
+        _iter_source_bin_files(
+            source_bin,
             recursive=recursive,
             include_hidden=bool(include_hidden),
         )
     )
     before = len(candidates)
     if before < count:
-        raise ValueError(f"entropy bin has {before} files, need at least {count}")
+        raise ValueError(f"source bin has {before} files, need at least {count}")
     after = before - int(count)
     if after < min_remaining and not allow_low_bin:
         raise ValueError(
-            f"entropy bin low-watermark: would leave {after} files after consuming {count} (min_remaining={min_remaining}). "
+            f"source bin low-watermark: would leave {after} files after consuming {count} (min_remaining={min_remaining}). "
             "Use --allow-low-bin to proceed anyway."
         )
 
@@ -155,7 +155,7 @@ def stamp_from_entropy_bin(
     chosen.sort(key=lambda p: str(p))  # stable order for staging names / UX
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    stage_root = entropy_bin / ".eps_stage"
+    stage_root = source_bin / ".authored_pack_stage"
     stage_root.mkdir(parents=True, exist_ok=True)
     stage_dir = stage_root / f"bin_{int(time.time())}_{secrets.token_hex(4)}"
     stage_dir.mkdir(parents=True, exist_ok=False)
@@ -178,16 +178,16 @@ def stamp_from_entropy_bin(
             include_hidden=bool(include_hidden),
             zip_pack=bool(zip_pack),
             derive_seed=bool(derive_seed),
-            entropy_sources_sha256=None,  # sources are the payload in this mode
+            authored_sources_sha256=None,  # sources are the payload in this mode
             evidence_bundle=bool(evidence_bundle),
             write_seed_files=False,
             print_seed=False,
         )
     except Exception as exc:
         # Recovery: put the staging tree back under a deterministic failure folder,
-        # so a failed run does not silently destroy entropy.
+        # so a failed run does not silently destroy source material.
         cleanup_stage_dir = False
-        failed_root = entropy_bin / ".eps_failed" / f"{int(time.time())}_{secrets.token_hex(4)}"
+        failed_root = source_bin / ".authored_pack_failed" / f"{int(time.time())}_{secrets.token_hex(4)}"
         preserved_path: Path = failed_root
         try:
             failed_root.parent.mkdir(parents=True, exist_ok=True)
@@ -214,13 +214,13 @@ def stamp_from_entropy_bin(
 
     # Post-run counts are best-effort (bin contents changed).
     try:
-        after_count = len(list(_iter_entropy_bin_files(entropy_bin, recursive=recursive, include_hidden=bool(include_hidden))))
+        after_count = len(list(_iter_source_bin_files(source_bin, recursive=recursive, include_hidden=bool(include_hidden))))
     except Exception:
         after_count = -1
 
     return BinStampResult(
         stamp=stamp,
-        entropy_bin=entropy_bin,
+        source_bin=source_bin,
         consumed=tuple(consumed),
         bin_files_before=before,
         bin_files_after=after_count,

@@ -6,7 +6,7 @@ import tomllib
 import unittest
 from pathlib import Path
 
-from eps import __version__
+from authored_pack import __version__
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -39,7 +39,7 @@ class TestPublicReleaseContract(unittest.TestCase):
     def test_ci_workflow_exists_for_pytest_and_cli_help(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
         self.assertIn("pytest -q", workflow)
-        self.assertIn("python3 -m eps --help", workflow)
+        self.assertIn("python3 -m authored_pack --help", workflow)
 
     def test_gitignore_ignores_local_claude_settings(self) -> None:
         text = (ROOT / ".gitignore").read_text(encoding="utf-8")
@@ -79,14 +79,14 @@ class TestPublicReleaseContract(unittest.TestCase):
         self.assertNotIn("operator-supplied inputs", text)
 
     def test_tui_public_strings_do_not_reintroduce_entropy_positioning(self) -> None:
-        text = (ROOT / "bin" / "eps.py").read_text(encoding="utf-8")
+        text = (ROOT / "bin" / "authored_pack.py").read_text(encoding="utf-8")
         self.assertNotIn("auditable operator-provided entropy", text)
         self.assertNotIn("write entropy source audit into pack", text)
         self.assertNotIn("operator-supplied inputs", text)
 
     def test_tui_help_hides_legacy_insane_alias_but_parser_still_accepts_it(self) -> None:
         help_proc = subprocess.run(
-            [sys.executable, "-B", "bin/eps.py", "--help"],
+            [sys.executable, "-B", "bin/authored_pack.py", "--help"],
             cwd=ROOT,
             check=False,
             capture_output=True,
@@ -99,7 +99,7 @@ class TestPublicReleaseContract(unittest.TestCase):
         self.assertNotIn("operator-provided entropy", help_proc.stdout)
 
         insane_proc = subprocess.run(
-            [sys.executable, "-B", "bin/eps.py", "--insane"],
+            [sys.executable, "-B", "bin/authored_pack.py", "--insane"],
             cwd=ROOT,
             stdin=subprocess.DEVNULL,
             check=False,

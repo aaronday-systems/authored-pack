@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from . import __product_name__, __version__
-from .binmode import stamp_from_entropy_bin
+from .binmode import stamp_from_source_bin
 from .manifest import DEFAULT_DERIVATION_VERSION, stable_dumps
 from .pack import StampResult, _output_would_self_ingest_input, inspect_pack, stamp_pack, verify_pack
 
@@ -22,13 +22,12 @@ First clean success:
   authored-pack verify --pack ./out/<pack_root_sha256>
 
 Human path:
-  python3 -B bin/eps.py
+  python3 -B bin/authored_pack.py
   stage sources if you need them, then stamp and verify
 
 Machine path:
   authored-pack stamp --input /ABS/PATH/TO/DIR --out ./out --json
   stamp-bin is subtractive and uses repo-relative defaults
-  eps remains available as a compatibility alias
 
 Trust boundary:
   use OS randomness for ordinary secret generation
@@ -115,8 +114,8 @@ def _command_name_from_argv(argv_list: Sequence[str], *, default_command: str = 
 def _prog_name_from_argv0(argv0: str) -> str:
     name = Path(argv0).name
     stem = Path(name).stem
-    if stem in {"eps", "authored-pack"}:
-        return stem
+    if stem in {"authored-pack", "authored_pack"}:
+        return "authored-pack"
     return "authored-pack"
 
 
@@ -261,8 +260,8 @@ def _inspect(args: argparse.Namespace) -> int:
 
 
 def _stamp_bin(args: argparse.Namespace) -> int:
-    res = stamp_from_entropy_bin(
-        entropy_bin=Path(args.entropy_bin),
+    res = stamp_from_source_bin(
+        source_bin=Path(args.source_bin),
         out_dir=Path(args.out),
         count=int(args.count),
         min_remaining=int(args.min_remaining),
@@ -278,21 +277,21 @@ def _stamp_bin(args: argparse.Namespace) -> int:
     warnings: List[str] = []
     if low_watermark_violation:
         warnings.append(
-            f"entropy bin low-watermark: {res.bin_files_before} files before, consuming {args.count}, "
+            f"source bin low-watermark: {res.bin_files_before} files before, consuming {args.count}, "
             f"min_remaining={args.min_remaining}"
         )
 
     if args.json:
         payload = {
-            "mode": "entropy_bin",
-            "entropy_bin": str(res.entropy_bin),
+            "mode": "source_bin",
+            "source_bin": str(res.source_bin),
             "bin_files_before": int(res.bin_files_before),
             "bin_files_after": int(res.bin_files_after),
             "consumed_count": len(res.consumed),
             "consumed": [
                 {
                     "src_path": str(item.src_path),
-                    "src_relpath": item.src_path.relative_to(res.entropy_bin).as_posix(),
+                    "src_relpath": item.src_path.relative_to(res.source_bin).as_posix(),
                     "staged_name": item.staged_path.name,
                 }
                 for item in res.consumed
@@ -325,8 +324,8 @@ def _stamp_bin(args: argparse.Namespace) -> int:
             f"warning: {warnings[0]}",
             file=sys.stderr,
         )
-    print("mode: entropy_bin")
-    print(f"entropy_bin: {res.entropy_bin}")
+    print("mode: source_bin")
+    print(f"source_bin: {res.source_bin}")
     print(f"bin_files_before: {res.bin_files_before}")
     print(f"bin_files_after: {res.bin_files_after}")
     print(f"consumed_count: {len(res.consumed)}")
@@ -352,7 +351,7 @@ def build_parser(*, prog: str = "authored-pack") -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     stamp = sub.add_parser("stamp", help="Operator path: turn a directory into a deterministic verifiable pack")
-    stamp.add_argument("--input", required=True, help="Directory of operator-supplied artifacts to include")
+    stamp.add_argument("--input", required=True, help="Directory of artifacts to include")
     stamp.add_argument("--out", required=True, help="Content-addressed output directory for the stamped pack")
     stamp.add_argument("--pack-id", default=None, help="Optional human label stored in manifest metadata (affects root)")
     stamp.add_argument("--notes", default=None, help="Optional notes stored in manifest metadata (affects root)")
@@ -368,49 +367,49 @@ def build_parser(*, prog: str = "authored-pack") -> argparse.ArgumentParser:
         help="Optional die roll like d6=4; repeatable; stored in manifest (affects root)",
     )
     stamp.add_argument("--include-hidden", action="store_true", help="Include dotfiles in input scan")
-    stamp.add_argument("--zip", action="store_true", help="Write entropy_pack.zip alongside pack dir")
+    stamp.add_argument("--zip", action="store_true", help="Write authored_pack.zip alongside pack dir")
 
     stamp.add_argument("--derive-seed", action="store_true", help=f"Derive reproducible seed material via HKDF ({DEFAULT_DERIVATION_VERSION})")
     stamp.add_argument("--write-seed", action="store_true", help="Write derived seed material as seed_master.{hex,b64} (requires --derive-seed)")
     stamp.add_argument("--print-seed", action="store_true", help="Print derived seed material as seed_master.{hex,b64} to stdout (requires --derive-seed, incompatible with --json)")
-    stamp.add_argument("--evidence-bundle", action="store_true", help="Write eps_evidence_<root>.zip + .sha256 (tamper-evident local audit bundle)")
+    stamp.add_argument("--evidence-bundle", action="store_true", help="Write authored_evidence_<root>.zip + .sha256 (tamper-evident local audit bundle)")
 
     stamp.add_argument("--json", action="store_true", help="Emit JSON envelope to stdout")
     stamp.set_defaults(func=_stamp)
 
     verify = sub.add_parser("verify", help="Post-run audit: verify a stamped pack directory or .zip")
-    verify.add_argument("--pack", required=True, help="Path to pack dir or entropy_pack.zip")
+    verify.add_argument("--pack", required=True, help="Path to pack dir or authored_pack.zip")
     verify.add_argument("--max-manifest-mib", type=int, default=4, help="Maximum manifest.json size to accept (default: 4)")
     verify.add_argument("--json", action="store_true", help="Emit JSON envelope to stdout")
     verify.set_defaults(func=_verify)
 
     inspect = sub.add_parser("inspect", help="Summarize a stamped pack directory or .zip for machine or human review")
-    inspect.add_argument("--pack", required=True, help="Path to pack dir or entropy_pack.zip")
+    inspect.add_argument("--pack", required=True, help="Path to pack dir or authored_pack.zip")
     inspect.add_argument("--max-manifest-mib", type=int, default=4, help="Maximum manifest.json size to accept while inspecting (default: 4)")
     inspect.add_argument("--artifact-preview", type=int, default=20, help="How many artifact entries to include in the summary preview (default: 20)")
     inspect.add_argument("--json", action="store_true", help="Emit JSON envelope to stdout")
     inspect.set_defaults(func=_inspect)
 
-    stamp_bin = sub.add_parser("stamp-bin", help="Machine sidecar: subtractively consume entropy-bin files and emit receipts")
+    stamp_bin = sub.add_parser("stamp-bin", help="Machine sidecar: subtractively consume source-bin files and emit receipts")
     stamp_bin.add_argument(
-        "--entropy-bin",
-        default="./bins/entropy_bin",
-        help="Directory containing entropy-bearing files to consume (moved, not copied) (default: ./bins/entropy_bin)",
+        "--source-bin",
+        default="./bins/source_bin",
+        help="Directory containing source files to consume (moved, not copied) (default: ./bins/source_bin)",
     )
     stamp_bin.add_argument(
         "--out",
-        default="./bins/eps_out",
-        help="Output directory for stamped pack (content-addressed) (default: ./bins/eps_out)",
+        default="./bins/authored_out",
+        help="Output directory for stamped pack (content-addressed) (default: ./bins/authored_out)",
     )
     stamp_bin.add_argument("--count", type=int, default=7, help="How many files to consume and stamp (default: 7)")
     stamp_bin.add_argument("--min-remaining", type=int, default=50, help="Refuse if remaining after consumption would be below this (default: 50)")
     stamp_bin.add_argument("--allow-low-bin", action="store_true", help="Proceed even if low-watermark would be violated (prints warning)")
-    stamp_bin.add_argument("--recursive", action="store_true", help="Scan entropy bin recursively (default)")
-    stamp_bin.add_argument("--no-recursive", dest="recursive", action="store_false", help="Only scan top-level of entropy bin")
+    stamp_bin.add_argument("--recursive", action="store_true", help="Scan source bin recursively (default)")
+    stamp_bin.add_argument("--no-recursive", dest="recursive", action="store_false", help="Only scan top-level of source bin")
     stamp_bin.set_defaults(recursive=True)
-    stamp_bin.add_argument("--include-hidden", action="store_true", help="Include dotfiles while scanning entropy bin")
+    stamp_bin.add_argument("--include-hidden", action="store_true", help="Include dotfiles while scanning source bin")
     # Push-button defaults: on.
-    stamp_bin.add_argument("--zip", action=argparse.BooleanOptionalAction, default=True, help="Write entropy_pack.zip alongside pack dir (default: on)")
+    stamp_bin.add_argument("--zip", action=argparse.BooleanOptionalAction, default=True, help="Write authored_pack.zip alongside pack dir (default: on)")
     stamp_bin.add_argument(
         "--derive-seed",
         action=argparse.BooleanOptionalAction,
@@ -421,7 +420,7 @@ def build_parser(*, prog: str = "authored-pack") -> argparse.ArgumentParser:
         "--evidence-bundle",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Write eps_evidence_<root>.zip + .sha256 (tamper-evident) (default: on)",
+        help="Write authored_evidence_<root>.zip + .sha256 (tamper-evident) (default: on)",
     )
     stamp_bin.add_argument("--json", action="store_true", help="Emit JSON envelope to stdout")
     stamp_bin.set_defaults(func=_stamp_bin)

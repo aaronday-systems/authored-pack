@@ -10,9 +10,9 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from .safeio import hash_trusted_file
 
 
-MANIFEST_SCHEMA_VERSION = "entropy.pack.v2"
-PAYLOAD_IDENTITY_SCHEMA_VERSION = "entropy.payload.v1"
-DEFAULT_DERIVATION_VERSION = "ENTROPYPACK-SEED-v1"
+MANIFEST_SCHEMA_VERSION = "authored.pack.v1"
+PAYLOAD_IDENTITY_SCHEMA_VERSION = "authored.payload.v1"
+DEFAULT_DERIVATION_VERSION = "AUTHOREDPACK-SEED-v1"
 
 
 def stable_dumps(value: Any) -> str:

@@ -9,8 +9,8 @@ import warnings
 import zipfile
 from pathlib import Path
 
-from eps.manifest import manifest_root_sha256, stable_dumps
-from eps.pack import stamp_pack, verify_pack
+from authored_pack.manifest import manifest_root_sha256, stable_dumps
+from authored_pack.pack import stamp_pack, verify_pack
 
 
 class TestStampVerify(unittest.TestCase):
@@ -30,7 +30,7 @@ class TestStampVerify(unittest.TestCase):
                 pack_id="test_pack",
                 zip_pack=True,
                 derive_seed=True,
-                entropy_sources_sha256=None,
+                authored_sources_sha256=None,
                 evidence_bundle=True,
                 write_seed_files=False,
                 print_seed=False,
@@ -44,14 +44,14 @@ class TestStampVerify(unittest.TestCase):
             self.assertEqual(vr.file_count, 2)
             self.assertFalse((res.pack_dir / "entropy_root_sha256.txt").exists())
 
-            zip_path = res.pack_dir / "entropy_pack.zip"
+            zip_path = res.pack_dir / "authored_pack.zip"
             self.assertTrue(zip_path.is_file())
             vz = verify_pack(zip_path)
             self.assertTrue(vz.ok, msg=f"errors: {vz.errors}")
             self.assertEqual(vz.root_sha256, res.root_sha256)
             self.assertEqual(vz.file_count, 2)
 
-            ev_zip = res.pack_dir / f"eps_evidence_{res.root_sha256}.zip"
+            ev_zip = res.pack_dir / f"authored_evidence_{res.root_sha256}.zip"
             self.assertTrue(ev_zip.is_file())
             self.assertEqual(res.evidence_bundle_path, ev_zip)
             self.assertTrue(bool(res.evidence_bundle_sha256))
@@ -78,11 +78,11 @@ class TestStampVerify(unittest.TestCase):
             self.assertEqual(res2.root_sha256, res.root_sha256)
             self.assertEqual(res2.pack_dir, res.pack_dir)
             manifest = json.loads((res.pack_dir / "manifest.json").read_text(encoding="utf-8"))
-            self.assertEqual(manifest["schema_version"], "entropy.pack.v2")
+            self.assertEqual(manifest["schema_version"], "authored.pack.v1")
             self.assertEqual(manifest["derivation"]["mode"], "root-only")
             receipt_obj = json.loads((res.pack_dir / "receipt.json").read_text(encoding="utf-8"))
-            self.assertEqual(receipt_obj["schema_version"], "eps.receipt.v2")
-            self.assertEqual(receipt_obj["entropy_schema_version"], "entropy.pack.v2")
+            self.assertEqual(receipt_obj["schema_version"], "authored.receipt.v1")
+            self.assertEqual(receipt_obj["manifest_schema_version"], "authored.pack.v1")
             self.assertEqual(receipt_obj["pack_root_sha256"], res.root_sha256)
             self.assertEqual(receipt_obj["payload_root_sha256"], res.payload_root_sha256)
             self.assertNotIn("entropy_root_sha256", receipt_obj)
@@ -146,7 +146,7 @@ class TestStampVerify(unittest.TestCase):
                 out_dir=out_dir,
                 zip_pack=False,
                 derive_seed=True,
-                entropy_sources_sha256=None,
+                authored_sources_sha256=None,
                 evidence_bundle=False,
                 write_seed_files=False,
                 print_seed=False,
@@ -158,7 +158,7 @@ class TestStampVerify(unittest.TestCase):
                 out_dir=out_dir,
                 zip_pack=False,
                 derive_seed=True,
-                entropy_sources_sha256=hashlib.sha256(b"demo").hexdigest(),
+                authored_sources_sha256=hashlib.sha256(b"demo").hexdigest(),
                 evidence_bundle=False,
                 write_seed_files=False,
                 print_seed=False,
@@ -251,7 +251,7 @@ class TestStampVerify(unittest.TestCase):
                 write_seed_files=True,
             )
 
-            zip_path = res.pack_dir / "entropy_pack.zip"
+            zip_path = res.pack_dir / "authored_pack.zip"
             on_disk_receipt = json.loads((res.pack_dir / "receipt.json").read_text(encoding="utf-8"))
             with zipfile.ZipFile(zip_path, "r") as zf:
                 names = set(zf.namelist())
@@ -262,7 +262,7 @@ class TestStampVerify(unittest.TestCase):
                 self.assertIn("payload/a.txt", names)
                 self.assertNotIn("seed_master.hex", names)
                 self.assertNotIn("seed_master.b64", names)
-                self.assertFalse(any(name.startswith("eps_evidence_") for name in names))
+                self.assertFalse(any(name.startswith("authored_evidence_") for name in names))
                 self.assertFalse(any(name.endswith(".sha256") for name in names))
                 zipped_receipt = json.loads(zf.read("receipt.json").decode("utf-8"))
                 self.assertEqual(zipped_receipt, on_disk_receipt)
@@ -292,7 +292,7 @@ class TestStampVerify(unittest.TestCase):
             self.assertIsNotNone(res.evidence_bundle_path)
             self.assertTrue(bool(res.evidence_bundle_sha256))
 
-            ev_zip = res.pack_dir / f"eps_evidence_{res.root_sha256}.zip"
+            ev_zip = res.pack_dir / f"authored_evidence_{res.root_sha256}.zip"
             self.assertTrue(ev_zip.is_file())
             with zipfile.ZipFile(ev_zip, "r") as zf:
                 zipped_receipt = json.loads(zf.read("receipt.json").decode("utf-8"))
@@ -525,7 +525,7 @@ class TestStampVerify(unittest.TestCase):
                 zip_pack=True,
                 derive_seed=False,
             )
-            zip_path = res.pack_dir / "entropy_pack.zip"
+            zip_path = res.pack_dir / "authored_pack.zip"
             with zipfile.ZipFile(zip_path, "a", compression=zipfile.ZIP_DEFLATED) as zf:
                 zf.writestr("payload/evil.sh", "echo pwn\n")
 
@@ -584,13 +584,13 @@ class TestStampVerify(unittest.TestCase):
             self.assertFalse(dir_result.ok)
             self.assertTrue(any("receipt.json entropy_root_sha256 mismatch" in e for e in dir_result.errors))
 
-            zip_path = res.pack_dir / "entropy_pack.zip"
+            zip_path = res.pack_dir / "authored_pack.zip"
             with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
                 for src in sorted(res.pack_dir.rglob("*")):
                     if src.is_dir():
                         continue
                     rel = src.relative_to(res.pack_dir).as_posix()
-                    if rel.endswith(".sha256") or rel.startswith("eps_evidence_") or rel.startswith("entropy_sources/"):
+                    if rel.endswith(".sha256") or rel.startswith("authored_evidence_") or rel.startswith("authored_sources/"):
                         continue
                     zf.write(src, arcname=rel)
             zip_result = verify_pack(zip_path)

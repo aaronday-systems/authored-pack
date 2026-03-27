@@ -20,4 +20,4 @@ jobs:
       - name: Run pytest
         run: pytest -q
       - name: CLI help smoke
-        run: python3 -m eps --help
+        run: python3 -m authored_pack --help

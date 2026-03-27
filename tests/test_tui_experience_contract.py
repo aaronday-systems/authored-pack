@@ -14,8 +14,8 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _load_eps_tui_module():
-    spec = importlib.util.spec_from_file_location("eps_tui_experience_contract", ROOT / "bin" / "eps.py")
+def _load_authored_pack_tui_module():
+    spec = importlib.util.spec_from_file_location("authored_pack_tui_experience_contract", ROOT / "bin" / "authored_pack.py")
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
@@ -60,7 +60,7 @@ class DummyStdScr:
 class TestTuiExperienceContract(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.m = _load_eps_tui_module()
+        cls.m = _load_authored_pack_tui_module()
 
     def _state(self):
         return self.m.AppState(theme=self.m.Theme(normal=0, reverse=0, header=0))
@@ -94,13 +94,13 @@ class TestTuiExperienceContract(unittest.TestCase):
 
     def test_sources_card_keeps_the_slot_rail_ascii_and_type_counts_visible(self) -> None:
         state = self._state()
-        state.entropy_sources = [
+        state.authored_sources = [
             SimpleNamespace(kind="photo", name="photo.jpg", sha256="a" * 64, size_bytes=1, meta={}),
             SimpleNamespace(kind="text", name="note", sha256="b" * 64, size_bytes=2, meta={}, text="x"),
             SimpleNamespace(kind="tap", name="tap", sha256="c" * 64, size_bytes=16, meta={"events": 16}),
         ]
 
-        joined = "\n".join(self.m._entropy_sources_preview(state, width=200, height=40))
+        joined = "\n".join(self.m._authored_sources_preview(state, width=200, height=40))
         rail_line = next(line for line in joined.splitlines() if line.startswith("SLOT RAIL"))
 
         self.assertIn("SLOT RAIL [photo 1] [text 1] [tap 1] ready 3/7", joined)

@@ -1,6 +1,6 @@
 # Contributing
 
-EPS is a deterministic pack/verify tool for operator-supplied entropy-bearing inputs.
+Authored Pack is a small deterministic pack/verify tool for humans and agents.
 
 ## Supported Python
 
@@ -16,7 +16,7 @@ pytest -q
 Also run the module smoke check before opening a release-sensitive pull request:
 
 ```bash
-python3 -m eps --help
+python3 -m authored_pack --help
 ```
 
 ## Change Shape
@@ -33,7 +33,7 @@ Preferred shape:
 If you change any of the following, you must add or update tests in the same pull request:
 - `manifest.json` schema or canonicalization
 - `receipt.json` schema or finalization order
-- `entropy_pack.zip` contents or verification rules
+- `authored_pack.zip` contents or verification rules
 - CLI `--json` envelopes
 - TUI flows that affect receipt, audit, or derived-seed handling
 
@@ -51,7 +51,7 @@ Run:
 ```bash
 pytest -q
 python3 -m pytest -q
-python3 -m eps --help
+python3 -m authored_pack --help
 ```
 
 If the change touches release-facing docs, also verify the README commands still match the runtime behavior.

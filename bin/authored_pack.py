@@ -14,7 +14,7 @@ Baseline posture:
 ASCII-first: no box-drawing or emoji in calm mode. Color is optional.
 
 To start directly in the louder profile, run:
-- `python3 -B bin/eps.py --noisy`
+- `python3 -B bin/authored_pack.py --noisy`
 """
 
 from __future__ import annotations
@@ -43,9 +43,9 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
 
-# When running as `python3 bin/eps.py`, Python prepends `bin/` to sys.path,
-# which would cause `import eps` to resolve to this file (bin/eps.py).
-# Force repo-root precedence so `eps/` package imports work.
+# When running as `python3 bin/authored_pack.py`, Python prepends `bin/` to sys.path,
+# which would cause `import authored_pack` to resolve to this file (bin/authored_pack.py).
+# Force repo-root precedence so the package import resolves to `/authored_pack`.
 _BIN_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = _BIN_DIR.parent
 try:
@@ -55,8 +55,8 @@ except ValueError:
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from eps import __version__
-from eps.pack import DEFAULT_MAX_MANIFEST_BYTES, stamp_pack, verify_pack
+from authored_pack import __version__
+from authored_pack.pack import DEFAULT_MAX_MANIFEST_BYTES, stamp_pack, verify_pack
 
 
 APP_NAME = "AUTHORED PACK"
@@ -120,7 +120,7 @@ def _is_hidden_rel(rel_posix: str) -> bool:
 def _scan_artifacts_for_picker(input_dir: Path, *, include_hidden: bool) -> List[Tuple[str, int]]:
     """
     Deterministic file scan (path + size) without hashing, for interactive exclude selection.
-    Matches eps.manifest._iter_files traversal order.
+    Matches `authored_pack.manifest._iter_files` traversal order.
     """
     input_dir = Path(input_dir).resolve()
     out: List[Tuple[str, int]] = []
@@ -491,7 +491,7 @@ class ViewerState:
 
 
 @dataclass
-class EntropySource:
+class AuthoredSource:
     # Material is not stored by default for photos; we store file path + hash.
     kind: str  # "photo" | "text" | "tap"
     name: str
@@ -509,7 +509,7 @@ class DropPreparedAction:
     terminal: bool = False
     seen_key: Optional[str] = None
     input_dir: Optional[Path] = None
-    source: Optional[EntropySource] = None
+    source: Optional[AuthoredSource] = None
 
 
 @dataclass
@@ -563,7 +563,7 @@ class AppState:
     godel_words: List[str] = field(default_factory=list)
     godel_phrase: str = ""
     godel_last_tick: int = 0
-    entropy_sources: List[EntropySource] = field(default_factory=list)
+    authored_sources: List[AuthoredSource] = field(default_factory=list)
     entropy_selected: int = 0
     entropy_min_sources: int = DEFAULT_ENTROPY_MIN_SOURCES
     last_pack_dir: Optional[Path] = None
@@ -720,7 +720,7 @@ def _sha256_hex_path(path: Path, *, max_bytes: Optional[int] = None) -> Tuple[st
     return h.hexdigest(), n
 
 
-def _entropy_pool_sha256(sources: Sequence["EntropySource"]) -> str:
+def _entropy_pool_sha256(sources: Sequence["AuthoredSource"]) -> str:
     """
     Deterministic fingerprint of the *set* of staged sources (order-independent).
     Only uses non-sensitive metadata (hashes and kinds), not raw materials.
@@ -735,7 +735,7 @@ def _entropy_pool_sha256(sources: Sequence["EntropySource"]) -> str:
     return h.hexdigest()
 
 
-def _entropy_source_identity(s: "EntropySource") -> str:
+def _entropy_source_identity(s: "AuthoredSource") -> str:
     return f"{s.kind}:{s.sha256}:{int(s.size_bytes)}"
 
 
@@ -744,7 +744,7 @@ def _is_hex_sha256(s: str) -> bool:
     return len(v) == 64 and all(c in "0123456789abcdef" for c in v.lower())
 
 
-def _entropy_source_is_lockdown_eligible(s: "EntropySource") -> bool:
+def _entropy_source_is_lockdown_eligible(s: "AuthoredSource") -> bool:
     if not _is_hex_sha256(s.sha256):
         return False
     if int(s.size_bytes) <= 0:
@@ -757,8 +757,8 @@ def _entropy_source_is_lockdown_eligible(s: "EntropySource") -> bool:
     return True
 
 
-def _lockdown_eligible_sources(sources: Sequence["EntropySource"]) -> List["EntropySource"]:
-    out: List[EntropySource] = []
+def _lockdown_eligible_sources(sources: Sequence["AuthoredSource"]) -> List["AuthoredSource"]:
+    out: List[AuthoredSource] = []
     seen: set[str] = set()
     for s in sources:
         if not _entropy_source_is_lockdown_eligible(s):
@@ -1018,7 +1018,7 @@ def _prepare_drop_actions(
                                 message=f"Photo source added: {fp.name}",
                                 success=True,
                                 seen_key=seen_key,
-                                source=EntropySource(
+                                source=AuthoredSource(
                                     kind="photo",
                                     name=fp.name,
                                     sha256=sha,
@@ -1064,7 +1064,7 @@ def _prepare_drop_actions(
                         message=f"Photo source added: {p.name}",
                         success=True,
                         seen_key=seen_key,
-                        source=EntropySource(kind="photo", name=p.name, sha256=sha, size_bytes=size, meta={}, path=p),
+                        source=AuthoredSource(kind="photo", name=p.name, sha256=sha, size_bytes=size, meta={}, path=p),
                     )
                 )
                 continue
@@ -1091,7 +1091,7 @@ def _prepare_drop_actions(
                         message=f"Text source added: {p.name}",
                         success=True,
                         seen_key=seen_key,
-                        source=EntropySource(kind="text", name=p.name, sha256=sha, size_bytes=len(raw), text=txt),
+                        source=AuthoredSource(kind="text", name=p.name, sha256=sha, size_bytes=len(raw), text=txt),
                     )
                 )
                 continue
@@ -1134,13 +1134,13 @@ def _apply_drop_actions_to_state(state: AppState, actions: Sequence[DropPrepared
             if act.input_dir is not None:
                 state.last_input_dir = act.input_dir
             if act.source is not None:
-                state.entropy_sources.append(act.source)
+                state.authored_sources.append(act.source)
                 added_sources = True
         if act.seen_key is not None and (act.success or act.terminal):
             state.drop_seen.add(act.seen_key)
     if msgs:
-        if state.entropy_sources:
-            state.entropy_selected = max(0, min(state.entropy_selected, len(state.entropy_sources) - 1))
+        if state.authored_sources:
+            state.entropy_selected = max(0, min(state.entropy_selected, len(state.authored_sources) - 1))
         if added_sources:
             _prefer_sources_input_mode(state)
         _apply_drop_feedback(state, msgs, play_sfx=play_sfx)
@@ -1681,10 +1681,10 @@ def _update_receipt_entropy_audit(
     materialized_count: int,
     warnings: Sequence[str],
 ) -> None:
-    receipt["entropy_sources_audit_status"] = str(status)
-    receipt["entropy_sources_audit_requested_count"] = int(requested_count)
-    receipt["entropy_sources_audit_materialized_count"] = int(materialized_count)
-    receipt["entropy_sources_audit_warnings"] = [str(w) for w in warnings]
+    receipt["authored_sources_audit_status"] = str(status)
+    receipt["authored_sources_audit_requested_count"] = int(requested_count)
+    receipt["authored_sources_audit_materialized_count"] = int(materialized_count)
+    receipt["authored_sources_audit_warnings"] = [str(w) for w in warnings]
 
 
 def close_viewer(state: AppState) -> None:
@@ -1761,7 +1761,7 @@ def _quickstart_lines() -> List[str]:
         "V -> verify an existing pack",
         "",
         "machine-sidecar route:",
-        "python3 -m eps stamp-bin --json",
+        "python3 -m authored_pack stamp-bin --json",
         "",
         "Trust boundary:",
         "Use OS randomness for fresh secrets.",
@@ -1772,7 +1772,7 @@ def _quickstart_lines() -> List[str]:
 def _stamp_panel_rows(state: AppState) -> List[StampPanelRow]:
     cfg = state.stamp_panel_draft or state.stamp_config
     if cfg.input_mode == "sources":
-        input_label = f"@sources ({len(state.entropy_sources)} staged)"
+        input_label = f"@sources ({len(state.authored_sources)} staged)"
     else:
         input_label = _display_path(_effective_stamp_input(state, cfg) or "not set", max_len=28)
     rows = [
@@ -1794,8 +1794,8 @@ def _stamp_panel_rows(state: AppState) -> List[StampPanelRow]:
         )
         if cfg.input_mode != "sources":
             rows.append(StampPanelRow("exclude_picker", "Exclude picker", "on" if cfg.exclude_picker else "off", "toggle"))
-        if cfg.derive_seed and state.entropy_sources:
-            eligible = len(_lockdown_eligible_sources(state.entropy_sources))
+        if cfg.derive_seed and state.authored_sources:
+            eligible = len(_lockdown_eligible_sources(state.authored_sources))
             rows.append(
                 StampPanelRow(
                     "mix_sources",
@@ -1908,7 +1908,7 @@ def _help_summary_lines(_state: AppState) -> List[str]:
     ]
 
 
-def _entropy_source_kind_counts(sources: Sequence["EntropySource"]) -> Dict[str, int]:
+def _entropy_source_kind_counts(sources: Sequence["AuthoredSource"]) -> Dict[str, int]:
     counts = {"photo": 0, "text": 0, "tap": 0}
     for s in sources:
         kind = str(getattr(s, "kind", "")).lower()
@@ -1918,8 +1918,8 @@ def _entropy_source_kind_counts(sources: Sequence["EntropySource"]) -> Dict[str,
 
 
 def _source_slot_rail_line(state: AppState, *, width: int) -> str:
-    counts = _entropy_source_kind_counts(state.entropy_sources)
-    ready = len(_lockdown_eligible_sources(state.entropy_sources))
+    counts = _entropy_source_kind_counts(state.authored_sources)
+    ready = len(_lockdown_eligible_sources(state.authored_sources))
     line = (
         "SLOT RAIL "
         f"[photo {counts['photo']}] "
@@ -1934,7 +1934,7 @@ def _selection_preview(state: AppState, label: str, *, width: int, height: int) 
     if label == "Start":
         preview = _quickstart_lines()
     elif label == "Sources":
-        preview = _entropy_sources_preview(state, width=width, height=height)
+        preview = _authored_sources_preview(state, width=width, height=height)
     elif label == "Stamp":
         preview = _stamp_preview_lines(state, width=width, height=height)
     elif label == "Verify":
@@ -2847,20 +2847,20 @@ def _draw_insane_viewer(stdscr, state: AppState, top: int, cols: int, rows: int)
         safe_addstr(stdscr, y, 0, v.lines[src_idx][:cols].ljust(cols), state.palette.text)
 
 
-def _entropy_sources_preview(state: AppState, *, width: int, height: int) -> List[str]:
+def _authored_sources_preview(state: AppState, *, width: int, height: int) -> List[str]:
     """
     Right-pane content for the Sources screen.
     """
     min_n = int(state.entropy_min_sources)
-    eligible = len(_lockdown_eligible_sources(state.entropy_sources))
+    eligible = len(_lockdown_eligible_sources(state.authored_sources))
     header = "AUTHORED SOURCES // stage photos, text, or taps"
     lines: List[str] = [header, _source_slot_rail_line(state, width=width), ""]
-    if state.focus == "entropy" and state.entropy_sources:
+    if state.focus == "entropy" and state.authored_sources:
         lines.append("List focus. Up/Down moves authored sources. Tab returns to menu.")
     else:
         lines.append("Menu focus. A adds photos, T adds text, Space records taps, P imports paths.")
     lines.append("")
-    if not state.entropy_sources:
+    if not state.authored_sources:
         lines.append("No authored sources yet.")
         lines.append("Add a photo, text note, or tap sample.")
         lines.append("Advanced: watched folder intake is still available.")
@@ -2877,9 +2877,9 @@ def _entropy_sources_preview(state: AppState, *, width: int, height: int) -> Lis
         lines.append(f"Imported paths this run: {state.drop_import_count}")
         lines.append("")
 
-    sel = max(0, min(int(state.entropy_selected), len(state.entropy_sources) - 1))
+    sel = max(0, min(int(state.entropy_selected), len(state.authored_sources) - 1))
     seen_ids: set[str] = set()
-    for i, s in enumerate(state.entropy_sources[: max(0, height - 6)]):
+    for i, s in enumerate(state.authored_sources[: max(0, height - 6)]):
         mark = ">>" if i == sel else "  "
         meta_bits: List[str] = []
         if s.kind == "photo":
@@ -2937,7 +2937,7 @@ def _draw_footer(stdscr, state: AppState, rows: int, cols: int) -> None:
 
     label = state.menu[state.selected] if 0 <= state.selected < len(state.menu) else ""
     if label == "Sources":
-        if state.focus == "entropy" and state.entropy_sources:
+        if state.focus == "entropy" and state.authored_sources:
             legend = "Up/Down: list  Tab: menu  Enter: preview  D: delete  C: clear  Esc: back"
         else:
             legend = "Up/Down: menu  Tab: list  A/T/Space/P: add  M: mode  Q: quit"
@@ -3279,8 +3279,8 @@ def _action_entropy_add_photos(state: AppState, stdscr) -> None:
         except Exception:
             continue
         name = fp.name
-        state.entropy_sources.append(
-            EntropySource(kind="photo", name=name, sha256=sha, size_bytes=size, meta={}, path=fp)
+        state.authored_sources.append(
+            AuthoredSource(kind="photo", name=name, sha256=sha, size_bytes=size, meta={}, path=fp)
         )
         added += 1
 
@@ -3312,8 +3312,8 @@ def _action_entropy_add_text(state: AppState, stdscr) -> None:
         return
     raw = text.encode("utf-8", errors="ignore")
     sha = hashlib.sha256(raw).hexdigest()
-    state.entropy_sources.append(
-        EntropySource(kind="text", name=label.strip() or "note", sha256=sha, size_bytes=len(raw), text=text)
+    state.authored_sources.append(
+        AuthoredSource(kind="text", name=label.strip() or "note", sha256=sha, size_bytes=len(raw), text=text)
     )
     _prefer_sources_input_mode(state)
     _trigger_interaction_flash(state, drop_zone=False)
@@ -3384,7 +3384,7 @@ def _action_entropy_tap(state: AppState, stdscr) -> None:
         return
     meta: Dict[str, object] = {"events": int(count), "sample": sample_events[:16]}
     # size_bytes tracks the conceptual size of the captured timing/code stream.
-    state.entropy_sources.append(EntropySource(kind="tap", name="tap", sha256=digest, size_bytes=count * 8, meta=meta))
+    state.authored_sources.append(AuthoredSource(kind="tap", name="tap", sha256=digest, size_bytes=count * 8, meta=meta))
     _prefer_sources_input_mode(state)
     # Reward hook: stub out where we will play a sound effect later.
     _trigger_interaction_flash(state, drop_zone=False)
@@ -3398,20 +3398,20 @@ def _action_entropy_tap(state: AppState, stdscr) -> None:
 
 
 def _action_entropy_delete_selected(state: AppState) -> None:
-    if not state.entropy_sources:
+    if not state.authored_sources:
         return
-    idx = max(0, min(int(state.entropy_selected), len(state.entropy_sources) - 1))
-    removed = state.entropy_sources.pop(idx)
-    state.entropy_selected = max(0, min(state.entropy_selected, len(state.entropy_sources) - 1))
-    if not state.entropy_sources:
+    idx = max(0, min(int(state.entropy_selected), len(state.authored_sources) - 1))
+    removed = state.authored_sources.pop(idx)
+    state.entropy_selected = max(0, min(state.entropy_selected, len(state.authored_sources) - 1))
+    if not state.authored_sources:
         state.focus = "menu"
     state.status = "Done."
     state.log_lines = [f"Removed source: [{removed.kind}] {removed.name}."]
 
 
 def _action_entropy_clear(state: AppState) -> None:
-    n = len(state.entropy_sources)
-    state.entropy_sources.clear()
+    n = len(state.authored_sources)
+    state.authored_sources.clear()
     state.entropy_selected = 0
     state.focus = "menu"
     state.stamp_config.mix_sources = False
@@ -3422,10 +3422,10 @@ def _action_entropy_clear(state: AppState) -> None:
 
 
 def _action_entropy_preview(state: AppState) -> None:
-    if not state.entropy_sources:
+    if not state.authored_sources:
         return
-    idx = max(0, min(int(state.entropy_selected), len(state.entropy_sources) - 1))
-    s = state.entropy_sources[idx]
+    idx = max(0, min(int(state.entropy_selected), len(state.authored_sources) - 1))
+    s = state.authored_sources[idx]
     lines: List[str] = []
     lines.append(f"[{s.kind}] {s.name}")
     lines.append(f"sha256: {s.sha256}")
@@ -3454,7 +3454,7 @@ def _prompt_bool(label: str, default: bool = False) -> bool:
     return raw in ("y", "yes", "true", "1")
 
 
-def _validated_photo_source_path(s: EntropySource, *, max_bytes: int = 100 * 1024 * 1024) -> Path:
+def _validated_photo_source_path(s: AuthoredSource, *, max_bytes: int = 100 * 1024 * 1024) -> Path:
     if s.path is None or not s.path.is_file():
         raise ValueError(f"photo source missing or unreadable: {s.name}")
     sha, size = _sha256_hex_path(s.path, max_bytes=max_bytes)
@@ -3463,7 +3463,7 @@ def _validated_photo_source_path(s: EntropySource, *, max_bytes: int = 100 * 102
     return s.path
 
 
-def _build_sources_payload_dir(sources: Sequence[EntropySource]) -> Path:
+def _build_sources_payload_dir(sources: Sequence[AuthoredSource]) -> Path:
     """
     Materialize staged authored sources into a real directory so they can be stamped as artifacts.
     Photos are copied; text/tap become files. The caller owns cleanup.
@@ -3526,17 +3526,17 @@ def _build_sources_payload_dir(sources: Sequence[EntropySource]) -> Path:
         raise
 
 
-def _write_entropy_sources_into_pack(pack_dir: Path, sources: Sequence[EntropySource]) -> Tuple[Optional[Path], List[str], int]:
+def _write_authored_sources_into_pack(pack_dir: Path, sources: Sequence[AuthoredSource]) -> Tuple[Optional[Path], List[str], int]:
     """
     Persist staged sources into the pack directory (outside payload/) for audit.
-    These files are excluded from entropy_pack.zip.
+    These files are excluded from authored_pack.zip.
     """
     warnings: List[str] = []
-    out = pack_dir / "entropy_sources"
+    out = pack_dir / "authored_sources"
     tmp_out: Optional[Path] = None
     try:
         out.mkdir(parents=True, exist_ok=True)
-        tmp_out = Path(tempfile.mkdtemp(prefix=".eps_entropy_sources_", dir=str(pack_dir)))
+        tmp_out = Path(tempfile.mkdtemp(prefix=".eps_authored_sources_", dir=str(pack_dir)))
         index: List[Dict[str, object]] = []
         for i, s in enumerate(sources, start=1):
             entry: Dict[str, object] = {
@@ -3586,7 +3586,7 @@ def _write_entropy_sources_into_pack(pack_dir: Path, sources: Sequence[EntropySo
             index.append(entry)
 
         if not index:
-            warnings.append("entropy_sources audit produced no materialized entries")
+            warnings.append("authored_sources audit produced no materialized entries")
             return None, warnings, 0
 
         (tmp_out / "sources.index.json").write_text(json.dumps(index, sort_keys=True, indent=2) + "\n", encoding="utf-8")
@@ -3597,13 +3597,13 @@ def _write_entropy_sources_into_pack(pack_dir: Path, sources: Sequence[EntropySo
                 else:
                     out.unlink()
             except Exception as exc:
-                warnings.append(f"could not replace existing entropy_sources audit dir: {exc}")
+                warnings.append(f"could not replace existing authored_sources audit dir: {exc}")
                 return None, warnings, 0
         tmp_out.replace(out)
         tmp_out = None
         return out, warnings, len(index)
     except Exception as exc:
-        warnings.append(f"entropy_sources audit failed: {exc}")
+        warnings.append(f"authored_sources audit failed: {exc}")
         return None, warnings, 0
     finally:
         if tmp_out is not None:
@@ -3813,7 +3813,7 @@ def _edit_stamp_advanced(state: AppState, stdscr, cfg: Optional[StampConfig] = N
     mix_sources = cfg.mix_sources
     write_sources = cfg.write_sources
     if cfg.derive_seed:
-        if state.entropy_sources:
+        if state.authored_sources:
             mix_sources_v = _prompt_bool_curses(stdscr, "(Authored Pack) use staged sources in seed", default=cfg.mix_sources)
             if mix_sources_v is None:
                 state.status = "Ready."
@@ -3884,13 +3884,13 @@ def _run_stamp_plan(
     state.log_lines = []
 
     tmp_payload_dir: Optional[Path] = None
-    sources_for_audit: Sequence[EntropySource] = []
+    sources_for_audit: Sequence[AuthoredSource] = []
     audit_status = "not_requested"
     audit_requested_count = 0
     audit_materialized_count = 0
     audit_warnings: List[str] = []
     audit_dir_path: Optional[Path] = None
-    mixed_sources: List[EntropySource] = []
+    mixed_sources: List[AuthoredSource] = []
     pool_sha = None
     seed_path_label: Optional[str] = None
 
@@ -3899,7 +3899,7 @@ def _run_stamp_plan(
         exclude_relpaths: Optional[Set[str]] = None
         input_choice = _normalize_single_path_input(input_s.strip(), allow_sources=True)
         if input_choice == "@sources":
-            if not state.entropy_sources:
+            if not state.authored_sources:
                 state.status = "Failed."
                 state.log_lines = ["@sources selected, but no authored sources are staged.", "Go to Sources and add or import some first."]
                 try:
@@ -3908,7 +3908,7 @@ def _run_stamp_plan(
                     state.selected = 0
                 state.focus = "menu"
                 return
-            input_dir = _build_sources_payload_dir(state.entropy_sources)
+            input_dir = _build_sources_payload_dir(state.authored_sources)
             tmp_payload_dir = input_dir
             state.stamp_config.input_mode = "sources"
             state.stamp_config.input_path = ""
@@ -3930,8 +3930,8 @@ def _run_stamp_plan(
         notes = notes_s.strip() or None
         created_at = created_at_s.strip() or None
 
-        if derive_seed and state.entropy_sources and mix_sources:
-            mixed_sources = _lockdown_eligible_sources(state.entropy_sources)
+        if derive_seed and state.authored_sources and mix_sources:
+            mixed_sources = _lockdown_eligible_sources(state.authored_sources)
             if len(mixed_sources) < int(state.entropy_min_sources):
                 need_more = int(state.entropy_min_sources) - len(mixed_sources)
                 state.status = "Failed."
@@ -3964,7 +3964,7 @@ def _run_stamp_plan(
         elif derive_seed:
             seed_path_label = "root-only seed"
 
-        sources_for_audit = mixed_sources if mix_sources else state.entropy_sources
+        sources_for_audit = mixed_sources if mix_sources else state.authored_sources
 
         def _before_finalize(pack_dir: Path) -> Optional[Dict[str, object]]:
             nonlocal audit_status, audit_requested_count, audit_materialized_count, audit_warnings, audit_dir_path
@@ -3974,7 +3974,7 @@ def _run_stamp_plan(
             audit_warnings = []
             audit_dir_path = None
             if write_sources and derive_seed and sources_for_audit:
-                p, warnings, materialized_count = _write_entropy_sources_into_pack(pack_dir, sources_for_audit)
+                p, warnings, materialized_count = _write_authored_sources_into_pack(pack_dir, sources_for_audit)
                 audit_requested_count = len(sources_for_audit)
                 audit_materialized_count = int(materialized_count)
                 audit_warnings = list(warnings)
@@ -4006,7 +4006,7 @@ def _run_stamp_plan(
                 exclude_relpaths=sorted(exclude_relpaths) if exclude_relpaths else None,
                 zip_pack=zip_pack,
                 derive_seed=derive_seed,
-                entropy_sources_sha256=pool_sha if mix_sources else None,
+                authored_sources_sha256=pool_sha if mix_sources else None,
                 evidence_bundle=evidence_bundle,
                 write_seed_files=write_seed,
                 print_seed=False,
@@ -4055,10 +4055,10 @@ def _run_stamp_plan(
         state.log_lines.append(f"derived_seed_fingerprint_sha256: {fp}")
     if seed_path_label:
         state.log_lines.append(f"Seed path: {seed_path_label}")
-        if seed_path_label == "root-only seed" and state.entropy_sources:
+        if seed_path_label == "root-only seed" and state.authored_sources:
             state.log_lines.append("Warning: staged authored sources do not affect the root-only seed.")
     if mix_sources and pool_sha:
-        state.log_lines.append(f"authored_sources_staged_count: {len(state.entropy_sources)}")
+        state.log_lines.append(f"authored_sources_staged_count: {len(state.authored_sources)}")
         state.log_lines.append(f"authored_sources_eligible_count: {len(mixed_sources)}")
         state.log_lines.append(f"authored_sources_sha256: {pool_sha}")
     for w in audit_warnings:
@@ -4155,7 +4155,7 @@ def _action_stamp(state: AppState, stdscr) -> None:
             state.status = "Ready."
             state.log_lines = ["Stamp cancelled."]
             return
-    zip_pack = _prompt_bool_curses(stdscr, "(Authored Pack) write entropy_pack.zip", default=cfg.zip_pack)
+    zip_pack = _prompt_bool_curses(stdscr, "(Authored Pack) write authored_pack.zip", default=cfg.zip_pack)
     if zip_pack is None:
         state.status = "Ready."
         state.log_lines = ["Stamp cancelled."]
@@ -4166,7 +4166,7 @@ def _action_stamp(state: AppState, stdscr) -> None:
         state.log_lines = ["Stamp cancelled."]
         return
     mix_sources = False
-    if derive_seed and state.entropy_sources:
+    if derive_seed and state.authored_sources:
         mix_sources = _prompt_bool_curses(stdscr, "(Authored Pack) use staged sources in seed", default=cfg.mix_sources)
         if mix_sources is None:
             state.status = "Ready."
@@ -4297,7 +4297,7 @@ def _run_verify_plan(state: AppState, stdscr, *, pack_s: str, allow_large_manife
         state.log_lines = ["Verify failed."] + [f"- {e}" for e in res.errors]
         if any("missing manifest.json" in e for e in res.errors):
             state.log_lines.append("")
-            state.log_lines.append("Hint: verify expects a stamped pack dir (out/<root_sha256>/) or entropy_pack.zip.")
+            state.log_lines.append("Hint: verify expects a stamped pack dir (out/<root_sha256>/) or authored_pack.zip.")
         if any("manifest.json" in e and "file too large" in e for e in res.errors):
             state.log_lines.append("")
             state.log_lines.append("Hint: manifest.json is a file-list; very large packs need a larger cap (enable 'allow large manifest').")
@@ -4415,7 +4415,7 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
 
     if ch in (9, getattr(curses, "KEY_BTAB", -999)):
         if label == "Sources":
-            if state.focus == "menu" and state.entropy_sources:
+            if state.focus == "menu" and state.authored_sources:
                 state.focus = "entropy"
             else:
                 state.focus = "menu"
@@ -4449,12 +4449,12 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
             return True
 
     if label == "Sources":
-        if ch in (curses.KEY_UP, ord("k")) and state.focus == "entropy" and state.entropy_sources:
+        if ch in (curses.KEY_UP, ord("k")) and state.focus == "entropy" and state.authored_sources:
             state.entropy_selected = max(0, state.entropy_selected - 1)
             state.status = "Ready."
             return True
-        if ch in (curses.KEY_DOWN, ord("j")) and state.focus == "entropy" and state.entropy_sources:
-            state.entropy_selected = min(max(0, len(state.entropy_sources) - 1), state.entropy_selected + 1)
+        if ch in (curses.KEY_DOWN, ord("j")) and state.focus == "entropy" and state.authored_sources:
+            state.entropy_selected = min(max(0, len(state.authored_sources) - 1), state.entropy_selected + 1)
             state.status = "Ready."
             return True
         if ch in (ord("a"), ord("A")):
@@ -4475,13 +4475,13 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
         if ch in (ord("c"), ord("C")):
             _action_entropy_clear(state)
             return True
-        if ch in (curses.KEY_ENTER, 10, 13) and state.focus == "entropy" and state.entropy_sources:
+        if ch in (curses.KEY_ENTER, 10, 13) and state.focus == "entropy" and state.authored_sources:
             if state.insane:
                 _start_ui_select_sfx_best_effort()
             _action_entropy_preview(state)
             return True
         if ch in (curses.KEY_ENTER, 10, 13) and state.focus == "menu":
-            if state.entropy_sources:
+            if state.authored_sources:
                 state.focus = "entropy"
                 state.status = "Ready."
             else:
@@ -4670,7 +4670,7 @@ def run_tui(stdscr, *, insane: bool = False, godel_source: Optional[str] = None)
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     p = argparse.ArgumentParser(
-        prog="eps-tui",
+        prog="authored-pack-tui",
         description="Calm-first TUI for Authored Pack. Default is Calm Mode; Noisy Mode keeps the ceremony cues without changing pack semantics.",
     )
     p.add_argument("--mode", choices=("calm", "noisy"), default="calm", help="Start in calm or noisy mode (default: calm)")
@@ -4687,10 +4687,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # The curses TUI must run in a real terminal/pty. When launched from an IDE
     # or a non-interactive environment, curses will crash with setupterm errors.
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
-        print("eps-tui: error: no TTY detected (curses requires an interactive terminal).", file=sys.stderr)
+        print("authored-pack-tui: error: no TTY detected (curses requires an interactive terminal).", file=sys.stderr)
         print(
             "hint: run from a real terminal, or use the headless CLI: "
-            "`python3 -m eps stamp --input <dir> --out ./out`",
+            "`python3 -m authored_pack stamp --input <dir> --out ./out`",
             file=sys.stderr,
         )
         return 2
@@ -4700,7 +4700,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     except curses.error as exc:
         # Keep failure mode readable (no traceback) for common terminal issues.
         msg = str(exc).strip() or exc.__class__.__name__
-        print(f"eps-tui: error: {msg}", file=sys.stderr)
+        print(f"authored-pack-tui: error: {msg}", file=sys.stderr)
         if "setupterm" in msg:
             print("hint: ensure `TERM` is set (e.g. xterm-256color) and run inside a real terminal.", file=sys.stderr)
         return 2
