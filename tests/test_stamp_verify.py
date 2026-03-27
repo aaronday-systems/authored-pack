@@ -13,6 +13,17 @@ from authored_pack.manifest import manifest_root_sha256, stable_dumps
 from authored_pack.pack import stamp_pack, verify_pack
 
 
+def _write_current_pack_zip(pack_dir: Path, zip_path: Path) -> None:
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for src in sorted(pack_dir.rglob("*")):
+            if src.is_dir():
+                continue
+            rel = src.relative_to(pack_dir).as_posix()
+            if rel.endswith(".sha256") or rel.endswith(".zip") or rel.startswith("authored_evidence_") or rel.startswith("authored_sources/"):
+                continue
+            zf.write(src, arcname=rel)
+
+
 class TestStampVerify(unittest.TestCase):
     def test_stamp_and_verify_dir_and_zip(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -199,7 +210,68 @@ class TestStampVerify(unittest.TestCase):
             zip_result = verify_pack(zip_path)
             self.assertTrue(zip_result.ok, msg=f"errors: {zip_result.errors}")
 
-    def test_verify_rejects_v2_receipt_mismatch_in_dir_and_zip(self) -> None:
+    def test_verify_rejects_entropy_pack_v2_dir_and_zip_as_unsupported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            pack_dir = tmp_path / "v2_pack"
+            payload_dir = pack_dir / "payload"
+            payload_dir.mkdir(parents=True)
+            data = b"hello"
+            (payload_dir / "a.txt").write_bytes(data)
+            manifest = {
+                "schema_version": "entropy.pack.v2",
+                "artifacts": [
+                    {
+                        "path": "payload/a.txt",
+                        "sha256": hashlib.sha256(data).hexdigest(),
+                        "size_bytes": len(data),
+                    }
+                ],
+            }
+            root = manifest_root_sha256(manifest)
+            (pack_dir / "manifest.json").write_text(stable_dumps(manifest), encoding="utf-8")
+            (pack_dir / "pack_root_sha256.txt").write_text(("0" * 64) + "\n", encoding="utf-8")
+            (pack_dir / "receipt.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "eps.receipt.v2",
+                        "manifest_schema_version": "entropy.pack.v2",
+                        "pack_root_sha256": root,
+                    },
+                    sort_keys=True,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            dir_result = verify_pack(pack_dir)
+            self.assertFalse(dir_result.ok)
+            self.assertEqual(dir_result.errors, ["manifest schema_version unsupported"])
+
+            zip_path = tmp_path / "v2_pack.zip"
+            with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr("manifest.json", stable_dumps(manifest))
+                zf.writestr("pack_root_sha256.txt", ("0" * 64) + "\n")
+                zf.writestr(
+                    "receipt.json",
+                    json.dumps(
+                        {
+                            "schema_version": "eps.receipt.v2",
+                            "manifest_schema_version": "entropy.pack.v2",
+                            "pack_root_sha256": root,
+                        },
+                        sort_keys=True,
+                        indent=2,
+                    )
+                    + "\n",
+                )
+                zf.writestr("payload/a.txt", data)
+            zip_result = verify_pack(zip_path)
+            self.assertFalse(zip_result.ok)
+            self.assertEqual(zip_result.errors, ["manifest schema_version unsupported"])
+
+    def test_verify_rejects_current_receipt_with_legacy_root_field_in_dir_and_zip(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             input_dir = tmp_path / "input"
@@ -221,20 +293,16 @@ class TestStampVerify(unittest.TestCase):
 
             dir_result = verify_pack(res.pack_dir)
             self.assertFalse(dir_result.ok, msg=f"errors: {dir_result.errors}")
-            self.assertTrue(any("receipt.json entropy_root_sha256 mismatch" in e for e in dir_result.errors))
+            self.assertTrue(any("receipt.json entropy_root_sha256 not allowed" in e for e in dir_result.errors))
 
             zip_path = tmp_path / "bad_receipt.zip"
-            with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-                zf.writestr("manifest.json", (res.pack_dir / "manifest.json").read_text(encoding="utf-8"))
-                zf.writestr("pack_root_sha256.txt", (res.pack_dir / "pack_root_sha256.txt").read_text(encoding="utf-8"))
-                zf.writestr("receipt.json", receipt_path.read_text(encoding="utf-8"))
-                zf.writestr("payload/a.txt", (res.pack_dir / "payload" / "a.txt").read_bytes())
+            _write_current_pack_zip(res.pack_dir, zip_path)
 
             zip_result = verify_pack(zip_path)
             self.assertFalse(zip_result.ok, msg=f"errors: {zip_result.errors}")
-            self.assertTrue(any("receipt.json entropy_root_sha256 mismatch" in e for e in zip_result.errors))
+            self.assertTrue(any("receipt.json entropy_root_sha256 not allowed" in e for e in zip_result.errors))
 
-    def test_v2_public_zip_contains_final_receipt_and_excludes_private_artifacts(self) -> None:
+    def test_public_zip_contains_final_receipt_and_excludes_private_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             input_dir = tmp_path / "input"
@@ -269,7 +337,7 @@ class TestStampVerify(unittest.TestCase):
                 self.assertNotIn("entropy_root_sha256", zipped_receipt)
                 self.assertNotIn("seed_fingerprint_sha256", zipped_receipt)
 
-    def test_v2_evidence_bundle_receipt_matches_final_pack_receipt(self) -> None:
+    def test_evidence_bundle_receipt_matches_final_pack_receipt(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             input_dir = tmp_path / "input"
@@ -559,9 +627,11 @@ class TestStampVerify(unittest.TestCase):
 
             self.assertFalse(dir_result.ok, msg=f"errors: {dir_result.errors}")
             self.assertFalse(zip_result.ok, msg=f"errors: {zip_result.errors}")
-            self.assertEqual(zip_result.errors, dir_result.errors)
+            self.assertEqual(dir_result.errors[1:], zip_result.errors[1:])
+            self.assertEqual(dir_result.errors[0], "missing entropy_root_sha256.txt")
+            self.assertEqual(zip_result.errors[0], "missing entropy_root_sha256.txt in zip")
 
-    def test_verify_v2_requires_matching_receipt(self) -> None:
+    def test_verify_rejects_current_pack_with_legacy_root_alias_file_in_dir_and_zip(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             input_dir = tmp_path / "input"
@@ -575,27 +645,54 @@ class TestStampVerify(unittest.TestCase):
                 zip_pack=True,
                 derive_seed=True,
             )
-            receipt_path = res.pack_dir / "receipt.json"
-            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-            receipt["entropy_root_sha256"] = "0" * 64
-            receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            (res.pack_dir / "entropy_root_sha256.txt").write_text(res.root_sha256 + "\n", encoding="utf-8")
 
             dir_result = verify_pack(res.pack_dir)
             self.assertFalse(dir_result.ok)
-            self.assertTrue(any("receipt.json entropy_root_sha256 mismatch" in e for e in dir_result.errors))
+            self.assertTrue(any("unexpected entropy_root_sha256.txt" in e for e in dir_result.errors))
 
-            zip_path = res.pack_dir / "authored_pack.zip"
-            with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-                for src in sorted(res.pack_dir.rglob("*")):
-                    if src.is_dir():
-                        continue
-                    rel = src.relative_to(res.pack_dir).as_posix()
-                    if rel.endswith(".sha256") or rel.startswith("authored_evidence_") or rel.startswith("authored_sources/"):
-                        continue
-                    zf.write(src, arcname=rel)
+            zip_path = tmp_path / "legacy_root_alias.zip"
+            _write_current_pack_zip(res.pack_dir, zip_path)
             zip_result = verify_pack(zip_path)
             self.assertFalse(zip_result.ok)
-            self.assertTrue(any("receipt.json entropy_root_sha256 mismatch" in e for e in zip_result.errors))
+            self.assertTrue(any("unexpected entropy_root_sha256.txt" in e for e in zip_result.errors))
+
+    def test_verify_rejects_current_receipt_with_other_legacy_fields_in_dir_and_zip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            cases = {
+                "seed_fingerprint_sha256": ("0" * 64, "receipt.json seed_fingerprint_sha256 not allowed"),
+                "entropy_schema_version": ("entropy.pack.v1", "receipt.json entropy_schema_version not allowed"),
+            }
+
+            for field, (value, expected_error) in cases.items():
+                with self.subTest(field=field):
+                    case_out_dir = tmp_path / f"out_{field}"
+                    res = stamp_pack(
+                        input_dir=input_dir,
+                        out_dir=case_out_dir,
+                        zip_pack=True,
+                        derive_seed=True,
+                    )
+                    receipt_path = res.pack_dir / "receipt.json"
+                    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+                    receipt[field] = value
+                    receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+                    dir_result = verify_pack(res.pack_dir)
+                    self.assertFalse(dir_result.ok)
+                    self.assertTrue(any(expected_error in e for e in dir_result.errors), msg=f"errors: {dir_result.errors}")
+
+                    zip_path = tmp_path / f"{field}.zip"
+                    _write_current_pack_zip(res.pack_dir, zip_path)
+                    zip_result = verify_pack(zip_path)
+                    self.assertFalse(zip_result.ok)
+                    self.assertTrue(any(expected_error in e for e in zip_result.errors), msg=f"errors: {zip_result.errors}")
 
 
 if __name__ == "__main__":

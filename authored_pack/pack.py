@@ -30,13 +30,10 @@ from .safeio import trusted_binary_reader, trusted_sha256_hex
 
 
 RECEIPT_SCHEMA_VERSION = "authored.receipt.v1"
-LEGACY_RECEIPT_SCHEMA_VERSION = "eps.receipt.v2"
 PACK_LAYOUT_VERSION = "authored.pack_layout.v1"
 LEGACY_MANIFEST_SCHEMA_VERSION = "entropy.pack.v1"
-PREVIOUS_MANIFEST_SCHEMA_VERSION = "entropy.pack.v2"
 SUPPORTED_MANIFEST_SCHEMA_VERSIONS = {
     LEGACY_MANIFEST_SCHEMA_VERSION,
-    PREVIOUS_MANIFEST_SCHEMA_VERSION,
     MANIFEST_SCHEMA_VERSION,
 }
 
@@ -178,13 +175,6 @@ def _output_would_self_ingest_input(input_dir: Path, out_dir: Path) -> bool:
 
 def _write_root_alias_files(pack_dir: Path, root_sha: str) -> None:
     _safe_write_text(pack_dir / PACK_ROOT_ALIAS_FILENAME, root_sha + "\n")
-
-
-def _root_alias_names_for_schema(schema_version: object) -> Tuple[str, ...]:
-    if schema_version == MANIFEST_SCHEMA_VERSION:
-        return (PACK_ROOT_ALIAS_FILENAME, LEGACY_ROOT_ALIAS_FILENAME)
-    return (LEGACY_ROOT_ALIAS_FILENAME,)
-
 
 def _evidence_bundle_path_for_root(pack_dir: Path, root_sha: str) -> Path:
     return pack_dir / f"authored_evidence_{root_sha}.zip"
@@ -630,7 +620,75 @@ def _build_derivation_metadata(
     return derivation
 
 
-def _validate_receipt_v2(
+def _read_root_alias_file(path: Path, *, name: str, root_sha: str) -> List[str]:
+    errors: List[str] = []
+    if path.is_symlink():
+        return [f"{name} is a symlink"]
+    if not path.is_file():
+        return [f"{name} is not a file"]
+    try:
+        raw_expected = _read_file_bytes_limited(path, max_bytes=256)
+        expected = raw_expected.decode("utf-8").strip()
+    except Exception:
+        expected = ""
+    if expected and expected != root_sha:
+        errors.append(f"{name} does not match manifest root")
+    return errors
+
+
+def _validate_current_root_alias_in_dir(pack_dir: Path, *, root_sha: str) -> List[str]:
+    errors: List[str] = []
+    legacy_path = pack_dir / LEGACY_ROOT_ALIAS_FILENAME
+    if legacy_path.exists():
+        errors.append(f"unexpected {LEGACY_ROOT_ALIAS_FILENAME} in {MANIFEST_SCHEMA_VERSION} pack")
+    current_path = pack_dir / PACK_ROOT_ALIAS_FILENAME
+    if not current_path.exists():
+        errors.append(f"missing {PACK_ROOT_ALIAS_FILENAME}")
+        return errors
+    errors.extend(_read_root_alias_file(current_path, name=PACK_ROOT_ALIAS_FILENAME, root_sha=root_sha))
+    return errors
+
+
+def _validate_legacy_root_alias_in_dir(pack_dir: Path, *, root_sha: str) -> List[str]:
+    legacy_path = pack_dir / LEGACY_ROOT_ALIAS_FILENAME
+    if not legacy_path.exists():
+        return [f"missing {LEGACY_ROOT_ALIAS_FILENAME}"]
+    return _read_root_alias_file(legacy_path, name=LEGACY_ROOT_ALIAS_FILENAME, root_sha=root_sha)
+
+
+def _read_root_alias_zip_member(zf: zipfile.ZipFile, *, name: str, root_sha: str) -> List[str]:
+    errors: List[str] = []
+    try:
+        raw_expected = _read_zip_member_bytes_limited(zf, name, max_bytes=256)
+    except KeyError:
+        return [f"missing {name} in zip"]
+    expected = raw_expected.decode("utf-8").strip()
+    if expected and expected != root_sha:
+        errors.append(f"{name} does not match manifest root")
+    return errors
+
+
+def _zip_has_member(zf: zipfile.ZipFile, name: str) -> bool:
+    try:
+        zf.getinfo(name)
+    except KeyError:
+        return False
+    return True
+
+
+def _validate_current_root_alias_in_zip(zf: zipfile.ZipFile, *, root_sha: str) -> List[str]:
+    errors: List[str] = []
+    if _zip_has_member(zf, LEGACY_ROOT_ALIAS_FILENAME):
+        errors.append(f"unexpected {LEGACY_ROOT_ALIAS_FILENAME} in {MANIFEST_SCHEMA_VERSION} zip")
+    errors.extend(_read_root_alias_zip_member(zf, name=PACK_ROOT_ALIAS_FILENAME, root_sha=root_sha))
+    return errors
+
+
+def _validate_legacy_root_alias_in_zip(zf: zipfile.ZipFile, *, root_sha: str) -> List[str]:
+    return _read_root_alias_zip_member(zf, name=LEGACY_ROOT_ALIAS_FILENAME, root_sha=root_sha)
+
+
+def _validate_current_receipt(
     receipt: object,
     *,
     manifest: Dict[str, object],
@@ -640,23 +698,23 @@ def _validate_receipt_v2(
     errors: List[str] = []
     if not isinstance(receipt, dict):
         return ["receipt.json must be an object"]
-    if receipt.get("schema_version") not in {RECEIPT_SCHEMA_VERSION, LEGACY_RECEIPT_SCHEMA_VERSION}:
+    if receipt.get("schema_version") != RECEIPT_SCHEMA_VERSION:
         errors.append("receipt.json schema_version invalid")
-    manifest_schema = receipt.get("manifest_schema_version")
-    if manifest_schema is None:
-        manifest_schema = receipt.get("entropy_schema_version")
-    if manifest_schema != manifest.get("schema_version"):
+    if receipt.get("manifest_schema_version") != manifest.get("schema_version"):
         errors.append("receipt.json manifest_schema_version mismatch")
+    if receipt.get("pack_layout") != PACK_LAYOUT_VERSION:
+        errors.append("receipt.json pack_layout mismatch")
+    if receipt.get("entropy_schema_version") is not None:
+        errors.append("receipt.json entropy_schema_version not allowed")
+    if receipt.get("entropy_root_sha256") is not None:
+        errors.append("receipt.json entropy_root_sha256 not allowed")
+    if receipt.get("seed_fingerprint_sha256") is not None:
+        errors.append("receipt.json seed_fingerprint_sha256 not allowed")
     pack_root = receipt.get("pack_root_sha256")
-    legacy_root = receipt.get("entropy_root_sha256")
-    if pack_root is None and legacy_root is None:
-        errors.append("receipt.json missing pack root")
-    if pack_root is not None and pack_root != root_sha:
+    if pack_root is None:
+        errors.append("receipt.json missing pack_root_sha256")
+    elif pack_root != root_sha:
         errors.append("receipt.json pack_root_sha256 mismatch")
-    if legacy_root is not None and legacy_root != root_sha:
-        errors.append("receipt.json entropy_root_sha256 mismatch")
-    if pack_root is not None and legacy_root is not None and pack_root != legacy_root:
-        errors.append("receipt.json pack root aliases disagree")
     payload_root = manifest.get("payload_root_sha256")
     if payload_root is not None and receipt.get("payload_root_sha256") != payload_root:
         errors.append("receipt.json payload_root_sha256 mismatch")
@@ -671,22 +729,14 @@ def _validate_receipt_v2(
     if manifest_derivation is None:
         if receipt_derivation is not None:
             errors.append("receipt.json derivation present without manifest derivation")
-        if receipt.get("seed_fingerprint_sha256") is not None or receipt.get("derived_seed_fingerprint_sha256") is not None:
-            errors.append("receipt.json seed fingerprint present without manifest derivation")
+        if receipt.get("derived_seed_fingerprint_sha256") is not None:
+            errors.append("receipt.json derived_seed_fingerprint_sha256 present without manifest derivation")
     else:
         if receipt_derivation != manifest_derivation:
             errors.append("receipt.json derivation mismatch")
-        fingerprints = []
-        for key in ("derived_seed_fingerprint_sha256", "seed_fingerprint_sha256"):
-            value = receipt.get(key)
-            if value is None:
-                continue
-            if not _is_sha256_hex(value):
-                errors.append(f"receipt.json {key} invalid")
-                continue
-            fingerprints.append(str(value))
-        if len(set(fingerprints)) > 1:
-            errors.append("receipt.json seed fingerprint aliases disagree")
+        value = receipt.get("derived_seed_fingerprint_sha256")
+        if value is not None and not _is_sha256_hex(value):
+            errors.append("receipt.json derived_seed_fingerprint_sha256 invalid")
     return errors
 
 
@@ -1075,33 +1125,11 @@ def verify_pack(
         if schema_version not in SUPPORTED_MANIFEST_SCHEMA_VERSIONS:
             return VerificationResult(ok=False, root_sha256="", file_count=0, total_bytes=0, errors=["manifest schema_version unsupported"])
         root_sha = manifest_root_sha256(manifest)
-        require_receipt = schema_version == MANIFEST_SCHEMA_VERSION
         payload_root, payload_errors = _validate_manifest_payload_root(manifest)
         errors.extend(payload_errors)
 
-        seen_root_alias = False
-        for name in _root_alias_names_for_schema(schema_version):
-            expected_path = pack_path / name
-            if not expected_path.exists():
-                continue
-            seen_root_alias = True
-            if expected_path.is_symlink():
-                errors.append(f"{name} is a symlink")
-                continue
-            if not expected_path.is_file():
-                errors.append(f"{name} is not a file")
-                continue
-            try:
-                raw_expected = _read_file_bytes_limited(expected_path, max_bytes=256)
-                expected = raw_expected.decode("utf-8").strip()
-            except Exception:
-                expected = ""
-            if expected and expected != root_sha:
-                errors.append(f"{name} does not match manifest root")
-        if require_receipt and not seen_root_alias:
-            errors.append(f"missing {PACK_ROOT_ALIAS_FILENAME} or {LEGACY_ROOT_ALIAS_FILENAME}")
-
-        if require_receipt:
+        if schema_version == MANIFEST_SCHEMA_VERSION:
+            errors.extend(_validate_current_root_alias_in_dir(pack_path, root_sha=root_sha))
             receipt_path = pack_path / "receipt.json"
             if not receipt_path.is_file():
                 errors.append("missing receipt.json")
@@ -1110,7 +1138,7 @@ def verify_pack(
                     raw_receipt = _read_file_bytes_limited(receipt_path, max_bytes=max_manifest_bytes)
                     receipt = json.loads(raw_receipt.decode("utf-8"))
                     errors.extend(
-                        _validate_receipt_v2(
+                        _validate_current_receipt(
                             receipt,
                             manifest=manifest,
                             root_sha=root_sha,
@@ -1119,6 +1147,8 @@ def verify_pack(
                     )
                 except Exception as exc:
                     errors.append(f"invalid receipt.json: {exc}")
+        else:
+            errors.extend(_validate_legacy_root_alias_in_dir(pack_path, root_sha=root_sha))
 
         artifacts = manifest.get("artifacts")
         file_count, total_bytes, expected_payload_relpaths, artifact_errors = _verify_manifest_artifacts(
@@ -1170,28 +1200,15 @@ def verify_pack(
                     return VerificationResult(ok=False, root_sha256="", file_count=0, total_bytes=0, errors=["manifest schema_version unsupported"])
 
                 root_sha = manifest_root_sha256(manifest)
-                require_receipt = schema_version == MANIFEST_SCHEMA_VERSION
                 payload_root, payload_errors = _validate_manifest_payload_root(manifest)
                 errors.extend(payload_errors)
-                seen_root_alias = False
-                for name in _root_alias_names_for_schema(schema_version):
-                    try:
-                        raw_expected = _read_zip_member_bytes_limited(zf, name, max_bytes=256)
-                    except KeyError:
-                        continue
-                    seen_root_alias = True
-                    expected = raw_expected.decode("utf-8").strip()
-                    if expected and expected != root_sha:
-                        errors.append(f"{name} does not match manifest root")
-                if require_receipt and not seen_root_alias:
-                    errors.append(f"missing {PACK_ROOT_ALIAS_FILENAME} or {LEGACY_ROOT_ALIAS_FILENAME} in zip")
-
-                if require_receipt:
+                if schema_version == MANIFEST_SCHEMA_VERSION:
+                    errors.extend(_validate_current_root_alias_in_zip(zf, root_sha=root_sha))
                     try:
                         raw_receipt = _read_zip_member_bytes_limited(zf, "receipt.json", max_bytes=max_manifest_bytes)
                         receipt = json.loads(raw_receipt.decode("utf-8"))
                         errors.extend(
-                            _validate_receipt_v2(
+                            _validate_current_receipt(
                                 receipt,
                                 manifest=manifest,
                                 root_sha=root_sha,
@@ -1202,6 +1219,8 @@ def verify_pack(
                         errors.append("missing receipt.json in zip")
                     except Exception as exc:
                         errors.append(f"invalid receipt.json in zip: {exc}")
+                else:
+                    errors.extend(_validate_legacy_root_alias_in_zip(zf, root_sha=root_sha))
 
                 artifacts = manifest.get("artifacts")
                 file_count, total_bytes, expected_payload_relpaths, artifact_errors = _verify_manifest_artifacts(

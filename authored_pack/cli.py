@@ -166,7 +166,7 @@ def _stamp(args: argparse.Namespace) -> int:
         if res.zip_path is not None:
             print(f"zip_path: {res.zip_path}")
         if args.derive_seed:
-            fp = res.receipt.get("derived_seed_fingerprint_sha256") or res.receipt.get("seed_fingerprint_sha256")
+            fp = res.receipt.get("derived_seed_fingerprint_sha256")
             if isinstance(fp, str) and fp:
                 print(f"derived_seed_fingerprint_sha256: {fp}")
         if res.evidence_bundle_path is not None:
@@ -332,7 +332,7 @@ def _stamp_bin(args: argparse.Namespace) -> int:
     print(f"pack_dir: {res.stamp.pack_dir}")
     print(f"pack_root_sha256: {res.stamp.pack_root_sha256}")
     print(f"payload_root_sha256: {res.stamp.payload_root_sha256}")
-    fp = res.stamp.receipt.get("derived_seed_fingerprint_sha256") or res.stamp.receipt.get("seed_fingerprint_sha256")
+    fp = res.stamp.receipt.get("derived_seed_fingerprint_sha256")
     if isinstance(fp, str) and fp:
         print(f"derived_seed_fingerprint_sha256: {fp}")
     if res.stamp.evidence_bundle_sha256:

@@ -40,7 +40,7 @@ Primary public identities:
 - `payload_root_sha256`
 
 Backward compatibility:
-- verification still accepts older packs and receipts that carry `entropy_root_sha256`
+- verification still accepts legacy `entropy.pack.v1` packs that carry `entropy_root_sha256.txt`
 - new v1.0.0 packs emit only the primary root and derived-seed names
 
 Stable public artifacts in V1:
