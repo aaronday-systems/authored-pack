@@ -107,6 +107,16 @@ class TestTuiAuditQuickWins(unittest.TestCase):
 
         self.assertIsNone(result)
 
+    def test_prompt_str_curses_shortens_folder_defaults_on_narrow_terminals(self) -> None:
+        m = self.m
+        stdscr = RecordingStdScr(inputs=[10])
+        long_default = "/Users/aaronday/Desktop/Screenshot 2026-03-26 at 17.04.28.png"
+
+        m._prompt_str_curses(stdscr, "(Authored Pack) choose output folder", default=long_default)
+
+        joined = "\n".join(call[2] for call in stdscr.calls)
+        self.assertIn("...", joined)
+
     def test_normalize_single_path_input_unescapes_finder_dropped_spaces(self) -> None:
         m = self.m
         with tempfile.TemporaryDirectory() as tmp:

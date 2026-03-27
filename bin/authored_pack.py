@@ -3162,12 +3162,14 @@ def _prompt_str_curses(stdscr, label: str, *, default: str = "", max_len: int = 
     rows, cols = stdscr.getmaxyx()
     lower_label = str(label).lower()
     show_default = str(default)
-    if default and any(tok in lower_label for tok in ("path", "dir", "file", "@sources")):
-        show_default = _display_path(default, max_len=max(20, cols // 2))
+    is_path_like = any(tok in lower_label for tok in ("path", "dir", "folder", "file", "@sources"))
+    if default and is_path_like:
+        max_default = max(12, min(32, max(12, cols // 3)))
+        show_default = _display_path(default, max_len=max_default)
     title = str(label).replace("(Authored Pack) ", "").strip()
     prompt = f"Value [{show_default}]: " if default else "Value: "
     effective_max_len = int(max_len)
-    if effective_max_len <= 512 and any(tok in lower_label for tok in ("path", "dir", "file")):
+    if effective_max_len <= 512 and is_path_like:
         effective_max_len = 4096
     title_y = max(0, rows - 3)
     hint_y = max(0, rows - 2)
