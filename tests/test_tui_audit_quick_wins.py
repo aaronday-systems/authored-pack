@@ -98,6 +98,7 @@ class TestTuiAuditQuickWins(unittest.TestCase):
         self.assertEqual(result, "out")
         self.assertIn("Editing choose output folder", joined)
         self.assertIn("Type a value. Enter saves. Esc cancels.", joined)
+        self.assertIn("Single q also cancels path prompts.", joined)
 
     def test_prompt_str_curses_treats_single_q_as_cancel_for_path_prompts(self) -> None:
         m = self.m
@@ -116,6 +117,14 @@ class TestTuiAuditQuickWins(unittest.TestCase):
 
         joined = "\n".join(call[2] for call in stdscr.calls)
         self.assertIn("...", joined)
+
+    def test_display_path_keeps_home_relative_context_for_absolute_paths(self) -> None:
+        m = self.m
+        home_child = Path.home() / "Desktop" / "Authored Pack" / "out"
+
+        shown = m._display_path(home_child, max_len=120)
+
+        self.assertEqual(shown, "~/Desktop/Authored Pack/out")
 
     def test_normalize_single_path_input_unescapes_finder_dropped_spaces(self) -> None:
         m = self.m
@@ -358,6 +367,16 @@ class TestTuiAuditQuickWins(unittest.TestCase):
 
         self.assertFalse(state.stamp_config.mix_sources)
         self.assertFalse(state.stamp_panel_draft.mix_sources if state.stamp_panel_draft is not None else True)
+
+    def test_source_preview_uses_authored_source_title(self) -> None:
+        m = self.m
+        state = self._state()
+        state.authored_sources.append(SimpleNamespace(kind="text", name="note", sha256="a" * 64, size_bytes=1, meta={}, text="hello"))
+
+        m._action_entropy_preview(state)
+
+        self.assertIsNotNone(state.viewer)
+        self.assertEqual(state.viewer.title if state.viewer is not None else None, "Authored Source: text")
 
     def test_run_stamp_and_verify_from_config_round_trips_real_pack(self) -> None:
         m = self.m

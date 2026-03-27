@@ -656,13 +656,17 @@ def _display_path(path: Path | str | None, *, max_len: int = 40) -> str:
     try:
         p = Path(path)
         cwd = Path.cwd().resolve()
+        home = Path.home().resolve()
         pp = p.expanduser()
         if pp.is_absolute():
             try:
                 raw = pp.relative_to(cwd).as_posix()
                 raw = f"./{raw}" if raw else "."
             except Exception:
-                raw = pp.name or str(pp)
+                try:
+                    raw = f"~/{pp.relative_to(home).as_posix()}"
+                except Exception:
+                    raw = pp.as_posix()
         else:
             raw = pp.as_posix()
     except Exception:
@@ -1307,8 +1311,8 @@ def _dropzone_preview(state: AppState, *, width: int, height: int) -> List[str]:
     lines.append("")
     lines.append("Auto-import rules:")
     lines.append("- Dropped directory: sets default Stamp input dir")
-    lines.append("- Dropped image file: added as Entropy Source (photo)")
-    lines.append("- Dropped .txt/.md: added as Entropy Source (text)")
+    lines.append("- Dropped image file: added as Authored Source (photo)")
+    lines.append("- Dropped .txt/.md: added as Authored Source (text)")
     lines.append("")
     if state.last_input_dir is not None:
         lines.append(f"Current input dir: {_display_path(state.last_input_dir, max_len=max(24, width - 20))}")
@@ -3202,6 +3206,8 @@ def _prompt_str_curses(stdscr, label: str, *, default: str = "", max_len: int = 
                 stdscr.clrtoeol()
             safe_addstr(stdscr, title_y, 0, f"Editing {title}"[:cols].ljust(cols), curses.A_REVERSE | curses.A_BOLD)
             hint = "Type a value. Enter saves. Esc cancels. Ctrl-A/E move. Ctrl-U/W erase."
+            if is_path_like:
+                hint = "Type a value. Enter saves. Esc cancels. Single q also cancels path prompts. Ctrl-A/E move. Ctrl-U/W erase."
             safe_addstr(stdscr, hint_y, 0, hint[:cols].ljust(cols), curses.A_REVERSE)
             safe_addstr(stdscr, input_y, 0, prompt[:cols], curses.A_REVERSE)
             if visible_w > 0:
@@ -3544,7 +3550,7 @@ def _action_entropy_preview(state: AppState) -> None:
         lines.append("")
         lines.append("preview:")
         lines.extend(_image_ascii_cached(s.path, cols=72, rows=28))
-    open_viewer(state, f"Entropy Source: {s.kind}", lines)
+    open_viewer(state, f"Authored Source: {s.kind}", lines)
 
 
 def _prompt_bool(label: str, default: bool = False) -> bool:
