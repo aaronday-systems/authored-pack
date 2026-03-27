@@ -12,6 +12,28 @@ from eps.pack import stamp_pack, verify_pack, write_evidence_bundle, _write_zip
 
 
 class TestPackHardening(unittest.TestCase):
+    def test_safe_write_text_leaves_no_temp_files_on_success(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            target = tmp_path / "pack_root_sha256.txt"
+
+            pack_module._safe_write_text(target, "hello\n")
+
+            self.assertEqual(target.read_text(encoding="utf-8"), "hello\n")
+            self.assertEqual(list(tmp_path.glob(f".{target.name}.*")), [])
+
+    def test_safe_write_json_leaves_no_temp_files_on_replace_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            target = tmp_path / "receipt.json"
+
+            with patch("eps.pack.os.replace", side_effect=OSError("boom")):
+                with self.assertRaises(OSError):
+                    pack_module._safe_write_json(target, {"ok": True})
+
+            self.assertFalse(target.exists())
+            self.assertEqual(list(tmp_path.glob(f".{target.name}.*")), [])
+
     def test_stamp_pack_rejects_overlapping_input_and_out(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

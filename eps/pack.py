@@ -470,18 +470,28 @@ def _ensure_parent(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
 
-def _safe_write_text(path: Path, content: str) -> None:
-    _ensure_parent(path)
-    path.write_text(content, encoding="utf-8")
+def _default_public_file_mode(path: Path) -> int:
+    try:
+        return stat.S_IMODE(path.stat().st_mode)
+    except OSError:
+        current_umask = os.umask(0)
+        os.umask(current_umask)
+        return 0o666 & ~current_umask
 
 
-def _safe_write_private_text(path: Path, content: str) -> None:
+def _atomic_write_text(path: Path, content: str, *, mode: int) -> None:
     _ensure_parent(path)
     fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent), text=True)
     tmp_path = Path(tmp_name)
     try:
+        try:
+            os.fchmod(fd, mode)
+        except OSError:
+            pass
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
         os.replace(tmp_path, path)
     except Exception:
         try:
@@ -491,10 +501,17 @@ def _safe_write_private_text(path: Path, content: str) -> None:
         raise
 
 
+def _safe_write_text(path: Path, content: str) -> None:
+    _atomic_write_text(path, content, mode=_default_public_file_mode(path))
+
+
+def _safe_write_private_text(path: Path, content: str) -> None:
+    _atomic_write_text(path, content, mode=0o600)
+
+
 def _safe_write_json(path: Path, obj: Dict[str, object]) -> None:
-    _ensure_parent(path)
     payload = json.dumps(obj, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False) + "\n"
-    path.write_text(payload, encoding="utf-8")
+    _atomic_write_text(path, payload, mode=_default_public_file_mode(path))
 
 
 def _copy_payload_files(
