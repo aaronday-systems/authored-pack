@@ -198,7 +198,7 @@ class TestTuiP1Regressions(unittest.TestCase):
             self.assertFalse(any("derived_seed.hex" in line for line in state.log_lines))
             self.assertFalse(any("derived_seed.b64" in line for line in state.log_lines))
             self.assertIn("(Authored Pack) derive seed", bool_prompts)
-            self.assertIn("(Authored Pack) write authored sources audit into pack", bool_prompts)
+            self.assertIn("(Authored Pack) save source record in pack", bool_prompts)
             self.assertFalse(any("write entropy source audit into pack" in label for label in bool_prompts))
             self.assertFalse(any("LOCKDOWN" in label for label in bool_prompts))
             self.assertTrue(any("Seed path: root-only seed" in line for line in state.log_lines))
@@ -349,8 +349,8 @@ class TestTuiP1Regressions(unittest.TestCase):
 
             self.assertEqual(state.status, "Failed.")
             self.assertEqual(state.log_lines[0], "Stamp blocked: staged sources are not ready to mix into the seed.")
-            self.assertTrue(any("Mix-ready: 3/7" in line for line in state.log_lines))
-            self.assertTrue(any("Need 4 more sources to use staged sources in seed." in line for line in state.log_lines))
+            self.assertTrue(any("Sources ready for seed: 3/7" in line for line in state.log_lines))
+            self.assertTrue(any("Need 4 more collected sources to use this option." in line for line in state.log_lines))
 
     def test_poll_drop_dir_retries_transient_failures_until_success(self) -> None:
         m = self.m

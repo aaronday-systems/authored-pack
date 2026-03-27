@@ -941,7 +941,7 @@ def _normalize_single_path_input(raw: str, *, allow_sources: bool = False) -> st
     text = (raw or "").replace("\r\n", "\n").replace("\r", "\n").strip()
     if not text:
         return ""
-    if allow_sources and text == "@sources":
+    if allow_sources and text.lower() in ("@sources", "sources", "authored sources"):
         return "@sources"
     if "\n" in text:
         for line in text.split("\n"):
@@ -1173,7 +1173,7 @@ def _apply_drop_actions_to_state(state: AppState, actions: Sequence[DropPrepared
                 state.stamp_panel_draft.input_path = str(state.last_input_dir or "")
         if added_sources and _mix_ready_crossed(state, before=eligible_before):
             state.reward_ticks = max(state.reward_ticks, 18)
-            msgs.append(f"Mix-ready: {len(_lockdown_eligible_sources(state.authored_sources))}/{state.entropy_min_sources}.")
+            msgs.append(f"Sources ready for seed: {len(_lockdown_eligible_sources(state.authored_sources))}/{state.entropy_min_sources}.")
         _apply_drop_feedback(state, msgs, play_sfx=play_sfx)
     return msgs
 
@@ -1287,7 +1287,7 @@ def _dropzone_preview(state: AppState, *, width: int, height: int) -> List[str]:
     d = state.drop_dir
     have = len(state.drop_seen)
     lines: List[str] = []
-    lines.append("DROP ZONE // calm intake for files and folders")
+    lines.append("DROP ZONE // drag in files and folders")
     lines.append("")
     lines.append("Use this when you do not want to type paths.")
     lines.append("")
@@ -1804,38 +1804,37 @@ def _header_action_for_label(label: str) -> str:
 
 def _quickstart_lines() -> List[str]:
     return [
-        "START // choose your path",
-        "",
-        "Authored Pack gives you two human paths over one shared pack contract.",
+        "START // choose what to do",
         "",
         "Pack a Folder",
-        "- choose a normal folder, stamp it, verify it later",
+        "- use a folder you already have",
+        "- stamp it now, verify it later",
         "",
         "Compose from Sources",
-        "- collect photos, notes, or taps, then stamp @sources",
+        "- build a pack from photos, notes, or taps",
         "",
         "Verify a Pack",
-        "- audit an existing stamped pack or zip",
+        "- check a stamped pack folder or zip",
         "",
-        "Enter -> Pack a Folder",
-        "S -> Compose from Sources",
-        "V -> Verify a Pack",
+        "Enter = Pack a Folder",
+        "S = Compose from Sources",
+        "V = Verify a Pack",
     ]
 
 
 def _stamp_panel_rows(state: AppState) -> List[StampPanelRow]:
     cfg = state.stamp_panel_draft or state.stamp_config
     if cfg.input_mode == "sources":
-        input_label = f"Authored Sources ({len(state.authored_sources)} collected)"
+        input_label = f"Authored Sources ({len(state.authored_sources)})"
     else:
         input_label = _display_path(_effective_stamp_input(state, cfg) or "not set", max_len=28)
     rows = [
-        StampPanelRow("input", "Input", input_label),
-        StampPanelRow("output", "Output", _display_path(_effective_stamp_output(state, cfg), max_len=28)),
-        StampPanelRow("zip_pack", "Zip pack", "on" if cfg.zip_pack else "off", "toggle"),
+        StampPanelRow("input", "What to pack", input_label),
+        StampPanelRow("output", "Save in", _display_path(_effective_stamp_output(state, cfg), max_len=28)),
+        StampPanelRow("zip_pack", "Zip copy", "on" if cfg.zip_pack else "off", "toggle"),
         StampPanelRow("derive_seed", "Derive seed", "on" if cfg.derive_seed else "off", "toggle"),
-        StampPanelRow("evidence_bundle", "Evidence bundle", "on" if cfg.evidence_bundle else "off", "toggle"),
-        StampPanelRow("advanced", "Advanced rows", "shown" if state.stamp_panel_show_advanced else "hidden", "action"),
+        StampPanelRow("evidence_bundle", "Evidence zip", "on" if cfg.evidence_bundle else "off", "toggle"),
+        StampPanelRow("advanced", "More options", "shown" if state.stamp_panel_show_advanced else "hidden", "action"),
     ]
     if state.stamp_panel_show_advanced:
         rows.extend(
@@ -1853,8 +1852,8 @@ def _stamp_panel_rows(state: AppState) -> List[StampPanelRow]:
             rows.append(
                 StampPanelRow(
                     "mix_sources",
-                    "Mix staged sources",
-                    f"{'on' if cfg.mix_sources else 'off'}  Mix-ready {eligible}/{state.entropy_min_sources}",
+                    "Use collected sources in seed",
+                    f"{'on' if cfg.mix_sources else 'off'}  Ready for seed {eligible}/{state.entropy_min_sources}",
                     "toggle",
                 )
             )
@@ -1863,10 +1862,10 @@ def _stamp_panel_rows(state: AppState) -> List[StampPanelRow]:
                 [
                     StampPanelRow("write_seed", "Write seed files", "on" if cfg.write_seed else "off", "toggle"),
                     StampPanelRow("show_seed", "Reveal seed in UI", "on" if cfg.show_seed else "off", "toggle"),
-                    StampPanelRow("write_sources", "Write source audit", "on" if cfg.write_sources else "off", "toggle"),
+                    StampPanelRow("write_sources", "Save source record", "on" if cfg.write_sources else "off", "toggle"),
                 ]
             )
-    rows.append(StampPanelRow("confirm", "Confirm stamp", "run now", "action"))
+    rows.append(StampPanelRow("confirm", "Stamp now", "run now", "action"))
     return rows
 
 
@@ -1876,8 +1875,8 @@ def _stamp_panel_lines(state: AppState, *, width: int, height: int) -> List[str]
         return []
     state.stamp_panel_selected = max(0, min(int(state.stamp_panel_selected), len(rows) - 1))
     lines = [
-        "STAMP REVIEW // confirm before writing",
-        "Up/Down row  Enter edit  Space toggle  Esc close",
+        "STAMP REVIEW // check settings",
+        "Up/Down move  Enter edit  Space toggle  Esc back",
     ]
     for idx, row in enumerate(rows):
         prefix = "> " if idx == state.stamp_panel_selected else "  "
@@ -1888,19 +1887,19 @@ def _stamp_panel_lines(state: AppState, *, width: int, height: int) -> List[str]
         lines.append(_shorten_middle(line, max(12, width - 1)))
     lines.append("")
     cfg = state.stamp_panel_draft or state.stamp_config
-    lines.append(f"Input mode: {'Authored Sources' if cfg.input_mode == 'sources' else 'Folder'}")
+    lines.append(f"Packing from: {'Authored Sources' if cfg.input_mode == 'sources' else 'Folder'}")
     if cfg.input_mode == "sources":
         lines.append(f"Collected: {len(state.authored_sources)} source{'s' if len(state.authored_sources) != 1 else ''}")
     if cfg.derive_seed and cfg.mix_sources:
         eligible = len(_lockdown_eligible_sources(state.authored_sources))
-        lines.append(f"Mix-ready: {eligible}/{state.entropy_min_sources}")
+        lines.append(f"Sources ready for seed: {eligible}/{state.entropy_min_sources}")
         if eligible < int(state.entropy_min_sources):
-            lines.append(f"Need {int(state.entropy_min_sources) - eligible} more sources to use staged sources in seed.")
-    lines.append("Writes manifest, receipt, payload, and pack_root_sha256.")
+            lines.append(f"Need {int(state.entropy_min_sources) - eligible} more collected sources to use this option.")
+    lines.append("Writes a pack folder with manifest, receipt, and payload.")
     if cfg.derive_seed:
-        lines.append("Derived seed material follows this review choice.")
+        lines.append("Seed output follows this review choice.")
     else:
-        lines.append("Derived seed material is off.")
+        lines.append("Seed output is off.")
     return [ln[:width] for ln in lines[:height]]
 
 
@@ -1912,29 +1911,27 @@ def _stamp_preview_lines(state: AppState, *, width: int, height: int) -> List[st
     input_label = "Authored Sources" if cfg.input_mode == "sources" else _display_path(Path(input_path).expanduser() if input_path not in ("", "@sources") else input_path, max_len=44) if input_path not in ("", "@sources") else input_path
     output_label = _display_path(Path(_effective_stamp_output(state, cfg)).expanduser(), max_len=44)
     lines = [
-        "STAMP // review before writing",
+        "STAMP // set what to pack",
         "",
-        f"- lane: {'Compose from Sources' if state.current_lane == 'authored' else 'Pack a Folder'}",
-        f"- input mode: {'Authored Sources' if cfg.input_mode == 'sources' else 'Folder'}",
-        f"- input: {input_label}",
-        f"- output: {output_label}",
-        f"- zip: {'on' if cfg.zip_pack else 'off'}",
-        f"- derive seed: {'on' if cfg.derive_seed else 'off'}",
+        f"- What to pack: {input_label}",
+        f"- Save in: {output_label}",
+        f"- Zip copy: {'on' if cfg.zip_pack else 'off'}",
+        f"- Derive seed: {'on' if cfg.derive_seed else 'off'}",
     ]
     if cfg.input_mode == "sources":
-        lines.append(f"- collected: {len(state.authored_sources)} source{'s' if len(state.authored_sources) != 1 else ''}")
+        lines.append(f"- Collected: {len(state.authored_sources)} source{'s' if len(state.authored_sources) != 1 else ''}")
     if cfg.derive_seed and cfg.mix_sources:
         eligible = len(_lockdown_eligible_sources(state.authored_sources))
-        lines.append(f"- Mix-ready: {eligible}/{state.entropy_min_sources}")
+        lines.append(f"- Sources ready for seed: {eligible}/{state.entropy_min_sources}")
     lines.extend(
         [
             "",
-            "Enter -> open review panel",
-            "I/O -> change input/output",
-            "U/D/Z/E -> toggle authored sources, seed, zip, evidence",
-            "Review panel handles confirm/cancel inline",
+            "I = choose what to pack",
+            "O = choose where to save it",
+            "Enter = review and stamp",
+            "U/D/Z/E = toggle sources, seed, zip, evidence",
             "",
-            "Creates a content-addressed pack and optional zip.",
+            "Writes a pack folder and optional zip copy.",
         ]
     )
     return lines[:height]
@@ -1945,38 +1942,37 @@ def _verify_preview_lines(state: AppState) -> List[str]:
     pack_path = _effective_verify_path(state)
     pack_label = _display_path(Path(pack_path).expanduser(), max_len=44) if pack_path else "not set"
     return [
-        "VERIFY // later integrity audit",
+        "VERIFY // check a stamped pack",
         "",
         "Current target:",
         f"- pack: {pack_label}",
         f"- allow large manifest: {'yes' if cfg.allow_large_manifest else 'no'}",
         "",
-        "Enter -> Verify selected pack",
-        "P -> change pack path",
-        "L -> toggle large-manifest cap",
+        "Enter = verify this path",
+        "P = choose pack path",
+        "L = toggle large-manifest cap",
         "",
-        "Checks pack root, payload hashes, and pack integrity.",
+        "Checks pack root, payload hashes, and receipt consistency.",
     ]
 
 
 def _help_summary_lines(_state: AppState) -> List[str]:
     return [
-        "HELP // curated operator guide",
+        "HELP // what this tool does",
         "",
-        "what Authored Pack is",
         "Authored Pack is a small deterministic pack/verify tool for humans and agents.",
         "",
-        "human workflow",
-        "1. Pack a folder or compose from sources.",
+        "human flow",
+        "1. Pack a folder, or compose from sources.",
         "2. Stamp a verifiable pack.",
         "3. Verify it later or after handoff.",
         "",
         "trust boundary",
         "Not an RNG. Noisy mode is ceremony only. Evidence is tamper-evident, not signed.",
         "",
-        "where to read more",
-        "Enter -> open this help in a viewer",
-        "R README",
+        "more detail",
+        "Enter = open this help in a viewer",
+        "R = README",
     ]
 
 
@@ -2923,7 +2919,7 @@ def _authored_sources_preview(state: AppState, *, width: int, height: int) -> Li
     """
     Right-pane content for the Sources screen.
     """
-    header = "AUTHORED SOURCES // compose from chosen materials"
+    header = "AUTHORED SOURCES // collect what you want in the pack"
     lines: List[str] = [
         header,
         _source_collection_line(state, width=width),
@@ -2931,15 +2927,17 @@ def _authored_sources_preview(state: AppState, *, width: int, height: int) -> Li
         "",
     ]
     if state.focus == "entropy" and state.authored_sources:
-        lines.append("List focus. Up/Down moves authored sources. Tab returns to menu.")
+        lines.append("List focus. Up/Down moves. Enter previews. Tab returns to menu.")
     else:
-        lines.append("Actions: A add photo(s), T add text, Space record taps, P import path(s).")
+        lines.append("A add photos  T add text  Space record taps  P import paths")
     lines.append("")
     if not state.authored_sources:
-        lines.append("Authored sources can become the pack payload when you stamp @sources.")
-        lines.append("They are optional for the folder path.")
+        lines.append("These become the pack contents when you stamp from Authored Sources.")
+        lines.append("You can ignore this screen if you just want to pack a normal folder.")
         lines.append("Add a photo, text note, or tap sample.")
         return lines[:height]
+    lines.append("When you are ready, go to Stamp and choose Authored Sources.")
+    lines.append("")
     if state.drop_import_count > 0:
         lines.append(f"Imported paths this run: {state.drop_import_count}")
         lines.append("")
@@ -2956,9 +2954,9 @@ def _authored_sources_preview(state: AppState, *, width: int, height: int) -> Li
         if s.kind == "tap":
             cnt = s.meta.get("events")
             if isinstance(cnt, int):
-                meta_bits.append(f"events={cnt}")
+                meta_bits.append(f"{cnt} taps")
                 if int(cnt) < int(LOCKDOWN_MIN_TAP_EVENTS):
-                    meta_bits.append("low-events")
+                    meta_bits.append("too-short")
         sid = _entropy_source_identity(s)
         if sid in seen_ids:
             meta_bits.append("dupe")
@@ -3006,19 +3004,21 @@ def _draw_footer(stdscr, state: AppState, rows: int, cols: int) -> None:
     if label == "Sources":
         if state.focus == "entropy" and state.authored_sources:
             legend = "Up/Down: list  Tab: menu  Enter: preview  D: delete  C: clear  Esc: back"
+        elif state.authored_sources:
+            legend = "Up/Down: menu  Enter: stamp  Tab: list  A/T/Space/P: add  M: mode  Q: quit"
         else:
             legend = "Up/Down: menu  Tab: list  A/T/Space/P: add  M: mode  Q: quit"
     elif label == "Stamp":
         if state.stamp_panel_draft is not None:
-            legend = "Up/Down: row  Enter: edit/confirm  Space: toggle  Esc: close"
+            legend = "Up/Down: move  Enter: edit/save  Space: toggle  Esc: back"
         else:
-            legend = "Enter: review  I/O: paths  U/D/Z/E: toggle  X: advanced  M: mode"
+            legend = "Enter: review  I/O: choose paths  U/D/Z/E: toggle  X: more  M: mode"
     elif label == "Verify":
         legend = "Enter: verify  P: path  L: large-manifest  M: mode  Q: quit"
     elif label == "Help":
         legend = "Enter: help  R: README  M: mode  Q: quit"
     elif label == "Start":
-        legend = "Enter: folder  S: sources  V: verify  M: mode  Q: quit"
+        legend = "Enter: pack folder  S: sources  V: verify  M: mode  Q: quit"
     else:
         legend = "Up/Down: move  Enter: select  M: mode  Q: quit"
     msg = state.status.strip() if state.status else ""
@@ -3163,11 +3163,14 @@ def _prompt_str_curses(stdscr, label: str, *, default: str = "", max_len: int = 
     show_default = str(default)
     if default and any(tok in lower_label for tok in ("path", "dir", "file", "@sources")):
         show_default = _display_path(default, max_len=max(20, cols // 2))
-    prompt = f"{label} [{show_default}]: " if default else f"{label}: "
+    title = str(label).replace("(Authored Pack) ", "").strip()
+    prompt = f"{title} [{show_default}]: " if default else f"{title}: "
     effective_max_len = int(max_len)
     if effective_max_len <= 512 and any(tok in lower_label for tok in ("path", "dir", "file")):
         effective_max_len = 4096
-    y = rows - 1
+    title_y = max(0, rows - 3)
+    hint_y = max(0, rows - 2)
+    input_y = max(0, rows - 1)
     buf: List[str] = []
     cursor = 0
     truncated = False
@@ -3191,16 +3194,20 @@ def _prompt_str_curses(stdscr, label: str, *, default: str = "", max_len: int = 
                 end = start + visible_w
                 visible = visible[start:end]
                 cursor_x = len(prompt) + max(0, cursor - start)
-            stdscr.move(y, 0)
-            stdscr.clrtoeol()
-            safe_addstr(stdscr, y, 0, prompt[:cols], curses.A_REVERSE)
+            for y in {title_y, hint_y, input_y}:
+                stdscr.move(y, 0)
+                stdscr.clrtoeol()
+            safe_addstr(stdscr, title_y, 0, f"EDIT // {title}".upper()[:cols].ljust(cols), curses.A_REVERSE | curses.A_BOLD)
+            hint = "Enter save  Esc cancel  Ctrl-A/E move  Ctrl-U clear  Ctrl-W erase word"
+            safe_addstr(stdscr, hint_y, 0, hint[:cols].ljust(cols), curses.A_REVERSE)
+            safe_addstr(stdscr, input_y, 0, prompt[:cols], curses.A_REVERSE)
             if visible_w > 0:
-                safe_addstr(stdscr, y, len(prompt), visible[:visible_w], curses.A_REVERSE)
+                safe_addstr(stdscr, input_y, len(prompt), visible[:visible_w], curses.A_REVERSE)
             if truncated and cols > 8:
-                hint = " [truncated]"
-                safe_addstr(stdscr, y, max(0, cols - len(hint)), hint[:cols], curses.A_REVERSE)
+                trunc_hint = " [truncated]"
+                safe_addstr(stdscr, input_y, max(0, cols - len(trunc_hint)), trunc_hint[:cols], curses.A_REVERSE)
             try:
-                stdscr.move(y, min(max(0, cursor_x), max(0, cols - 1)))
+                stdscr.move(input_y, min(max(0, cursor_x), max(0, cols - 1)))
             except curses.error:
                 pass
             stdscr.refresh()
@@ -3213,7 +3220,10 @@ def _prompt_str_curses(stdscr, label: str, *, default: str = "", max_len: int = 
                 return None
             if ch in (10, 13, curses.KEY_ENTER):
                 out = "".join(buf).strip()
-                return out if out else str(default)
+                out = out if out else str(default)
+                if out in ("q", "Q") and any(tok in lower_label for tok in ("path", "dir", "folder", "file")):
+                    return None
+                return out
             if ch == 1:
                 cursor = 0
                 continue
@@ -3363,7 +3373,7 @@ def _action_entropy_add_photos(state: AppState, stdscr) -> None:
         else:
             state.log_lines = [f"Added {added} photo source(s)."]
         if _mix_ready_crossed(state, before=eligible_before):
-            state.log_lines.append(f"Mix-ready: {len(_lockdown_eligible_sources(state.authored_sources))}/{state.entropy_min_sources}.")
+            state.log_lines.append(f"Sources ready for seed: {len(_lockdown_eligible_sources(state.authored_sources))}/{state.entropy_min_sources}.")
         if total_found >= 250:
             state.log_lines.append("Scan capped at 250 images for responsiveness.")
     else:
@@ -3395,7 +3405,7 @@ def _action_entropy_add_text(state: AppState, stdscr) -> None:
     state.status = "Done."
     state.log_lines = [f"Added text source: {label.strip() or 'note'} ({_fmt_bytes(len(raw))})."]
     if _mix_ready_crossed(state, before=eligible_before):
-        state.log_lines.append(f"Mix-ready: {len(_lockdown_eligible_sources(state.authored_sources))}/{state.entropy_min_sources}.")
+        state.log_lines.append(f"Sources ready for seed: {len(_lockdown_eligible_sources(state.authored_sources))}/{state.entropy_min_sources}.")
 
 
 def _action_entropy_tap(state: AppState, stdscr) -> None:
@@ -3428,7 +3438,7 @@ def _action_entropy_tap(state: AppState, stdscr) -> None:
                 ch = -1
             if ch == -1:
                 # Update status without adding entropy.
-                state.status = f"Authored source capture: {count}/{target} ..."
+                state.status = f"Tap sample: {count}/{target} ..."
                 draw(stdscr, state)
                 continue
             if ch == 27:  # ESC
@@ -3442,7 +3452,7 @@ def _action_entropy_tap(state: AppState, stdscr) -> None:
                 sample_events.append((dt_us, code))
             if count >= target:
                 break
-            state.status = f"Authored source capture: {count}/{target} ..."
+            state.status = f"Tap sample: {count}/{target} ..."
             draw(stdscr, state)
     finally:
         try:
@@ -3455,8 +3465,8 @@ def _action_entropy_tap(state: AppState, stdscr) -> None:
     if count < int(LOCKDOWN_MIN_TAP_EVENTS):
         state.status = "Failed."
         state.log_lines = [
-            "Authored source capture rejected: insufficient events.",
-            f"Need >= {LOCKDOWN_MIN_TAP_EVENTS}, got {count}.",
+            "Tap sample rejected: too short.",
+            f"Needs {LOCKDOWN_MIN_TAP_EVENTS}+ taps to count for derived seed.",
         ]
         return
     meta: Dict[str, object] = {"events": int(count), "sample": sample_events[:16]}
@@ -3472,7 +3482,7 @@ def _action_entropy_tap(state: AppState, stdscr) -> None:
         f"tap_sha256: {digest}",
     ]
     if _mix_ready_crossed(state, before=eligible_before):
-        state.log_lines.append(f"Mix-ready: {len(_lockdown_eligible_sources(state.authored_sources))}/{state.entropy_min_sources}.")
+        state.log_lines.append(f"Sources ready for seed: {len(_lockdown_eligible_sources(state.authored_sources))}/{state.entropy_min_sources}.")
 
 
 def _action_entropy_delete_selected(state: AppState) -> None:
@@ -3707,9 +3717,9 @@ def _open_stamp_panel(state: AppState, selected_key: Optional[str] = None, *, sh
         state.stamp_panel_selected = _stamp_panel_index(state, selected_key)
     state.log_lines = []
     if selected_key is None:
-        state.status = "Stamp review open."
+        state.status = "Review open."
     else:
-        state.status = f"Stamp review: {selected_key.replace('_', ' ')}."
+        state.status = f"Editing {selected_key.replace('_', ' ')}."
 
 
 def _close_stamp_panel(state: AppState) -> None:
@@ -3770,7 +3780,7 @@ def _toggle_stamp_panel_value(state: AppState, key: str) -> None:
         state.status = f"Exclude picker: {'on' if cfg.exclude_picker else 'off'}."
     elif key == "mix_sources":
         cfg.mix_sources = not cfg.mix_sources
-        state.status = f"Mix staged sources: {'on' if cfg.mix_sources else 'off'}."
+        state.status = f"Use collected sources in seed: {'on' if cfg.mix_sources else 'off'}."
     elif key == "write_seed":
         cfg.write_seed = not cfg.write_seed
         state.status = f"Write seed files: {'on' if cfg.write_seed else 'off'}."
@@ -3779,7 +3789,7 @@ def _toggle_stamp_panel_value(state: AppState, key: str) -> None:
         state.status = f"Reveal seed in UI: {'on' if cfg.show_seed else 'off'}."
     elif key == "write_sources":
         cfg.write_sources = not cfg.write_sources
-        state.status = f"Write source audit: {'on' if cfg.write_sources else 'off'}."
+        state.status = f"Save source record: {'on' if cfg.write_sources else 'off'}."
 
 
 def _activate_stamp_panel_row(state: AppState, stdscr) -> None:
@@ -3814,7 +3824,7 @@ def _activate_stamp_panel_row(state: AppState, stdscr) -> None:
 
 def _action_sources_import_paths(state: AppState, stdscr) -> None:
     _set_current_lane(state, "authored")
-    raw = _prompt_str_curses(stdscr, "(Authored Pack) import source path(s)", default=str(state.last_input_dir or ""), max_len=4096)
+    raw = _prompt_str_curses(stdscr, "(Authored Pack) import files or folders", default=str(state.last_input_dir or ""), max_len=4096)
     if raw is None:
         state.status = "Ready."
         state.log_lines = ["Import cancelled."]
@@ -3835,14 +3845,19 @@ def _action_sources_import_paths(state: AppState, stdscr) -> None:
     state.log_lines = list(msgs[:6])
 
 
-def _edit_stamp_input(state: AppState, stdscr, cfg: Optional[StampConfig] = None) -> bool:
+def _edit_stamp_input(state: AppState, stdscr, cfg: Optional[StampConfig] = None, *, allow_sources: bool = True) -> bool:
     cfg = cfg or state.stamp_config
-    default = "@sources" if cfg.input_mode == "sources" else (_effective_stamp_input(state, cfg) or ".")
-    raw = _prompt_str_curses(stdscr, "(Authored Pack) stamp input folder or @sources", default=default)
+    if allow_sources:
+        default = "Authored Sources" if cfg.input_mode == "sources" else (_effective_stamp_input(state, cfg) or ".")
+        prompt = "(Authored Pack) choose folder to pack or Authored Sources"
+    else:
+        default = _effective_stamp_input(state, cfg) or "."
+        prompt = "(Authored Pack) choose folder to pack"
+    raw = _prompt_str_curses(stdscr, prompt, default=default)
     if raw is None:
         state.status = "Ready."
         return False
-    normalized = _normalize_single_path_input(raw, allow_sources=True)
+    normalized = _normalize_single_path_input(raw, allow_sources=allow_sources)
     if normalized == "@sources":
         _set_current_lane(state, "authored")
         cfg.input_mode = "sources"
@@ -3851,18 +3866,18 @@ def _edit_stamp_input(state: AppState, stdscr, cfg: Optional[StampConfig] = None
         _set_current_lane(state, "folder")
         cfg.input_mode = "folder"
         cfg.input_path = normalized
-    state.status = "Stamp input updated."
+    state.status = "What to pack updated."
     return True
 
 
 def _edit_stamp_output(state: AppState, stdscr, cfg: Optional[StampConfig] = None) -> bool:
     cfg = cfg or state.stamp_config
-    raw = _prompt_str_curses(stdscr, "(Authored Pack) stamp output folder", default=_effective_stamp_output(state, cfg))
+    raw = _prompt_str_curses(stdscr, "(Authored Pack) choose output folder", default=_effective_stamp_output(state, cfg))
     if raw is None:
         state.status = "Ready."
         return False
     cfg.out_path = _normalize_single_path_input(raw) or "./out"
-    state.status = "Stamp output updated."
+    state.status = "Save folder updated."
     return True
 
 
@@ -3911,7 +3926,7 @@ def _edit_stamp_advanced(state: AppState, stdscr, cfg: Optional[StampConfig] = N
             return
         write_sources_v = _prompt_bool_curses(
             stdscr,
-            "(Authored Pack) write authored sources audit into pack",
+            "(Authored Pack) save source record in pack",
             default=cfg.write_sources or bool(mix_sources),
         )
         if write_sources_v is None:
@@ -3983,7 +3998,7 @@ def _run_stamp_plan(
         if input_choice == "@sources":
             if not state.authored_sources:
                 state.status = "Failed."
-                state.log_lines = ["@sources selected, but no authored sources are staged.", "Go to Sources and add or import some first."]
+                state.log_lines = ["Authored Sources selected, but none are staged yet.", "Go to Sources and add or import some first."]
                 try:
                     state.selected = state.menu.index("Sources")
                 except ValueError:
@@ -4021,8 +4036,8 @@ def _run_stamp_plan(
                 state.status = "Failed."
                 state.log_lines = [
                     "Stamp blocked: staged sources are not ready to mix into the seed.",
-                    f"Mix-ready: {len(mixed_sources)}/{state.entropy_min_sources}",
-                    f"Need {need_more} more sources to use staged sources in seed.",
+                    f"Sources ready for seed: {len(mixed_sources)}/{state.entropy_min_sources}",
+                    f"Need {need_more} more collected sources to use this option.",
                     f"Tap sources need >= {LOCKDOWN_MIN_TAP_EVENTS} key events.",
                 ]
                 try:
@@ -4201,8 +4216,8 @@ def _action_stamp(state: AppState, stdscr) -> None:
 
     cfg = state.stamp_config
     default_out = _effective_stamp_output(state)
-    default_in = "@sources" if cfg.input_mode == "sources" else (_effective_stamp_input(state) or ".")
-    input_s = _prompt_str_curses(stdscr, "(Authored Pack) input folder or @sources", default=default_in)
+    default_in = "Authored Sources" if cfg.input_mode == "sources" else (_effective_stamp_input(state) or ".")
+    input_s = _prompt_str_curses(stdscr, "(Authored Pack) input folder or Authored Sources", default=default_in)
     if input_s is None:
         state.status = "Ready."
         state.log_lines = ["Stamp cancelled."]
@@ -4233,7 +4248,8 @@ def _action_stamp(state: AppState, stdscr) -> None:
         state.log_lines = ["Stamp cancelled."]
         return
     exclude_picker = False
-    if input_s.strip() != "@sources":
+    input_choice = _normalize_single_path_input(input_s.strip(), allow_sources=True)
+    if input_choice != "@sources":
         exclude_picker = _prompt_bool_curses(stdscr, "(Authored Pack) pick files to exclude before stamp", default=cfg.exclude_picker)
         if exclude_picker is None:
             state.status = "Ready."
@@ -4251,7 +4267,7 @@ def _action_stamp(state: AppState, stdscr) -> None:
         return
     mix_sources = False
     if derive_seed and state.authored_sources:
-        mix_sources = _prompt_bool_curses(stdscr, "(Authored Pack) use staged sources in seed", default=cfg.mix_sources)
+        mix_sources = _prompt_bool_curses(stdscr, "(Authored Pack) use collected sources in seed", default=cfg.mix_sources)
         if mix_sources is None:
             state.status = "Ready."
             state.log_lines = ["Stamp cancelled."]
@@ -4270,7 +4286,7 @@ def _action_stamp(state: AppState, stdscr) -> None:
     write_sources = (
         _prompt_bool_curses(
             stdscr,
-            "(Authored Pack) write authored sources audit into pack",
+            "(Authored Pack) save source record in pack",
             default=write_sources_default,
         )
         if derive_seed
@@ -4291,8 +4307,8 @@ def _action_stamp(state: AppState, stdscr) -> None:
         state.log_lines = ["Stamp cancelled."]
         return
 
-    cfg.input_mode = "sources" if input_s.strip() == "@sources" else "folder"
-    cfg.input_path = "" if cfg.input_mode == "sources" else input_s.strip()
+    cfg.input_mode = "sources" if input_choice == "@sources" else "folder"
+    cfg.input_path = "" if cfg.input_mode == "sources" else input_choice
     cfg.out_path = out_s.strip() or "./out"
     cfg.pack_id = pack_id_s.strip()
     cfg.notes = notes_s.strip()
@@ -4530,9 +4546,10 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
                 _start_ui_select_sfx_best_effort()
             _set_current_lane(state, "folder")
             state.stamp_config.input_mode = "folder"
-            state.selected = state.menu.index("Stamp")
-            state.focus = "menu"
-            state.status = "Pack a Folder: review defaults or press I to choose input."
+            if _edit_stamp_input(state, stdscr, state.stamp_config, allow_sources=False):
+                state.selected = state.menu.index("Stamp")
+                state.focus = "menu"
+                state.status = "Folder chosen. Review and stamp when ready."
             return True
 
     if label == "Sources":
@@ -4570,8 +4587,9 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
             return True
         if ch in (curses.KEY_ENTER, 10, 13) and state.focus == "menu":
             if state.authored_sources:
-                state.focus = "entropy"
-                state.status = "Ready."
+                state.selected = state.menu.index("Stamp")
+                state.focus = "menu"
+                state.status = "Authored Sources selected. Review and stamp when ready."
             else:
                 state.status = "Compose from sources with A, T, Space, or P."
             return True
@@ -4608,7 +4626,7 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
             return True
         if ch in (ord("x"), ord("X")):
             _open_stamp_panel(state, "advanced", show_advanced=True)
-            state.status = "Stamp review: advanced rows shown."
+            state.status = "More options shown."
             return True
         if ch in (ord("u"), ord("U")):
             if cfg.input_mode == "sources":

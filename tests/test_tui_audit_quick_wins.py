@@ -88,6 +88,25 @@ class TestTuiAuditQuickWins(unittest.TestCase):
 
         self.assertEqual(result, "abcx")
 
+    def test_prompt_str_curses_renders_modal_edit_header_and_hint(self) -> None:
+        m = self.m
+        stdscr = RecordingStdScr(inputs=[10])
+
+        result = m._prompt_str_curses(stdscr, "(Authored Pack) choose output folder", default="out")
+
+        joined = "\n".join(call[2] for call in stdscr.calls)
+        self.assertEqual(result, "out")
+        self.assertIn("EDIT // CHOOSE OUTPUT FOLDER", joined)
+        self.assertIn("Enter save  Esc cancel", joined)
+
+    def test_prompt_str_curses_treats_single_q_as_cancel_for_path_prompts(self) -> None:
+        m = self.m
+        stdscr = RecordingStdScr(inputs=[ord("q"), 10])
+
+        result = m._prompt_str_curses(stdscr, "(Authored Pack) choose output folder", default="")
+
+        self.assertIsNone(result)
+
     def test_normalize_single_path_input_unescapes_finder_dropped_spaces(self) -> None:
         m = self.m
         with tempfile.TemporaryDirectory() as tmp:
@@ -237,7 +256,7 @@ class TestTuiAuditQuickWins(unittest.TestCase):
         self.assertTrue(footer_calls)
         _, _, line, attr = footer_calls[-1]
         self.assertEqual(attr, state.theme.reverse)
-        self.assertIn("Enter: folder", line)
+        self.assertIn("Enter: pack folder", line)
         self.assertIn("M: mode", line)
 
     def test_sources_footer_spells_out_delete_and_clear(self) -> None:
@@ -260,10 +279,13 @@ class TestTuiAuditQuickWins(unittest.TestCase):
         state = self._state()
         state.selected = state.menu.index("Start")
 
-        with mock.patch.object(m, "_run_stamp_from_config", side_effect=AssertionError("should not stamp from Start")):
+        with mock.patch.object(m, "_run_stamp_from_config", side_effect=AssertionError("should not stamp from Start")), mock.patch.object(
+            m, "_edit_stamp_input", return_value=True
+        ) as edit_stamp_input:
             keep_running = m.handle_key(RecordingStdScr(), state, m.curses.KEY_ENTER)
 
         self.assertTrue(keep_running)
+        edit_stamp_input.assert_called_once()
         self.assertEqual(state.menu[state.selected], "Stamp")
         self.assertIsNone(state.stamp_panel_draft)
         self.assertEqual(state.current_lane, "folder")
@@ -277,6 +299,19 @@ class TestTuiAuditQuickWins(unittest.TestCase):
 
         self.assertIn("Set an input folder", state.status)
         self.assertIsNone(state.last_pack_dir)
+
+    def test_sources_enter_with_collected_sources_moves_to_stamp(self) -> None:
+        m = self.m
+        state = self._state()
+        state.selected = state.menu.index("Sources")
+        state.authored_sources.append(SimpleNamespace(kind="text", name="n", sha256="a" * 64, size_bytes=1, meta={}, text="x"))
+
+        keep_running = m.handle_key(RecordingStdScr(), state, m.curses.KEY_ENTER)
+
+        self.assertTrue(keep_running)
+        self.assertEqual(state.menu[state.selected], "Stamp")
+        self.assertEqual(state.focus, "menu")
+        self.assertIn("Authored Sources selected", state.status)
 
     def test_verify_enter_without_target_opens_path_edit(self) -> None:
         m = self.m
