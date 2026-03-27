@@ -2012,7 +2012,8 @@ def _selection_preview(state: AppState, label: str, *, width: int, height: int) 
     else:
         preview = []
 
-    if state.log_lines and (label == "Verify" or (label == "Stamp" and state.stamp_panel_draft is None)):
+    show_result_log = state.status in ("Done.", "Failed.")
+    if state.log_lines and show_result_log and (label == "Verify" or (label == "Stamp" and state.stamp_panel_draft is None)):
         preview = state.log_lines[-max(1, (height - 1)) :]
     return [ln[:width] for ln in preview[:height]]
 
@@ -3164,7 +3165,7 @@ def _prompt_str_curses(stdscr, label: str, *, default: str = "", max_len: int = 
     if default and any(tok in lower_label for tok in ("path", "dir", "file", "@sources")):
         show_default = _display_path(default, max_len=max(20, cols // 2))
     title = str(label).replace("(Authored Pack) ", "").strip()
-    prompt = f"{title} [{show_default}]: " if default else f"{title}: "
+    prompt = f"Value [{show_default}]: " if default else "Value: "
     effective_max_len = int(max_len)
     if effective_max_len <= 512 and any(tok in lower_label for tok in ("path", "dir", "file")):
         effective_max_len = 4096
@@ -3197,8 +3198,8 @@ def _prompt_str_curses(stdscr, label: str, *, default: str = "", max_len: int = 
             for y in {title_y, hint_y, input_y}:
                 stdscr.move(y, 0)
                 stdscr.clrtoeol()
-            safe_addstr(stdscr, title_y, 0, f"EDIT // {title}".upper()[:cols].ljust(cols), curses.A_REVERSE | curses.A_BOLD)
-            hint = "Enter save  Esc cancel  Ctrl-A/E move  Ctrl-U clear  Ctrl-W erase word"
+            safe_addstr(stdscr, title_y, 0, f"Editing {title}"[:cols].ljust(cols), curses.A_REVERSE | curses.A_BOLD)
+            hint = "Type a value. Enter saves. Esc cancels. Ctrl-A/E move. Ctrl-U/W erase."
             safe_addstr(stdscr, hint_y, 0, hint[:cols].ljust(cols), curses.A_REVERSE)
             safe_addstr(stdscr, input_y, 0, prompt[:cols], curses.A_REVERSE)
             if visible_w > 0:
@@ -3276,6 +3277,16 @@ def _prompt_str_curses(stdscr, label: str, *, default: str = "", max_len: int = 
                 cursor += 1
                 continue
     finally:
+        for y in {title_y, hint_y, input_y}:
+            try:
+                stdscr.move(y, 0)
+                stdscr.clrtoeol()
+            except curses.error:
+                pass
+        try:
+            stdscr.refresh()
+        except curses.error:
+            pass
         try:
             curses.curs_set(0)
         except curses.error:
@@ -3753,6 +3764,7 @@ def _edit_stamp_text_row(state: AppState, stdscr, key: str) -> None:
         state.status = "Ready."
         return
     setattr(cfg, key, raw.strip())
+    state.log_lines = []
     state.status = "Stamp field updated."
 
 
@@ -3866,6 +3878,7 @@ def _edit_stamp_input(state: AppState, stdscr, cfg: Optional[StampConfig] = None
         _set_current_lane(state, "folder")
         cfg.input_mode = "folder"
         cfg.input_path = normalized
+    state.log_lines = []
     state.status = "What to pack updated."
     return True
 
@@ -3877,6 +3890,7 @@ def _edit_stamp_output(state: AppState, stdscr, cfg: Optional[StampConfig] = Non
         state.status = "Ready."
         return False
     cfg.out_path = _normalize_single_path_input(raw) or "./out"
+    state.log_lines = []
     state.status = "Save folder updated."
     return True
 

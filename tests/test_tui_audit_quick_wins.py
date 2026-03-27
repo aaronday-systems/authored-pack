@@ -96,8 +96,8 @@ class TestTuiAuditQuickWins(unittest.TestCase):
 
         joined = "\n".join(call[2] for call in stdscr.calls)
         self.assertEqual(result, "out")
-        self.assertIn("EDIT // CHOOSE OUTPUT FOLDER", joined)
-        self.assertIn("Enter save  Esc cancel", joined)
+        self.assertIn("Editing choose output folder", joined)
+        self.assertIn("Type a value. Enter saves. Esc cancels.", joined)
 
     def test_prompt_str_curses_treats_single_q_as_cancel_for_path_prompts(self) -> None:
         m = self.m
@@ -312,6 +312,18 @@ class TestTuiAuditQuickWins(unittest.TestCase):
         self.assertEqual(state.menu[state.selected], "Stamp")
         self.assertEqual(state.focus, "menu")
         self.assertIn("Authored Sources selected", state.status)
+
+    def test_stamp_preview_ignores_stale_failure_logs_when_not_in_result_state(self) -> None:
+        m = self.m
+        state = self._state()
+        state.selected = state.menu.index("Stamp")
+        state.status = "Review open."
+        state.log_lines = ["Stamp failed.", "- old error"]
+
+        preview = "\n".join(m._selection_preview(state, "Stamp", width=120, height=30))
+
+        self.assertIn("STAMP // set what to pack", preview)
+        self.assertNotIn("Stamp failed.", preview)
 
     def test_verify_enter_without_target_opens_path_edit(self) -> None:
         m = self.m
