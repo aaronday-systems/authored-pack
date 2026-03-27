@@ -1,13 +1,14 @@
 [project]
 name = "entropy-pack-stamper"
 version = "1.0.0"
-description = "Deterministic pack/verify tool for operator-supplied entropy-bearing inputs."
+description = "Authored Pack is a deterministic pack/verify tool for humans and agents."
 readme = "README.md"
 license = { file = "LICENSE" }
 authors = [{ name = "Aaron Day" }]
 requires-python = ">=3.11"
 
 [project.scripts]
+authored-pack = "eps.cli:main"
 eps = "eps.cli:main"
 
 [tool.pytest.ini_options]

@@ -5,33 +5,34 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from . import __version__
+from . import __product_name__, __version__
 from .binmode import stamp_from_entropy_bin
 from .manifest import DEFAULT_DERIVATION_VERSION, stable_dumps
 from .pack import StampResult, _output_would_self_ingest_input, inspect_pack, stamp_pack, verify_pack
 
 CLI_DESCRIPTION = (
-    "Entropy Pack Stamper (EPS) is a small deterministic pack/verify tool for operator-supplied inputs. "
+    f"{__product_name__} is a small deterministic pack/verify tool for humans and agents. "
     "It turns a directory into a verifiable pack with a manifest and receipt, and can optionally derive "
     "reproducible seed material from the pack root."
 )
 
 CLI_EPILOG = """\
 First clean success:
-  eps stamp --input /ABS/PATH/TO/DIR --out ./out --zip
-  eps verify --pack ./out/<pack_root_sha256>
+  authored-pack stamp --input /ABS/PATH/TO/DIR --out ./out --zip
+  authored-pack verify --pack ./out/<pack_root_sha256>
 
 Human path:
   python3 -B bin/eps.py
   stage sources if you need them, then stamp and verify
 
 Machine path:
-  eps stamp --input /ABS/PATH/TO/DIR --out ./out --json
+  authored-pack stamp --input /ABS/PATH/TO/DIR --out ./out --json
   stamp-bin is subtractive and uses repo-relative defaults
+  eps remains available as a compatibility alias
 
 Trust boundary:
   use OS randomness for ordinary secret generation
-  EPS is not an RNG, not automatic secrecy, not signed provenance,
+  Authored Pack is not an RNG, not automatic secrecy, not signed provenance,
   and not sealed storage
 """
 
@@ -102,13 +103,21 @@ def _validate_seed_flags(args: argparse.Namespace) -> None:
         raise ValueError("--print-seed requires --derive-seed")
 
 
-def _command_name_from_argv(argv_list: Sequence[str]) -> str:
+def _command_name_from_argv(argv_list: Sequence[str], *, default_command: str = "authored-pack") -> str:
     known = {"stamp", "verify", "inspect", "stamp-bin"}
     for item in argv_list:
         token = str(item).strip()
         if token in known:
             return token
-    return "eps"
+    return default_command
+
+
+def _prog_name_from_argv0(argv0: str) -> str:
+    name = Path(argv0).name
+    stem = Path(name).stem
+    if stem in {"eps", "authored-pack"}:
+        return stem
+    return "authored-pack"
 
 
 def _stamp(args: argparse.Namespace) -> int:
@@ -332,9 +341,9 @@ def _stamp_bin(args: argparse.Namespace) -> int:
     return 0
 
 
-def build_parser() -> argparse.ArgumentParser:
+def build_parser(*, prog: str = "authored-pack") -> argparse.ArgumentParser:
     p = EPSArgumentParser(
-        prog="eps",
+        prog=prog,
         description=CLI_DESCRIPTION,
         epilog=CLI_EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -420,15 +429,20 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
-    argv_list = list(argv) if argv is not None else list(sys.argv[1:])
+def main(argv: Optional[Sequence[str]] = None, *, prog: Optional[str] = None) -> int:
+    if argv is None:
+        argv_list = list(sys.argv[1:])
+        prog_name = str(prog or _prog_name_from_argv0(sys.argv[0]))
+    else:
+        argv_list = list(argv)
+        prog_name = str(prog or "authored-pack")
     json_mode = "--json" in argv_list
-    parser = build_parser()
+    parser = build_parser(prog=prog_name)
     if not argv_list:
         parser.print_help()
         return 0
     if argv_list in (["--version"], ["-V"]):
-        print(f"eps {__version__}")
+        print(f"{prog_name} {__version__}")
         return 0
     try:
         ns = parser.parse_args(argv_list)
@@ -441,7 +455,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         # show a Python traceback.
         msg = str(exc).strip() or exc.__class__.__name__
         if json_mode:
-            command = _command_name_from_argv(argv_list)
+            command = _command_name_from_argv(argv_list, default_command=prog_name)
             error_type = exc.__class__.__name__
             details: Optional[Dict[str, object]] = None
             if isinstance(exc, CliCommandError):
@@ -449,7 +463,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 details = exc.details
             print(_json_failure(command, error_type, msg, details=details))
             return 1
-        print(f"eps: error: {msg}", file=sys.stderr)
+        print(f"{prog_name}: error: {msg}", file=sys.stderr)
         if isinstance(exc, ValueError) and "must be a directory" in msg and "--input" in msg:
             print("hint: pass an existing directory path; many terminals let you drag a folder into the window to paste its absolute path.", file=sys.stderr)
         if isinstance(exc, CliCommandError):

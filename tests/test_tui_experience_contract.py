@@ -79,7 +79,7 @@ class TestTuiExperienceContract(unittest.TestCase):
 
     def test_start_card_leads_with_the_first_success_path(self) -> None:
         joined = self._preview("Start")
-        self.assertIn("Turn a folder or staged sources into a verifiable pack.", joined)
+        self.assertIn("Authored Pack turns a folder or staged sources into a verifiable pack.", joined)
         self.assertIn("stamp a normal directory", joined.lower())
         self.assertIn("verify the resulting pack", joined.lower())
         self.assertIn("machine-sidecar route", joined)
@@ -88,7 +88,8 @@ class TestTuiExperienceContract(unittest.TestCase):
         joined = self._preview("Sources")
         self.assertIn("Add a photo, text note, or tap sample.", joined)
         self.assertIn("SLOT RAIL [photo 0] [text 0] [tap 0] ready 0/7", joined)
-        self.assertIn("No sources yet.", joined)
+        self.assertIn("AUTHORED SOURCES // stage photos, text, or taps", joined)
+        self.assertIn("No authored sources yet.", joined)
         self.assertIn("Menu focus", joined)
 
     def test_sources_card_keeps_the_slot_rail_ascii_and_type_counts_visible(self) -> None:
@@ -122,7 +123,8 @@ class TestTuiExperienceContract(unittest.TestCase):
 
     def test_help_card_is_curated_not_raw_docs(self) -> None:
         joined = self._preview("Help")
-        self.assertIn("what EPS is", joined)
+        self.assertIn("what Authored Pack is", joined)
+        self.assertIn("for humans and agents", joined)
         self.assertIn("human workflow", joined)
         self.assertIn("trust boundary", joined)
         self.assertIn("where to read more", joined)

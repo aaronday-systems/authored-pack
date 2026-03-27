@@ -2,19 +2,19 @@
 
 ## Short Product Description
 
-Entropy Pack Stamper is a small deterministic tool for packaging and verifying operator-supplied inputs. It produces legible packs with stable roots, receipts, and verifiable payload records.
+Authored Pack is a small deterministic pack/verify tool for humans and agents. It produces legible packs with stable roots, receipts, and verifiable payload records.
 
 ## Medium Product Description
 
-Entropy Pack Stamper packages a folder of operator-supplied inputs into a deterministic pack with a canonical manifest, a receipt, and stable rooted identities. You can verify the pack later as a directory or zip and check that the presented bytes still match the pack contract. It is useful when you want a small honest tool for deliberate human input, auditability, and handoff integrity. It is not an RNG, not automatic secrecy, and not signed provenance.
+Authored Pack packages a normal folder or deliberately staged authored sources into a deterministic pack with a canonical manifest, a receipt, and stable rooted identities. You can verify the pack later as a directory or zip and check that the presented bytes still match the pack contract. It is useful when you want a small honest tool for deliberate human input, auditability, and handoff integrity. It is not an RNG, not automatic secrecy, and not signed provenance.
 
 ## Website Copy Block
 
-Entropy Pack Stamper is a small deterministic pack/verify tool. Give it a folder of operator-supplied inputs and it gives you a legible pack with a manifest, receipt, stable pack root, and payload root. Verify it later, hand it off, or route it into another tool. Public v1 is deterministic pack/verify only. Sealed mode is future design work, not current runtime behavior.
+Authored Pack is a small deterministic pack/verify tool. Give it a normal folder or deliberately staged authored sources and it gives you a legible pack with a manifest, receipt, stable pack root, and payload root. Verify it later, hand it off, or route it into another tool. Public v1 is deterministic pack/verify only. Sealed mode is future design work, not current runtime behavior.
 
 ## X / Twitter Draft
 
-I released a small deterministic tool for packaging and verifying operator-supplied inputs.
+I released a small deterministic pack/verify tool for humans and agents.
 
 It makes a legible pack with:
 - a canonical manifest
@@ -28,7 +28,7 @@ Repo + demo: <add public link>
 
 ## LinkedIn Draft
 
-I released Entropy Pack Stamper, a small deterministic tool for packaging and verifying operator-supplied inputs.
+I released Authored Pack, a small deterministic pack/verify tool for humans and agents.
 
 The point is not “AI magic” or a grand security story. The point is a legible artifact: a pack with a canonical manifest, a receipt, stable rooted identity, and a clear verify step.
 
@@ -46,7 +46,7 @@ Public v1 is deterministic pack/verify only. Sealed mode is still future design 
 
 What it is:
 - a small deterministic tool
-- for packaging and verifying operator-supplied inputs
+- for packaging and verifying normal folders or deliberately staged authored sources
 - with legible packs, stable roots, and receipts
 
 What it is not:
@@ -93,7 +93,7 @@ Sequence:
 6. End on the pack directory contents or README top block.
 
 Narration / caption line:
-- “A small deterministic tool for packaging and verifying operator-supplied inputs.”
+- “A small deterministic tool for packaging and verifying normal folders or deliberately staged authored sources.”
 
 Avoid:
 - seed demos

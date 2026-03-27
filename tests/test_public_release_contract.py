@@ -34,7 +34,7 @@ class TestPublicReleaseContract(unittest.TestCase):
     def test_sealed_architecture_doc_is_marked_future_only(self) -> None:
         text = (ROOT / "docs" / "SEALED_PACK_ARCHITECTURE.md").read_text(encoding="utf-8")
         self.assertIn("future design only", text)
-        self.assertIn("not implemented in EPS v1.0.0", text)
+        self.assertIn("not implemented in Authored Pack v1.0.0", text)
 
     def test_ci_workflow_exists_for_pytest_and_cli_help(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
@@ -71,7 +71,18 @@ class TestPublicReleaseContract(unittest.TestCase):
         text = (ROOT / "docs" / "PUBLIC_COPY_ASSETS.md").read_text(encoding="utf-8")
         self.assertNotIn("prove what bytes were packaged", text)
         self.assertNotIn("entropy-bearing inputs", text)
+        self.assertNotIn("operator-supplied inputs", text)
         self.assertNotIn("Repo + demo: add link", text)
+
+    def test_release_notes_do_not_reintroduce_operator_input_positioning(self) -> None:
+        text = (ROOT / "docs" / "RELEASE_NOTES_v1.0.0.md").read_text(encoding="utf-8")
+        self.assertNotIn("operator-supplied inputs", text)
+
+    def test_tui_public_strings_do_not_reintroduce_entropy_positioning(self) -> None:
+        text = (ROOT / "bin" / "eps.py").read_text(encoding="utf-8")
+        self.assertNotIn("auditable operator-provided entropy", text)
+        self.assertNotIn("write entropy source audit into pack", text)
+        self.assertNotIn("operator-supplied inputs", text)
 
     def test_tui_help_hides_legacy_insane_alias_but_parser_still_accepts_it(self) -> None:
         help_proc = subprocess.run(
@@ -82,8 +93,10 @@ class TestPublicReleaseContract(unittest.TestCase):
             text=True,
         )
         self.assertEqual(help_proc.returncode, 0, msg=help_proc.stderr)
+        self.assertIn("Authored Pack", help_proc.stdout)
         self.assertIn("--noisy", help_proc.stdout)
         self.assertNotIn("--insane", help_proc.stdout)
+        self.assertNotIn("operator-provided entropy", help_proc.stdout)
 
         insane_proc = subprocess.run(
             [sys.executable, "-B", "bin/eps.py", "--insane"],

@@ -1,41 +1,41 @@
 # Sealed Pack Architecture
 
 Date: 2026-03-22
-Status: future design only; not implemented in EPS v1.0.0
-Scope: define the next object model for secret-preserving EPS packs without changing current runtime behavior
+Status: future design only; not implemented in Authored Pack v1.0.0
+Scope: define the next object model for secret-preserving Authored Pack packs without changing current runtime behavior
 
 ## 1. Product Boundary
 
-EPS is not an RNG.
+Authored Pack is not an RNG.
 
 The correct framing is:
 - the operator brings entropy-bearing or secret input material
-- EPS contributes deterministic packaging, hashing, commitment, schema, verification, and optional derivation
-- EPS may then emit agent-ingestion instructions against that packaged material
+- Authored Pack contributes deterministic packaging, hashing, commitment, schema, verification, and optional derivation
+- Authored Pack may then emit agent-ingestion instructions against that packaged material
 
 The correct one-line description is:
 
-> EPS turns operator-supplied secret material into a legible, verifiable pack, and can optionally seal that pack for break-glass use.
+> Authored Pack turns operator-supplied secret material into a legible, verifiable pack, and can optionally seal that pack for break-glass use.
 
-That means EPS should separate two modes clearly:
+That means Authored Pack should separate two modes clearly:
 - `public deterministic pack`: verifiable and reproducible, not secret by default
 - `sealed break-glass pack`: confidentiality-preserving, tamper-evident, not publicly reproducible in the same way
 
 ## 2. Problem Statement
 
-Current public EPS packs are suitable for:
+Current public Authored Pack packs are suitable for:
 - deterministic packaging
 - internal consistency checks
 - operator auditability
 - reproducible KDF output when publication is acceptable
 
-Current public EPS packs are not suitable for:
+Current public Authored Pack packs are not suitable for:
 - secrecy after publication
 - claims of fresh randomness generation
 - first-open proof
 - provenance claims stronger than self-consistency
 
-If EPS is going to support "break glass to use" packs, the design must add a separate sealed envelope instead of stretching the current public receipt model.
+If Authored Pack is going to support "break glass to use" packs, the design must add a separate sealed envelope instead of stretching the current public receipt model.
 
 ## 3. Design Goals
 
@@ -59,7 +59,7 @@ This design does not promise:
 
 ### 5.1 Public Deterministic Pack
 
-This is the current EPS family:
+This is the current Authored Pack family:
 - root and receipt can be public
 - verification means self-consistency of the presented artifact
 - any deterministic derived seed material is reproducible from disclosed derivation inputs
@@ -84,7 +84,7 @@ Use this mode when:
 
 ## 6. Core Principle: Split Public Commitment From Secret Contents
 
-Current public EPS roots identify a manifest that may disclose enough to reproduce derived seed material.
+Current public Authored Pack roots identify a manifest that may disclose enough to reproduce derived seed material.
 That is acceptable only for public deterministic packs.
 
 Sealed mode must split the world into:
@@ -144,7 +144,7 @@ Suggested `inner_manifest.json` fields:
 - optional `source_audit_root`
 - optional `agent_schema_ref`
 
-The inner envelope can use the same discipline as current EPS:
+The inner envelope can use the same discipline as current Authored Pack:
 - canonical JSON
 - deterministic hashing
 - explicit artifact records
@@ -153,7 +153,7 @@ But its root remains private because the whole envelope is encrypted.
 
 ## 8. Identity Model
 
-EPS should stop forcing one root to mean everything.
+Authored Pack should stop forcing one root to mean everything.
 
 Sealed mode should use at least three identities:
 
@@ -200,7 +200,7 @@ For sealed packs, the simpler approach is:
 
 That preserves the principle the user stated:
 - operator brings entropy-bearing secret inputs
-- EPS contributes rigor and hashing
+- Authored Pack contributes rigor and hashing
 - the result can remain secret until break-glass decryption
 
 A stronger variant is to allow an additional operator-held secret or hardware-held secret to participate in derivation, but that should be a separate versioned mode, not quietly mixed into the first sealed design.

@@ -68,7 +68,7 @@ class TestTuiAuditQuickWins(unittest.TestCase):
         m = self.m
         stdscr = RecordingStdScr(inputs=[ord("a"), ord("b"), ord("c"), 1, ord("X"), 5, ord("Y"), 10])
 
-        result = m._prompt_str_curses(stdscr, "(EPS) path", default="")
+        result = m._prompt_str_curses(stdscr, "(Authored Pack) path", default="")
 
         self.assertEqual(result, "XabcY")
 
@@ -76,7 +76,7 @@ class TestTuiAuditQuickWins(unittest.TestCase):
         m = self.m
         stdscr = RecordingStdScr(inputs=[ord("a"), ord("b"), ord("c"), ord(" "), ord("d"), ord("e"), ord("f"), 21, ord("x"), 10])
 
-        result = m._prompt_str_curses(stdscr, "(EPS) note", default="")
+        result = m._prompt_str_curses(stdscr, "(Authored Pack) note", default="")
 
         self.assertEqual(result, "x")
 
@@ -84,7 +84,7 @@ class TestTuiAuditQuickWins(unittest.TestCase):
         m = self.m
         stdscr = RecordingStdScr(inputs=[ord("a"), ord("b"), ord("c"), ord(" "), ord("d"), ord("e"), ord("f"), 23, ord("x"), 10])
 
-        result = m._prompt_str_curses(stdscr, "(EPS) note", default="")
+        result = m._prompt_str_curses(stdscr, "(Authored Pack) note", default="")
 
         self.assertEqual(result, "abcx")
 
@@ -189,7 +189,7 @@ class TestTuiAuditQuickWins(unittest.TestCase):
 
         m._action_entropy_tap(state, stdscr)
 
-        self.assertEqual(state.status, "Entropy collected.")
+        self.assertEqual(state.status, "Authored source collected.")
         self.assertEqual(len(state.entropy_sources), 1)
         self.assertEqual(state.stamp_config.input_mode, "sources")
         self.assertEqual(state.stamp_config.input_path, "")

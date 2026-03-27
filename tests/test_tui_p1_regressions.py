@@ -197,10 +197,12 @@ class TestTuiP1Regressions(unittest.TestCase):
             self.assertTrue(state.viewer is not None and any("derived_seed.hex" in line for line in state.viewer.lines))
             self.assertFalse(any("derived_seed.hex" in line for line in state.log_lines))
             self.assertFalse(any("derived_seed.b64" in line for line in state.log_lines))
-            self.assertIn("(EPS) derive seed", bool_prompts)
+            self.assertIn("(Authored Pack) derive seed", bool_prompts)
+            self.assertIn("(Authored Pack) write authored sources audit into pack", bool_prompts)
+            self.assertFalse(any("write entropy source audit into pack" in label for label in bool_prompts))
             self.assertFalse(any("LOCKDOWN" in label for label in bool_prompts))
             self.assertTrue(any("Seed path: root-only seed" in line for line in state.log_lines))
-            self.assertTrue(any("staged entropy sources are not affecting the seed" in line for line in state.log_lines))
+            self.assertTrue(any("staged authored sources do not affect the root-only seed" in line for line in state.log_lines))
 
     def test_action_stamp_finalizes_receipt_before_zip_and_evidence(self) -> None:
         m = self.m
@@ -385,7 +387,7 @@ class TestTuiP1Regressions(unittest.TestCase):
     def test_prompt_str_curses_returns_none_on_escape(self) -> None:
         m = self.m
         stdscr = DummyStdScr(inputs=[27])
-        self.assertIsNone(m._prompt_str_curses(stdscr, "(EPS) path", default="."))
+        self.assertIsNone(m._prompt_str_curses(stdscr, "(Authored Pack) path", default="."))
 
     def test_run_stamp_from_config_accepts_finder_escaped_folder_path(self) -> None:
         m = self.m

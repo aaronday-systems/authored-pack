@@ -243,7 +243,8 @@ class TestCliBinmodeGuards(unittest.TestCase):
             text=True,
         )
         self.assertEqual(proc.returncode, 0)
-        self.assertIn("Entropy Pack Stamper", proc.stdout)
+        self.assertIn("usage: eps", proc.stdout)
+        self.assertIn("Authored Pack", proc.stdout)
 
     def test_pyproject_declares_eps_console_script(self) -> None:
         import tomllib
@@ -251,6 +252,7 @@ class TestCliBinmodeGuards(unittest.TestCase):
         pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
         data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
         scripts = data.get("project", {}).get("scripts", {})
+        self.assertEqual(scripts.get("authored-pack"), "eps.cli:main")
         self.assertEqual(scripts.get("eps"), "eps.cli:main")
 
     def test_stamp_bin_rejects_overlapping_entropy_bin_and_out(self) -> None:

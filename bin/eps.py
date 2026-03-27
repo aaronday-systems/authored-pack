@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Minimal curses TUI for Entropy Pack Stamper (EPS).
+Minimal curses TUI for Authored Pack.
 
 Profiles:
 - Calm (default): workflow-first, quiet, and readable for busy or nervous humans.
@@ -59,7 +59,7 @@ from eps import __version__
 from eps.pack import DEFAULT_MAX_MANIFEST_BYTES, stamp_pack, verify_pack
 
 
-APP_NAME = "ENTROPY PACK STAMPER"
+APP_NAME = "AUTHORED PACK"
 APP_VERSION = f"v{__version__}"
 EPS_TUI_TITLE = "Main TUI"
 EPS_TUI_VERSION = APP_VERSION
@@ -288,7 +288,7 @@ def _artifact_exclude_picker(stdscr, state: "AppState", *, input_dir: Path, incl
                     excludes.add(rel)
             continue
         if ch == ord("/"):
-            q2 = _prompt_str_curses(stdscr, "(EPS) filter substring", default=query, max_len=200)
+            q2 = _prompt_str_curses(stdscr, "(Authored Pack) filter substring", default=query, max_len=200)
             if q2 is None:
                 continue
             query = q2.strip()
@@ -1118,7 +1118,7 @@ def _prepare_drop_actions(
 
 def _apply_drop_paths(state: AppState, paths: Sequence[str], *, max_apply: Optional[int] = None) -> List[str]:
     """
-    Apply dropped paths: set default input dir and/or import entropy sources.
+    Apply dropped paths: set default input dir and/or import authored sources.
     Returns log lines for what happened.
     """
     actions = _prepare_drop_actions(paths, max_apply=max_apply)
@@ -1252,7 +1252,7 @@ def _dropzone_preview(state: AppState, *, width: int, height: int) -> List[str]:
     lines.append("")
     lines.append("2) Watched drop folder (deterministic):")
     lines.append(f"   Drop items into: {_display_path(d.resolve() if d.exists() else d, max_len=max(24, width - 18))}")
-    lines.append("   EPS will auto-detect new items and import them.")
+    lines.append("   Authored Pack will auto-detect new items and import them.")
     lines.append(f"   Items currently in folder: {state.drop_last_count}")
     if state.drop_last_names:
         # Show a few to validate the user dropped into the right place.
@@ -1752,7 +1752,7 @@ def _quickstart_lines() -> List[str]:
     return [
         "START // first clean success",
         "",
-        "Turn a folder or staged sources into a verifiable pack.",
+        "Authored Pack turns a folder or staged sources into a verifiable pack.",
         "Human path: stamp a normal directory, then verify the resulting pack.",
         "",
         "Primary action:",
@@ -1765,7 +1765,7 @@ def _quickstart_lines() -> List[str]:
         "",
         "Trust boundary:",
         "Use OS randomness for fresh secrets.",
-        "EPS is for stable pack roots, receipts, and deliberate operator input.",
+        "Authored Pack is for stable pack roots, receipts, and deliberate operator input.",
     ]
 
 
@@ -1847,7 +1847,7 @@ def _stamp_preview_lines(state: AppState, *, width: int, height: int) -> List[st
         return _stamp_panel_lines(state, width=width, height=height)
     cfg = state.stamp_config
     input_path = _effective_stamp_input(state, cfg) or "not set"
-    input_label = "staged sources" if cfg.input_mode == "sources" else _display_path(Path(input_path).expanduser() if input_path not in ("", "@sources") else input_path, max_len=44) if input_path not in ("", "@sources") else input_path
+    input_label = "Authored Sources" if cfg.input_mode == "sources" else _display_path(Path(input_path).expanduser() if input_path not in ("", "@sources") else input_path, max_len=44) if input_path not in ("", "@sources") else input_path
     output_label = _display_path(Path(_effective_stamp_output(state, cfg)).expanduser(), max_len=44)
     return [
         "STAMP // auditable file set -> verifiable pack",
@@ -1891,8 +1891,8 @@ def _help_summary_lines(_state: AppState) -> List[str]:
     return [
         "HELP // curated operator guide",
         "",
-        "what EPS is",
-        "EPS is a small deterministic pack/verify tool for operator-supplied inputs.",
+        "what Authored Pack is",
+        "Authored Pack is a small deterministic pack/verify tool for humans and agents.",
         "",
         "human workflow",
         "1. Stage sources or choose a folder.",
@@ -2474,8 +2474,8 @@ def _fx_no_entropy(stdscr, state: AppState, *, duration_s: float = 5.0, fps: int
         r" \\/           \\/ ",
         r" /\\           /\\ ",
     ]
-    msg1 = "NO STAMPING WITHOUT ENTROPY"
-    msg2 = "Add entropy sources first (photos/text/tap or imported paths)."
+    msg1 = "NO STAMPING WITHOUT SOURCES"
+    msg2 = "Add authored sources first (photos/text/tap or imported paths)."
 
     frames = max(1, int(round(float(duration_s) * int(fps))))
     cx = cols // 2
@@ -2853,15 +2853,15 @@ def _entropy_sources_preview(state: AppState, *, width: int, height: int) -> Lis
     """
     min_n = int(state.entropy_min_sources)
     eligible = len(_lockdown_eligible_sources(state.entropy_sources))
-    header = "SOURCES // stage photos, text, or taps"
+    header = "AUTHORED SOURCES // stage photos, text, or taps"
     lines: List[str] = [header, _source_slot_rail_line(state, width=width), ""]
     if state.focus == "entropy" and state.entropy_sources:
-        lines.append("List focus. Up/Down moves sources. Tab returns to menu.")
+        lines.append("List focus. Up/Down moves authored sources. Tab returns to menu.")
     else:
         lines.append("Menu focus. A adds photos, T adds text, Space records taps, P imports paths.")
     lines.append("")
     if not state.entropy_sources:
-        lines.append("No sources yet.")
+        lines.append("No authored sources yet.")
         lines.append("Add a photo, text note, or tap sample.")
         lines.append("Advanced: watched folder intake is still available.")
         lines.append(f"Drop folder: {_display_path(state.drop_dir, max_len=max(24, width - 14))}")
@@ -2869,7 +2869,7 @@ def _entropy_sources_preview(state: AppState, *, width: int, height: int) -> Lis
     need = max(0, min_n - eligible)
     if need > 0:
         lines.append(f"Need {need} more eligible unique source(s) for mixed-source seed.")
-        lines.append(f"Tap sources need >= {LOCKDOWN_MIN_TAP_EVENTS} events.")
+        lines.append(f"Authored sources need >= {LOCKDOWN_MIN_TAP_EVENTS} events.")
         lines.append("")
     if state.last_input_dir is not None:
         lines.append(f"Current folder input: {_display_path(state.last_input_dir, max_len=max(24, width - 22))}")
@@ -3071,7 +3071,7 @@ def _run_outside_curses(stdscr, fn: Callable[[], None]) -> None:
         fn()
     finally:
         try:
-            input("\n(EPS) Press Enter to return... ")
+            input("\n(Authored Pack) Press Enter to return... ")
         except EOFError:
             pass
         try:
@@ -3240,7 +3240,7 @@ def _identify_image_dims(path: Path) -> Optional[str]:
 
 
 def _action_entropy_add_photos(state: AppState, stdscr) -> None:
-    p_s = _prompt_str_curses(stdscr, "(EPS) photo path (file or dir)", default=".")
+    p_s = _prompt_str_curses(stdscr, "(Authored Pack) photo path (file or dir)", default=".")
     if p_s is None:
         state.status = "Ready."
         state.log_lines = ["Add photos cancelled."]
@@ -3248,7 +3248,7 @@ def _action_entropy_add_photos(state: AppState, stdscr) -> None:
     p = Path(_normalize_single_path_input(p_s)).expanduser()
     if not p.exists():
         state.status = "Failed."
-        state.log_lines = [f"Entropy add failed: not found: {p}"]
+        state.log_lines = [f"Authored source add failed: not found: {p}"]
         return
     state.status = "Scanning photos..."
     state.log_lines = [f"source: {_display_path(p, max_len=44)}"]
@@ -3265,7 +3265,7 @@ def _action_entropy_add_photos(state: AppState, stdscr) -> None:
         sampled_from_dir = True
     else:
         state.status = "Failed."
-        state.log_lines = [f"Entropy add failed: not a file/dir: {p}"]
+        state.log_lines = [f"Authored source add failed: not a file/dir: {p}"]
         return
 
     added = 0
@@ -3300,12 +3300,12 @@ def _action_entropy_add_photos(state: AppState, stdscr) -> None:
 
 
 def _action_entropy_add_text(state: AppState, stdscr) -> None:
-    label = _prompt_str_curses(stdscr, "(EPS) text label", default="note")
+    label = _prompt_str_curses(stdscr, "(Authored Pack) text label", default="note")
     if label is None:
         state.status = "Ready."
         state.log_lines = ["Add text cancelled."]
         return
-    text = _prompt_str_curses(stdscr, "(EPS) text (one line)", default="", max_len=4096)
+    text = _prompt_str_curses(stdscr, "(Authored Pack) text (one line)", default="", max_len=4096)
     if text is None:
         state.status = "Ready."
         state.log_lines = ["Add text cancelled."]
@@ -3351,7 +3351,7 @@ def _action_entropy_tap(state: AppState, stdscr) -> None:
                 ch = -1
             if ch == -1:
                 # Update status without adding entropy.
-                state.status = f"Tap entropy: {count}/{target} ..."
+                state.status = f"Authored source capture: {count}/{target} ..."
                 draw(stdscr, state)
                 continue
             if ch == 27:  # ESC
@@ -3365,7 +3365,7 @@ def _action_entropy_tap(state: AppState, stdscr) -> None:
                 sample_events.append((dt_us, code))
             if count >= target:
                 break
-            state.status = f"Tap entropy: {count}/{target} ..."
+            state.status = f"Authored source capture: {count}/{target} ..."
             draw(stdscr, state)
     finally:
         try:
@@ -3378,7 +3378,7 @@ def _action_entropy_tap(state: AppState, stdscr) -> None:
     if count < int(LOCKDOWN_MIN_TAP_EVENTS):
         state.status = "Failed."
         state.log_lines = [
-            "Tap entropy rejected: insufficient events.",
+            "Authored source capture rejected: insufficient events.",
             f"Need >= {LOCKDOWN_MIN_TAP_EVENTS}, got {count}.",
         ]
         return
@@ -3389,9 +3389,9 @@ def _action_entropy_tap(state: AppState, stdscr) -> None:
     # Reward hook: stub out where we will play a sound effect later.
     _trigger_interaction_flash(state, drop_zone=False)
     state.reward_ticks = max(state.reward_ticks, 18)
-    state.status = "Entropy collected."
+    state.status = "Authored source collected."
     state.log_lines = [
-        f"Entropy collected: tap events={count}",
+        f"Authored source collected: tap events={count}",
         f"tap_sha256: {digest}",
         "(SFX stub) jackpot",
     ]
@@ -3465,7 +3465,7 @@ def _validated_photo_source_path(s: EntropySource, *, max_bytes: int = 100 * 102
 
 def _build_sources_payload_dir(sources: Sequence[EntropySource]) -> Path:
     """
-    Materialize staged entropy sources into a real directory so they can be stamped as artifacts.
+    Materialize staged authored sources into a real directory so they can be stamped as artifacts.
     Photos are copied; text/tap become files. The caller owns cleanup.
     """
     td = Path(tempfile.mkdtemp(prefix="eps_payload_sources_"))
@@ -3648,9 +3648,9 @@ def _stamp_panel_cfg(state: AppState) -> StampConfig:
 def _edit_stamp_text_row(state: AppState, stdscr, key: str) -> None:
     cfg = _stamp_panel_cfg(state)
     prompts = {
-        "pack_id": "(EPS) label (optional)",
-        "notes": "(EPS) note (optional)",
-        "created_at_utc": "(EPS) timestamp UTC (optional)",
+        "pack_id": "(Authored Pack) label (optional)",
+        "notes": "(Authored Pack) note (optional)",
+        "created_at_utc": "(Authored Pack) timestamp UTC (optional)",
     }
     defaults = {
         "pack_id": cfg.pack_id,
@@ -3735,7 +3735,7 @@ def _activate_stamp_panel_row(state: AppState, stdscr) -> None:
 
 
 def _action_sources_import_paths(state: AppState, stdscr) -> None:
-    raw = _prompt_str_curses(stdscr, "(EPS) import path(s)", default=str(state.last_input_dir or ""), max_len=4096)
+    raw = _prompt_str_curses(stdscr, "(Authored Pack) import path(s)", default=str(state.last_input_dir or ""), max_len=4096)
     if raw is None:
         state.status = "Ready."
         state.log_lines = ["Import cancelled."]
@@ -3758,7 +3758,7 @@ def _action_sources_import_paths(state: AppState, stdscr) -> None:
 def _edit_stamp_input(state: AppState, stdscr, cfg: Optional[StampConfig] = None) -> bool:
     cfg = cfg or state.stamp_config
     default = "@sources" if cfg.input_mode == "sources" else (_effective_stamp_input(state, cfg) or ".")
-    raw = _prompt_str_curses(stdscr, "(EPS) stamp input folder or @sources", default=default)
+    raw = _prompt_str_curses(stdscr, "(Authored Pack) stamp input folder or @sources", default=default)
     if raw is None:
         state.status = "Ready."
         return False
@@ -3775,7 +3775,7 @@ def _edit_stamp_input(state: AppState, stdscr, cfg: Optional[StampConfig] = None
 
 def _edit_stamp_output(state: AppState, stdscr, cfg: Optional[StampConfig] = None) -> bool:
     cfg = cfg or state.stamp_config
-    raw = _prompt_str_curses(stdscr, "(EPS) stamp output folder", default=_effective_stamp_output(state, cfg))
+    raw = _prompt_str_curses(stdscr, "(Authored Pack) stamp output folder", default=_effective_stamp_output(state, cfg))
     if raw is None:
         state.status = "Ready."
         return False
@@ -3786,25 +3786,25 @@ def _edit_stamp_output(state: AppState, stdscr, cfg: Optional[StampConfig] = Non
 
 def _edit_stamp_advanced(state: AppState, stdscr, cfg: Optional[StampConfig] = None) -> None:
     cfg = cfg or state.stamp_config
-    pack_id = _prompt_str_curses(stdscr, "(EPS) label (optional)", default=cfg.pack_id)
+    pack_id = _prompt_str_curses(stdscr, "(Authored Pack) label (optional)", default=cfg.pack_id)
     if pack_id is None:
         state.status = "Ready."
         return
-    notes = _prompt_str_curses(stdscr, "(EPS) note (optional)", default=cfg.notes)
+    notes = _prompt_str_curses(stdscr, "(Authored Pack) note (optional)", default=cfg.notes)
     if notes is None:
         state.status = "Ready."
         return
-    created_at = _prompt_str_curses(stdscr, "(EPS) timestamp UTC (optional)", default=cfg.created_at_utc)
+    created_at = _prompt_str_curses(stdscr, "(Authored Pack) timestamp UTC (optional)", default=cfg.created_at_utc)
     if created_at is None:
         state.status = "Ready."
         return
-    include_hidden = _prompt_bool_curses(stdscr, "(EPS) include hidden files", default=cfg.include_hidden)
+    include_hidden = _prompt_bool_curses(stdscr, "(Authored Pack) include hidden files", default=cfg.include_hidden)
     if include_hidden is None:
         state.status = "Ready."
         return
     exclude_picker = cfg.exclude_picker
     if cfg.input_mode != "sources":
-        exclude_picker = _prompt_bool_curses(stdscr, "(EPS) pick files to exclude before stamp", default=cfg.exclude_picker)
+        exclude_picker = _prompt_bool_curses(stdscr, "(Authored Pack) pick files to exclude before stamp", default=cfg.exclude_picker)
         if exclude_picker is None:
             state.status = "Ready."
             return
@@ -3814,22 +3814,22 @@ def _edit_stamp_advanced(state: AppState, stdscr, cfg: Optional[StampConfig] = N
     write_sources = cfg.write_sources
     if cfg.derive_seed:
         if state.entropy_sources:
-            mix_sources_v = _prompt_bool_curses(stdscr, "(EPS) use staged sources in seed", default=cfg.mix_sources)
+            mix_sources_v = _prompt_bool_curses(stdscr, "(Authored Pack) use staged sources in seed", default=cfg.mix_sources)
             if mix_sources_v is None:
                 state.status = "Ready."
                 return
             mix_sources = bool(mix_sources_v)
-        write_seed_v = _prompt_bool_curses(stdscr, "(EPS) write seed files (chmod 600)", default=cfg.write_seed)
+        write_seed_v = _prompt_bool_curses(stdscr, "(Authored Pack) write seed files (chmod 600)", default=cfg.write_seed)
         if write_seed_v is None:
             state.status = "Ready."
             return
-        show_seed_v = _prompt_bool_curses(stdscr, "(EPS) show seed in UI", default=cfg.show_seed)
+        show_seed_v = _prompt_bool_curses(stdscr, "(Authored Pack) show seed in UI", default=cfg.show_seed)
         if show_seed_v is None:
             state.status = "Ready."
             return
         write_sources_v = _prompt_bool_curses(
             stdscr,
-            "(EPS) write entropy source audit into pack",
+            "(Authored Pack) write authored sources audit into pack",
             default=cfg.write_sources or bool(mix_sources),
         )
         if write_sources_v is None:
@@ -3851,7 +3851,7 @@ def _edit_stamp_advanced(state: AppState, stdscr, cfg: Optional[StampConfig] = N
 
 
 def _edit_verify_path(state: AppState, stdscr) -> bool:
-    raw = _prompt_str_curses(stdscr, "(EPS) pack path (dir or .zip)", default=_effective_verify_path(state) or "./out")
+    raw = _prompt_str_curses(stdscr, "(Authored Pack) pack path (dir or .zip)", default=_effective_verify_path(state) or "./out")
     if raw is None:
         state.status = "Ready."
         return False
@@ -3901,7 +3901,7 @@ def _run_stamp_plan(
         if input_choice == "@sources":
             if not state.entropy_sources:
                 state.status = "Failed."
-                state.log_lines = ["@sources selected, but no entropy sources are staged.", "Go to Sources and add or import some first."]
+                state.log_lines = ["@sources selected, but no authored sources are staged.", "Go to Sources and add or import some first."]
                 try:
                     state.selected = state.menu.index("Sources")
                 except ValueError:
@@ -4056,15 +4056,15 @@ def _run_stamp_plan(
     if seed_path_label:
         state.log_lines.append(f"Seed path: {seed_path_label}")
         if seed_path_label == "root-only seed" and state.entropy_sources:
-            state.log_lines.append("Warning: staged entropy sources are not affecting the seed.")
+            state.log_lines.append("Warning: staged authored sources do not affect the root-only seed.")
     if mix_sources and pool_sha:
-        state.log_lines.append(f"entropy_sources_staged_count: {len(state.entropy_sources)}")
-        state.log_lines.append(f"entropy_sources_eligible_count: {len(mixed_sources)}")
-        state.log_lines.append(f"entropy_sources_sha256: {pool_sha}")
+        state.log_lines.append(f"authored_sources_staged_count: {len(state.entropy_sources)}")
+        state.log_lines.append(f"authored_sources_eligible_count: {len(mixed_sources)}")
+        state.log_lines.append(f"authored_sources_sha256: {pool_sha}")
     for w in audit_warnings:
-        state.log_lines.append(f"warning: entropy_sources audit: {w}")
+        state.log_lines.append(f"warning: authored_sources audit: {w}")
     if audit_dir_path is not None:
-        state.log_lines.append(f"entropy_sources_dir: {_display_path(audit_dir_path, max_len=44)}")
+        state.log_lines.append(f"authored_sources_dir: {_display_path(audit_dir_path, max_len=44)}")
     if zip_path is not None:
         state.log_lines.append(f"entropy_pack_zip: {_display_path(zip_path, max_len=44)}")
     if evidence_path is not None:
@@ -4083,7 +4083,7 @@ def _run_stamp_from_config(state: AppState, stdscr) -> None:
     else:
         input_s = _effective_stamp_input(state)
         if not input_s:
-            state.status = "Set an input folder or switch to staged sources before stamping."
+            state.status = "Set an input folder or switch to Authored Sources before stamping."
             return
     out_s = _effective_stamp_output(state)
     _run_stamp_plan(
@@ -4118,66 +4118,66 @@ def _action_stamp(state: AppState, stdscr) -> None:
     cfg = state.stamp_config
     default_out = _effective_stamp_output(state)
     default_in = "@sources" if cfg.input_mode == "sources" else (_effective_stamp_input(state) or ".")
-    input_s = _prompt_str_curses(stdscr, "(EPS) input folder or @sources", default=default_in)
+    input_s = _prompt_str_curses(stdscr, "(Authored Pack) input folder or @sources", default=default_in)
     if input_s is None:
         state.status = "Ready."
         state.log_lines = ["Stamp cancelled."]
         return
-    out_s = _prompt_str_curses(stdscr, "(EPS) output folder", default=default_out)
+    out_s = _prompt_str_curses(stdscr, "(Authored Pack) output folder", default=default_out)
     if out_s is None:
         state.status = "Ready."
         state.log_lines = ["Stamp cancelled."]
         return
-    pack_id_s = _prompt_str_curses(stdscr, "(EPS) label (optional)", default=cfg.pack_id)
+    pack_id_s = _prompt_str_curses(stdscr, "(Authored Pack) label (optional)", default=cfg.pack_id)
     if pack_id_s is None:
         state.status = "Ready."
         state.log_lines = ["Stamp cancelled."]
         return
-    notes_s = _prompt_str_curses(stdscr, "(EPS) note (optional)", default=cfg.notes)
+    notes_s = _prompt_str_curses(stdscr, "(Authored Pack) note (optional)", default=cfg.notes)
     if notes_s is None:
         state.status = "Ready."
         state.log_lines = ["Stamp cancelled."]
         return
-    created_at_s = _prompt_str_curses(stdscr, "(EPS) timestamp UTC (optional)", default=cfg.created_at_utc)
+    created_at_s = _prompt_str_curses(stdscr, "(Authored Pack) timestamp UTC (optional)", default=cfg.created_at_utc)
     if created_at_s is None:
         state.status = "Ready."
         state.log_lines = ["Stamp cancelled."]
         return
-    include_hidden = _prompt_bool_curses(stdscr, "(EPS) include hidden files", default=cfg.include_hidden)
+    include_hidden = _prompt_bool_curses(stdscr, "(Authored Pack) include hidden files", default=cfg.include_hidden)
     if include_hidden is None:
         state.status = "Ready."
         state.log_lines = ["Stamp cancelled."]
         return
     exclude_picker = False
     if input_s.strip() != "@sources":
-        exclude_picker = _prompt_bool_curses(stdscr, "(EPS) pick files to exclude before stamp", default=cfg.exclude_picker)
+        exclude_picker = _prompt_bool_curses(stdscr, "(Authored Pack) pick files to exclude before stamp", default=cfg.exclude_picker)
         if exclude_picker is None:
             state.status = "Ready."
             state.log_lines = ["Stamp cancelled."]
             return
-    zip_pack = _prompt_bool_curses(stdscr, "(EPS) write entropy_pack.zip", default=cfg.zip_pack)
+    zip_pack = _prompt_bool_curses(stdscr, "(Authored Pack) write entropy_pack.zip", default=cfg.zip_pack)
     if zip_pack is None:
         state.status = "Ready."
         state.log_lines = ["Stamp cancelled."]
         return
-    derive_seed = _prompt_bool_curses(stdscr, "(EPS) derive seed", default=cfg.derive_seed)
+    derive_seed = _prompt_bool_curses(stdscr, "(Authored Pack) derive seed", default=cfg.derive_seed)
     if derive_seed is None:
         state.status = "Ready."
         state.log_lines = ["Stamp cancelled."]
         return
     mix_sources = False
     if derive_seed and state.entropy_sources:
-        mix_sources = _prompt_bool_curses(stdscr, "(EPS) use staged sources in seed", default=cfg.mix_sources)
+        mix_sources = _prompt_bool_curses(stdscr, "(Authored Pack) use staged sources in seed", default=cfg.mix_sources)
         if mix_sources is None:
             state.status = "Ready."
             state.log_lines = ["Stamp cancelled."]
             return
-    write_seed = _prompt_bool_curses(stdscr, "(EPS) write seed files (chmod 600)", default=cfg.write_seed) if derive_seed else False
+    write_seed = _prompt_bool_curses(stdscr, "(Authored Pack) write seed files (chmod 600)", default=cfg.write_seed) if derive_seed else False
     if derive_seed and write_seed is None:
         state.status = "Ready."
         state.log_lines = ["Stamp cancelled."]
         return
-    show_seed = _prompt_bool_curses(stdscr, "(EPS) show seed in UI", default=cfg.show_seed) if derive_seed else False
+    show_seed = _prompt_bool_curses(stdscr, "(Authored Pack) show seed in UI", default=cfg.show_seed) if derive_seed else False
     if derive_seed and show_seed is None:
         state.status = "Ready."
         state.log_lines = ["Stamp cancelled."]
@@ -4186,7 +4186,7 @@ def _action_stamp(state: AppState, stdscr) -> None:
     write_sources = (
         _prompt_bool_curses(
             stdscr,
-            "(EPS) write entropy source audit into pack",
+            "(Authored Pack) write authored sources audit into pack",
             default=write_sources_default,
         )
         if derive_seed
@@ -4199,7 +4199,7 @@ def _action_stamp(state: AppState, stdscr) -> None:
     evidence_default = bool(derive_seed)
     evidence_bundle = _prompt_bool_curses(
         stdscr,
-        "(EPS) write evidence bundle zip",
+        "(Authored Pack) write evidence bundle zip",
         default=cfg.evidence_bundle or evidence_default,
     )
     if evidence_bundle is None:
@@ -4320,14 +4320,14 @@ def _action_verify(state: AppState, stdscr) -> None:
     state.status = "Verify: configure..."
     state.log_lines = []
     default = _effective_verify_path(state) or "./out"
-    pack_s = _prompt_str_curses(stdscr, "(EPS) pack path (dir or .zip)", default=default)
+    pack_s = _prompt_str_curses(stdscr, "(Authored Pack) pack path (dir or .zip)", default=default)
     if pack_s is None:
         state.status = "Ready."
         state.log_lines = ["Verify cancelled."]
         return
     allow_large_manifest = _prompt_bool_curses(
         stdscr,
-        "(EPS) allow large manifest.json (32 MiB cap)",
+        "(Authored Pack) allow large manifest.json (32 MiB cap)",
         default=bool(state.verify_config.allow_large_manifest),
     )
     if allow_large_manifest is None:
@@ -4485,7 +4485,7 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
                 state.focus = "entropy"
                 state.status = "Ready."
             else:
-                state.status = "Add a source with A, T, Space, or P."
+                state.status = "Add an authored source with A, T, Space, or P."
             return True
 
     if label == "Stamp":
@@ -4529,7 +4529,7 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
                 cfg.input_mode = "sources"
                 cfg.input_path = ""
             state.log_lines = []
-            state.status = f"Stamp input mode: {'staged sources' if cfg.input_mode == 'sources' else 'folder'}."
+            state.status = f"Stamp input mode: {'Authored Sources' if cfg.input_mode == 'sources' else 'folder'}."
             return True
         if ch in (ord("d"), ord("D")):
             cfg.derive_seed = not cfg.derive_seed
@@ -4671,7 +4671,7 @@ def run_tui(stdscr, *, insane: bool = False, godel_source: Optional[str] = None)
 def main(argv: Optional[Sequence[str]] = None) -> int:
     p = argparse.ArgumentParser(
         prog="eps-tui",
-        description="Calm-first TUI for auditable operator-provided entropy. Default is Calm Mode; Noisy Mode keeps the ceremony cues without changing pack semantics.",
+        description="Calm-first TUI for Authored Pack. Default is Calm Mode; Noisy Mode keeps the ceremony cues without changing pack semantics.",
     )
     p.add_argument("--mode", choices=("calm", "noisy"), default="calm", help="Start in calm or noisy mode (default: calm)")
     p.add_argument("--noisy", action="store_true", help="Start in Noisy Mode")

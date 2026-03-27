@@ -1,11 +1,11 @@
-# EPS v1.0.0 Release Notes
+# Authored Pack v1.0.0 Release Notes
 
 Date: 2026-03-22
 Status: public release target
 
 ## Release Summary
 
-EPS `v1.0.0` is the public deterministic core:
+Authored Pack `v1.0.0` is the public deterministic core:
 - `stamp`
 - `verify`
 - `stamp-bin`
@@ -17,17 +17,17 @@ This release does **not** introduce sealed break-glass runtime behavior. That wo
 
 ## Product Boundary
 
-EPS does not create entropy.
+Authored Pack does not create entropy.
 
-EPS packages, commits, and verifies operator-supplied entropy-bearing inputs, then can optionally derive reproducible material from rooted pack state.
+Authored Pack packages and verifies normal folders or deliberately staged authored sources, then can optionally derive reproducible material from rooted pack state.
 
-EPS is:
+Authored Pack is:
 - deterministic packaging
 - canonical hashing
 - verification
 - optional reproducible derivation
 
-EPS is not:
+Authored Pack is not:
 - an RNG
 - automatic secrecy
 - signed provenance

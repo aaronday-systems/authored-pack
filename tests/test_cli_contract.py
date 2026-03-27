@@ -65,7 +65,7 @@ class TestCliContract(unittest.TestCase):
         )
 
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
-        self.assertIn("eps stamp --input /ABS/PATH/TO/DIR --out ./out --json", proc.stdout)
+        self.assertIn("authored-pack stamp --input /ABS/PATH/TO/DIR --out ./out --json", proc.stdout)
         self.assertIn("stamp-bin is subtractive", proc.stdout)
 
     def test_verify_json_emits_failure_envelope(self) -> None:
@@ -367,14 +367,14 @@ class TestCliContract(unittest.TestCase):
         self.assertEqual(stderr, "")
         payload = json.loads(stdout)
         self.assertEqual(payload["ok"], False)
-        self.assertEqual(payload["command"], "eps")
+        self.assertEqual(payload["command"], "authored-pack")
 
     def test_bare_cli_prints_help(self) -> None:
         rc, stdout, stderr = self._run_cli([])
 
         self.assertEqual(rc, 0)
         self.assertEqual(stderr, "")
-        self.assertIn("usage: eps", stdout)
+        self.assertIn("usage: authored-pack", stdout)
         self.assertIn("First clean success", stdout)
 
     def test_cli_version_flag_prints_runtime_version(self) -> None:
@@ -382,7 +382,7 @@ class TestCliContract(unittest.TestCase):
 
         self.assertEqual(rc, 0)
         self.assertEqual(stderr, "")
-        self.assertEqual(stdout.strip(), f"eps {cli.__version__}")
+        self.assertEqual(stdout.strip(), f"authored-pack {cli.__version__}")
 
     def test_python_module_help_smoke(self) -> None:
         proc = subprocess.run(
@@ -394,7 +394,8 @@ class TestCliContract(unittest.TestCase):
         )
 
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
-        self.assertIn("Entropy Pack Stamper", proc.stdout)
+        self.assertIn("usage: eps", proc.stdout)
+        self.assertIn("Authored Pack", proc.stdout)
         self.assertIn("python3 -B bin/eps.py", proc.stdout)
         self.assertIn("not automatic secrecy", proc.stdout)
         self.assertIn("inspect", proc.stdout)
@@ -447,6 +448,7 @@ class TestCliContract(unittest.TestCase):
     def test_console_script_metadata_present(self) -> None:
         data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
         scripts = data.get("project", {}).get("scripts", {})
+        self.assertEqual(scripts.get("authored-pack"), "eps.cli:main")
         self.assertEqual(scripts.get("eps"), "eps.cli:main")
 
 

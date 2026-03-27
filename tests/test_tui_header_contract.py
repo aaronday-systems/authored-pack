@@ -41,7 +41,7 @@ def test_eps_header_helper_right_justifies_version() -> None:
         context_suffix="NEON",
     )
     assert line.endswith(" v9.9.9 ")
-    assert "ENTROPY PACK STAMPER :: Main TUI :: NEON" in line
+    assert "AUTHORED PACK :: Main TUI :: NEON" in line
 
 
 def test_eps_package_version_is_semver() -> None:

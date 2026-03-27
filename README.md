@@ -1,6 +1,6 @@
-# Entropy Pack Stamper (EPS)
+# Authored Pack
 
-EPS is a small deterministic tool for packaging and verifying operator-supplied inputs.
+Authored Pack is a small deterministic pack/verify tool for humans and agents.
 
 It turns a directory into a content-addressed pack with:
 - `manifest.json`
@@ -26,7 +26,13 @@ Or start the interactive path:
 python3 -B bin/eps.py
 ```
 
-Or use the CLI directly:
+Or use the installed primary CLI:
+
+```bash
+authored-pack --help
+```
+
+Or use the compatibility CLI directly from the repo:
 
 ```bash
 python3 -m eps --help
@@ -35,9 +41,9 @@ python3 -m eps --help
 ## What You Provide
 
 - a directory of operator-supplied files
-- optionally, staged sources in the TUI if you want a more deliberate manual workflow
+- optionally, authored sources in the TUI if you want a more deliberate manual workflow
 
-## What EPS Produces
+## What Authored Pack Produces
 
 A stamped pack under `--out/<pack_root_sha256>/` containing:
 - `manifest.json`
@@ -66,13 +72,13 @@ It does not prove authorship, timestamp truth, secrecy, or signed provenance.
 
 ## Trust Boundary
 
-EPS is:
+Authored Pack is:
 - deterministic packaging
 - hashing
 - verification
 - optional reproducible derivation from rooted pack state
 
-EPS is not:
+Authored Pack is not:
 - an RNG
 - automatic secrecy
 - signed provenance
@@ -88,8 +94,9 @@ No install required. Run with system Python 3.11+:
 
 - TUI: `python3 -B bin/eps.py`
 - TUI noisy mode: `python3 -B bin/eps.py --noisy`
-- CLI: `python3 -m eps --help`
-- Installed entrypoint: `eps --help`
+- Installed primary entrypoint: `authored-pack --help`
+- CLI compatibility entrypoint: `python3 -m eps --help`
+- Installed compatibility entrypoint: `eps --help`
 
 Platform support target:
 - macOS terminals
@@ -123,7 +130,7 @@ pytest -q
 
 ## Machine Sidecar
 
-`stamp-bin` is the subtractive machine path for a disposable entropy bin.
+`stamp-bin` is the subtractive machine path for a disposable source bin.
 
 ```bash
 python3 -m eps stamp-bin \
@@ -168,7 +175,7 @@ Public v1 is the deterministic pack/verify core:
 - `pack_root_sha256` and `payload_root_sha256`
 - optional reproducible derived seed material
 
-EPS is source-available under the Aaron Day license.
+Authored Pack is source-available under the Aaron Day license.
 It is not OSI open source.
 
 ## Docs
