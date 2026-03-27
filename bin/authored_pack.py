@@ -517,6 +517,7 @@ class DropBatchRequest:
     paths: List[str]
     seen_keys: List[Optional[str]]
     play_sfx: bool
+    apply_mode: str = "auto"  # "auto" | "folder" | "sources"
     max_apply: Optional[int] = None
 
 
@@ -585,6 +586,7 @@ class AppState:
     drop_results: "queue.SimpleQueue[Tuple[List[DropPreparedAction], bool]]" = field(default_factory=queue.SimpleQueue)
     drop_worker_busy: bool = False
     focus: str = "menu"  # "menu" | "entropy"
+    current_lane: str = "folder"  # "folder" | "authored"
     reward_ticks: int = 0
     menu: List[str] = field(
         default_factory=lambda: [
@@ -604,6 +606,10 @@ class AppState:
     stamp_panel_selected: int = 0
     stamp_panel_show_advanced: bool = False
     verify_config: VerifyConfig = field(default_factory=VerifyConfig)
+
+
+def _set_current_lane(state: AppState, lane: str) -> None:
+    state.current_lane = "authored" if str(lane).strip().lower() == "authored" else "folder"
 
 
 def _divider_for_width(cols: int) -> str:
@@ -978,6 +984,7 @@ def _prepare_drop_actions(
     paths: Sequence[str],
     *,
     seen_keys: Optional[Sequence[Optional[str]]] = None,
+    apply_mode: str = "auto",
     max_apply: Optional[int] = None,
 ) -> List[DropPreparedAction]:
     """
@@ -986,6 +993,7 @@ def _prepare_drop_actions(
     """
     actions: List[DropPreparedAction] = []
     keys = list(seen_keys) if seen_keys is not None else [None] * len(paths)
+    mode = str(apply_mode or "auto").strip().lower()
     for idx, v in enumerate(paths):
         seen_key = keys[idx] if idx < len(keys) else None
         if max_apply is not None and idx >= int(max_apply):
@@ -1001,7 +1009,7 @@ def _prepare_drop_actions(
         p = Path(v).expanduser()
         if p.exists() and p.is_dir():
             found = _iter_image_files_deterministic(p, limit=250)
-            if found:
+            if found and mode in ("auto", "sources"):
                 sampled = _sample_photo_import_paths(found, target_count=DEFAULT_ENTROPY_MIN_SOURCES)
                 actions.append(
                     DropPreparedAction(
@@ -1045,6 +1053,16 @@ def _prepare_drop_actions(
                             seen_key=seen_key,
                         )
                     )
+                continue
+            if mode == "sources":
+                actions.append(
+                    DropPreparedAction(
+                        message=f"Not usable as authored sources: {_display_path(p, max_len=44)}. Use Stamp -> Input for whole folders.",
+                        success=False,
+                        terminal=True,
+                        seen_key=seen_key,
+                    )
+                )
                 continue
             resolved = p.resolve()
             actions.append(
@@ -1121,18 +1139,21 @@ def _apply_drop_paths(state: AppState, paths: Sequence[str], *, max_apply: Optio
     Apply dropped paths: set default input dir and/or import authored sources.
     Returns log lines for what happened.
     """
-    actions = _prepare_drop_actions(paths, max_apply=max_apply)
+    actions = _prepare_drop_actions(paths, apply_mode="auto", max_apply=max_apply)
     return _apply_drop_actions_to_state(state, actions, play_sfx=False)
 
 
 def _apply_drop_actions_to_state(state: AppState, actions: Sequence[DropPreparedAction], *, play_sfx: bool) -> List[str]:
     msgs: List[str] = []
     added_sources = False
+    set_input_dir = False
+    eligible_before = len(_lockdown_eligible_sources(state.authored_sources))
     for act in actions:
         msgs.append(act.message)
         if act.success:
             if act.input_dir is not None:
                 state.last_input_dir = act.input_dir
+                set_input_dir = True
             if act.source is not None:
                 state.authored_sources.append(act.source)
                 added_sources = True
@@ -1143,6 +1164,16 @@ def _apply_drop_actions_to_state(state: AppState, actions: Sequence[DropPrepared
             state.entropy_selected = max(0, min(state.entropy_selected, len(state.authored_sources) - 1))
         if added_sources:
             _prefer_sources_input_mode(state)
+        if set_input_dir:
+            _set_current_lane(state, "folder")
+            state.stamp_config.input_mode = "folder"
+            state.stamp_config.input_path = str(state.last_input_dir or "")
+            if state.stamp_panel_draft is not None:
+                state.stamp_panel_draft.input_mode = "folder"
+                state.stamp_panel_draft.input_path = str(state.last_input_dir or "")
+        if added_sources and _mix_ready_crossed(state, before=eligible_before):
+            state.reward_ticks = max(state.reward_ticks, 18)
+            msgs.append(f"Mix-ready: {len(_lockdown_eligible_sources(state.authored_sources))}/{state.entropy_min_sources}.")
         _apply_drop_feedback(state, msgs, play_sfx=play_sfx)
     return msgs
 
@@ -1155,7 +1186,7 @@ def _start_drop_worker_if_idle(state: AppState) -> None:
     state.status = "Importing drop items..."
 
     def _worker() -> None:
-        actions = _prepare_drop_actions(req.paths, seen_keys=req.seen_keys, max_apply=req.max_apply)
+        actions = _prepare_drop_actions(req.paths, seen_keys=req.seen_keys, apply_mode=req.apply_mode, max_apply=req.max_apply)
         state.drop_results.put((actions, bool(req.play_sfx)))
 
     threading.Thread(target=_worker, name="eps_drop_import", daemon=True).start()
@@ -1167,13 +1198,14 @@ def _queue_drop_paths(
     *,
     seen_keys: Optional[Sequence[Optional[str]]] = None,
     play_sfx: bool,
+    apply_mode: str = "auto",
     max_apply: Optional[int] = None,
 ) -> None:
     if not paths:
         return
     keys = list(seen_keys) if seen_keys is not None else [None] * len(paths)
     state.drop_pending_requests.append(
-        DropBatchRequest(paths=[str(p) for p in paths], seen_keys=keys, play_sfx=bool(play_sfx), max_apply=max_apply)
+        DropBatchRequest(paths=[str(p) for p in paths], seen_keys=keys, play_sfx=bool(play_sfx), apply_mode=str(apply_mode), max_apply=max_apply)
     )
     _start_drop_worker_if_idle(state)
 
@@ -1208,6 +1240,20 @@ def _drop_result_is_terminal(msgs: Sequence[str]) -> bool:
         if ml.startswith("not usable:") or ml.startswith("rejected (limit"):
             return True
     return False
+
+
+def _current_drop_apply_mode(state: AppState) -> str:
+    label = state.menu[state.selected] if 0 <= state.selected < len(state.menu) else ""
+    if label == "Sources":
+        return "sources"
+    if label == "Start" and state.current_lane == "authored":
+        return "sources"
+    return "folder"
+
+
+def _mix_ready_crossed(state: AppState, *, before: int) -> bool:
+    after = len(_lockdown_eligible_sources(state.authored_sources))
+    return before < int(state.entropy_min_sources) <= after
 
 
 def _trigger_interaction_flash(state: AppState, *, drop_zone: bool = False) -> None:
@@ -1350,7 +1396,14 @@ def _poll_drop_dir(state: AppState) -> None:
         state.drop_last_msgs = [f"Rejected extras (limit 7 per burst): {extras}"]
         state.drop_last_msgs_ticks = 40
 
-    _queue_drop_paths(state, accepted, seen_keys=accepted_keys, play_sfx=bool(state.insane), max_apply=None)
+    _queue_drop_paths(
+        state,
+        accepted,
+        seen_keys=accepted_keys,
+        play_sfx=bool(state.insane),
+        apply_mode=_current_drop_apply_mode(state),
+        max_apply=None,
+    )
 
 
 def _load_wordlist_from_text_file(path: Path, *, max_bytes: int = 5_000_000) -> List[str]:
@@ -1709,6 +1762,7 @@ def _effective_stamp_input(state: AppState, cfg: Optional[StampConfig] = None) -
 
 
 def _prefer_sources_input_mode(state: AppState) -> None:
+    _set_current_lane(state, "authored")
     state.stamp_config.input_mode = "sources"
     state.stamp_config.input_path = ""
     if state.stamp_panel_draft is not None:
@@ -1750,29 +1804,29 @@ def _header_action_for_label(label: str) -> str:
 
 def _quickstart_lines() -> List[str]:
     return [
-        "START // first clean success",
+        "START // choose your path",
         "",
-        "Authored Pack turns a folder or staged sources into a verifiable pack.",
-        "Human path: stamp a normal directory, then verify the resulting pack.",
+        "Authored Pack gives you two human paths over one shared pack contract.",
         "",
-        "Primary action:",
-        "Enter -> go to Stamp",
-        "S -> stage sources first",
-        "V -> verify an existing pack",
+        "Pack a Folder",
+        "- choose a normal folder, stamp it, verify it later",
         "",
-        "machine-sidecar route:",
-        "python3 -m authored_pack stamp-bin --json",
+        "Compose from Sources",
+        "- collect photos, notes, or taps, then stamp @sources",
         "",
-        "Trust boundary:",
-        "Use OS randomness for fresh secrets.",
-        "Authored Pack is for stable pack roots, receipts, and deliberate operator input.",
+        "Verify a Pack",
+        "- audit an existing stamped pack or zip",
+        "",
+        "Enter -> Pack a Folder",
+        "S -> Compose from Sources",
+        "V -> Verify a Pack",
     ]
 
 
 def _stamp_panel_rows(state: AppState) -> List[StampPanelRow]:
     cfg = state.stamp_panel_draft or state.stamp_config
     if cfg.input_mode == "sources":
-        input_label = f"@sources ({len(state.authored_sources)} staged)"
+        input_label = f"Authored Sources ({len(state.authored_sources)} collected)"
     else:
         input_label = _display_path(_effective_stamp_input(state, cfg) or "not set", max_len=28)
     rows = [
@@ -1800,7 +1854,7 @@ def _stamp_panel_rows(state: AppState) -> List[StampPanelRow]:
                 StampPanelRow(
                     "mix_sources",
                     "Mix staged sources",
-                    f"{'on' if cfg.mix_sources else 'off'} {eligible}/{state.entropy_min_sources}",
+                    f"{'on' if cfg.mix_sources else 'off'}  Mix-ready {eligible}/{state.entropy_min_sources}",
                     "toggle",
                 )
             )
@@ -1833,8 +1887,16 @@ def _stamp_panel_lines(state: AppState, *, width: int, height: int) -> List[str]
             line = f"{prefix}{row.label}: {row.value}"
         lines.append(_shorten_middle(line, max(12, width - 1)))
     lines.append("")
-    lines.append("Writes manifest, receipt, payload, and pack_root_sha256.")
     cfg = state.stamp_panel_draft or state.stamp_config
+    lines.append(f"Input mode: {'Authored Sources' if cfg.input_mode == 'sources' else 'Folder'}")
+    if cfg.input_mode == "sources":
+        lines.append(f"Collected: {len(state.authored_sources)} source{'s' if len(state.authored_sources) != 1 else ''}")
+    if cfg.derive_seed and cfg.mix_sources:
+        eligible = len(_lockdown_eligible_sources(state.authored_sources))
+        lines.append(f"Mix-ready: {eligible}/{state.entropy_min_sources}")
+        if eligible < int(state.entropy_min_sources):
+            lines.append(f"Need {int(state.entropy_min_sources) - eligible} more sources to use staged sources in seed.")
+    lines.append("Writes manifest, receipt, payload, and pack_root_sha256.")
     if cfg.derive_seed:
         lines.append("Derived seed material follows this review choice.")
     else:
@@ -1849,23 +1911,33 @@ def _stamp_preview_lines(state: AppState, *, width: int, height: int) -> List[st
     input_path = _effective_stamp_input(state, cfg) or "not set"
     input_label = "Authored Sources" if cfg.input_mode == "sources" else _display_path(Path(input_path).expanduser() if input_path not in ("", "@sources") else input_path, max_len=44) if input_path not in ("", "@sources") else input_path
     output_label = _display_path(Path(_effective_stamp_output(state, cfg)).expanduser(), max_len=44)
-    return [
-        "STAMP // auditable file set -> verifiable pack",
+    lines = [
+        "STAMP // review before writing",
         "",
-        "Current defaults:",
+        f"- lane: {'Compose from Sources' if state.current_lane == 'authored' else 'Pack a Folder'}",
+        f"- input mode: {'Authored Sources' if cfg.input_mode == 'sources' else 'Folder'}",
         f"- input: {input_label}",
         f"- output: {output_label}",
         f"- zip: {'on' if cfg.zip_pack else 'off'}",
         f"- derive seed: {'on' if cfg.derive_seed else 'off'}",
-        "",
-        "Enter -> open review panel",
-        "I/O -> change input/output",
-        "U/D/Z/E -> sources, seed, zip, evidence",
-        "Review panel handles confirm/cancel inline",
-        "",
-        "Creates a content-addressed pack and optional zip.",
-        "Enter no longer drops you into a long prompt ladder.",
     ]
+    if cfg.input_mode == "sources":
+        lines.append(f"- collected: {len(state.authored_sources)} source{'s' if len(state.authored_sources) != 1 else ''}")
+    if cfg.derive_seed and cfg.mix_sources:
+        eligible = len(_lockdown_eligible_sources(state.authored_sources))
+        lines.append(f"- Mix-ready: {eligible}/{state.entropy_min_sources}")
+    lines.extend(
+        [
+            "",
+            "Enter -> open review panel",
+            "I/O -> change input/output",
+            "U/D/Z/E -> toggle authored sources, seed, zip, evidence",
+            "Review panel handles confirm/cancel inline",
+            "",
+            "Creates a content-addressed pack and optional zip.",
+        ]
+    )
+    return lines[:height]
 
 
 def _verify_preview_lines(state: AppState) -> List[str]:
@@ -1895,7 +1967,7 @@ def _help_summary_lines(_state: AppState) -> List[str]:
         "Authored Pack is a small deterministic pack/verify tool for humans and agents.",
         "",
         "human workflow",
-        "1. Stage sources or choose a folder.",
+        "1. Pack a folder or compose from sources.",
         "2. Stamp a verifiable pack.",
         "3. Verify it later or after handoff.",
         "",
@@ -1917,16 +1989,16 @@ def _entropy_source_kind_counts(sources: Sequence["AuthoredSource"]) -> Dict[str
     return counts
 
 
-def _source_slot_rail_line(state: AppState, *, width: int) -> str:
+def _source_collection_line(state: AppState, *, width: int) -> str:
+    total = len(state.authored_sources)
+    plural = "" if total == 1 else "s"
+    line = f"Collected: {total} source{plural}"
+    return line[: max(0, int(width))]
+
+
+def _source_kind_line(state: AppState, *, width: int) -> str:
     counts = _entropy_source_kind_counts(state.authored_sources)
-    ready = len(_lockdown_eligible_sources(state.authored_sources))
-    line = (
-        "SLOT RAIL "
-        f"[photo {counts['photo']}] "
-        f"[text {counts['text']}] "
-        f"[tap {counts['tap']}] "
-        f"ready {ready}/{int(state.entropy_min_sources)}"
-    )
+    line = f"Kinds: photo {counts['photo']}  text {counts['text']}  tap {counts['tap']}"
     return line[: max(0, int(width))]
 
 
@@ -2851,28 +2923,23 @@ def _authored_sources_preview(state: AppState, *, width: int, height: int) -> Li
     """
     Right-pane content for the Sources screen.
     """
-    min_n = int(state.entropy_min_sources)
-    eligible = len(_lockdown_eligible_sources(state.authored_sources))
-    header = "AUTHORED SOURCES // stage photos, text, or taps"
-    lines: List[str] = [header, _source_slot_rail_line(state, width=width), ""]
+    header = "AUTHORED SOURCES // compose from chosen materials"
+    lines: List[str] = [
+        header,
+        _source_collection_line(state, width=width),
+        _source_kind_line(state, width=width),
+        "",
+    ]
     if state.focus == "entropy" and state.authored_sources:
         lines.append("List focus. Up/Down moves authored sources. Tab returns to menu.")
     else:
-        lines.append("Menu focus. A adds photos, T adds text, Space records taps, P imports paths.")
+        lines.append("Actions: A add photo(s), T add text, Space record taps, P import path(s).")
     lines.append("")
     if not state.authored_sources:
-        lines.append("No authored sources yet.")
+        lines.append("Authored sources can become the pack payload when you stamp @sources.")
+        lines.append("They are optional for the folder path.")
         lines.append("Add a photo, text note, or tap sample.")
-        lines.append("Advanced: watched folder intake is still available.")
-        lines.append(f"Drop folder: {_display_path(state.drop_dir, max_len=max(24, width - 14))}")
         return lines[:height]
-    need = max(0, min_n - eligible)
-    if need > 0:
-        lines.append(f"Need {need} more eligible unique source(s) for mixed-source seed.")
-        lines.append(f"Authored sources need >= {LOCKDOWN_MIN_TAP_EVENTS} events.")
-        lines.append("")
-    if state.last_input_dir is not None:
-        lines.append(f"Current folder input: {_display_path(state.last_input_dir, max_len=max(24, width - 22))}")
     if state.drop_import_count > 0:
         lines.append(f"Imported paths this run: {state.drop_import_count}")
         lines.append("")
@@ -2951,7 +3018,7 @@ def _draw_footer(stdscr, state: AppState, rows: int, cols: int) -> None:
     elif label == "Help":
         legend = "Enter: help  R: README  M: mode  Q: quit"
     elif label == "Start":
-        legend = "Enter: stamp  S: sources  V: verify  M: mode  Q: quit"
+        legend = "Enter: folder  S: sources  V: verify  M: mode  Q: quit"
     else:
         legend = "Up/Down: move  Enter: select  M: mode  Q: quit"
     msg = state.status.strip() if state.status else ""
@@ -3253,6 +3320,7 @@ def _action_entropy_add_photos(state: AppState, stdscr) -> None:
     state.status = "Scanning photos..."
     state.log_lines = [f"source: {_display_path(p, max_len=44)}"]
     draw(stdscr, state)
+    eligible_before = len(_lockdown_eligible_sources(state.authored_sources))
     paths: List[Path] = []
     sampled_from_dir = False
     total_found = 0
@@ -3287,11 +3355,15 @@ def _action_entropy_add_photos(state: AppState, stdscr) -> None:
     if added:
         _prefer_sources_input_mode(state)
         _trigger_interaction_flash(state, drop_zone=False)
+        if _mix_ready_crossed(state, before=eligible_before):
+            state.reward_ticks = max(state.reward_ticks, 18)
         state.status = "Done."
         if sampled_from_dir:
             state.log_lines = [f"Added {added} photo source(s) sampled from {total_found} image(s)."]
         else:
             state.log_lines = [f"Added {added} photo source(s)."]
+        if _mix_ready_crossed(state, before=eligible_before):
+            state.log_lines.append(f"Mix-ready: {len(_lockdown_eligible_sources(state.authored_sources))}/{state.entropy_min_sources}.")
         if total_found >= 250:
             state.log_lines.append("Scan capped at 250 images for responsiveness.")
     else:
@@ -3312,13 +3384,18 @@ def _action_entropy_add_text(state: AppState, stdscr) -> None:
         return
     raw = text.encode("utf-8", errors="ignore")
     sha = hashlib.sha256(raw).hexdigest()
+    eligible_before = len(_lockdown_eligible_sources(state.authored_sources))
     state.authored_sources.append(
         AuthoredSource(kind="text", name=label.strip() or "note", sha256=sha, size_bytes=len(raw), text=text)
     )
     _prefer_sources_input_mode(state)
     _trigger_interaction_flash(state, drop_zone=False)
+    if _mix_ready_crossed(state, before=eligible_before):
+        state.reward_ticks = max(state.reward_ticks, 18)
     state.status = "Done."
     state.log_lines = [f"Added text source: {label.strip() or 'note'} ({_fmt_bytes(len(raw))})."]
+    if _mix_ready_crossed(state, before=eligible_before):
+        state.log_lines.append(f"Mix-ready: {len(_lockdown_eligible_sources(state.authored_sources))}/{state.entropy_min_sources}.")
 
 
 def _action_entropy_tap(state: AppState, stdscr) -> None:
@@ -3384,17 +3461,18 @@ def _action_entropy_tap(state: AppState, stdscr) -> None:
         return
     meta: Dict[str, object] = {"events": int(count), "sample": sample_events[:16]}
     # size_bytes tracks the conceptual size of the captured timing/code stream.
+    eligible_before = len(_lockdown_eligible_sources(state.authored_sources))
     state.authored_sources.append(AuthoredSource(kind="tap", name="tap", sha256=digest, size_bytes=count * 8, meta=meta))
     _prefer_sources_input_mode(state)
-    # Reward hook: stub out where we will play a sound effect later.
     _trigger_interaction_flash(state, drop_zone=False)
     state.reward_ticks = max(state.reward_ticks, 18)
-    state.status = "Authored source collected."
+    state.status = "Done."
     state.log_lines = [
-        f"Authored source collected: tap events={count}",
+        f"Added tap source: {count} events.",
         f"tap_sha256: {digest}",
-        "(SFX stub) jackpot",
     ]
+    if _mix_ready_crossed(state, before=eligible_before):
+        state.log_lines.append(f"Mix-ready: {len(_lockdown_eligible_sources(state.authored_sources))}/{state.entropy_min_sources}.")
 
 
 def _action_entropy_delete_selected(state: AppState) -> None:
@@ -3735,7 +3813,8 @@ def _activate_stamp_panel_row(state: AppState, stdscr) -> None:
 
 
 def _action_sources_import_paths(state: AppState, stdscr) -> None:
-    raw = _prompt_str_curses(stdscr, "(Authored Pack) import path(s)", default=str(state.last_input_dir or ""), max_len=4096)
+    _set_current_lane(state, "authored")
+    raw = _prompt_str_curses(stdscr, "(Authored Pack) import source path(s)", default=str(state.last_input_dir or ""), max_len=4096)
     if raw is None:
         state.status = "Ready."
         state.log_lines = ["Import cancelled."]
@@ -3745,7 +3824,8 @@ def _action_sources_import_paths(state: AppState, stdscr) -> None:
         state.status = "Ready."
         state.log_lines = ["No paths supplied."]
         return
-    msgs = _apply_drop_paths(state, paths, max_apply=7)
+    actions = _prepare_drop_actions(paths, apply_mode="sources", max_apply=7)
+    msgs = _apply_drop_actions_to_state(state, actions, play_sfx=False)
     if not msgs:
         state.status = "Ready."
         state.log_lines = ["No usable paths found."]
@@ -3764,9 +3844,11 @@ def _edit_stamp_input(state: AppState, stdscr, cfg: Optional[StampConfig] = None
         return False
     normalized = _normalize_single_path_input(raw, allow_sources=True)
     if normalized == "@sources":
+        _set_current_lane(state, "authored")
         cfg.input_mode = "sources"
         cfg.input_path = ""
     else:
+        _set_current_lane(state, "folder")
         cfg.input_mode = "folder"
         cfg.input_path = normalized
     state.status = "Stamp input updated."
@@ -3910,10 +3992,12 @@ def _run_stamp_plan(
                 return
             input_dir = _build_sources_payload_dir(state.authored_sources)
             tmp_payload_dir = input_dir
+            _set_current_lane(state, "authored")
             state.stamp_config.input_mode = "sources"
             state.stamp_config.input_path = ""
         else:
             input_dir = Path(input_choice).expanduser()
+            _set_current_lane(state, "folder")
             state.stamp_config.input_mode = "folder"
             state.stamp_config.input_path = input_choice
             state.last_input_dir = input_dir.resolve()
@@ -3936,9 +4020,9 @@ def _run_stamp_plan(
                 need_more = int(state.entropy_min_sources) - len(mixed_sources)
                 state.status = "Failed."
                 state.log_lines = [
-                    "Stamp blocked: not enough eligible sources.",
-                    f"Need {state.entropy_min_sources}, have {len(mixed_sources)}.",
-                    f"Add {need_more} more unique sources.",
+                    "Stamp blocked: staged sources are not ready to mix into the seed.",
+                    f"Mix-ready: {len(mixed_sources)}/{state.entropy_min_sources}",
+                    f"Need {need_more} more sources to use staged sources in seed.",
                     f"Tap sources need >= {LOCKDOWN_MIN_TAP_EVENTS} key events.",
                 ]
                 try:
@@ -3947,12 +4031,12 @@ def _run_stamp_plan(
                     state.selected = 0
                 state.focus = "menu"
                 return
-            seed_path_label = "mixed-source seed"
+            seed_path_label = "staged sources in seed"
             pool_sha = _entropy_pool_sha256(mixed_sources)
         elif derive_seed and mix_sources:
             state.status = "Failed."
             state.log_lines = [
-                "Stamp blocked: mixed-source seed was requested, but no staged sources are available.",
+                "Stamp blocked: staged sources were requested for the seed, but none are available.",
                 "Go to Sources and add or import some first.",
             ]
             try:
@@ -4050,7 +4134,7 @@ def _run_stamp_plan(
         state.log_lines.append(f"payload_root_sha256: {payload_root}")
     if exclude_relpaths:
         state.log_lines.append(f"excluded_artifacts: {len(exclude_relpaths)}")
-    fp = res.receipt.get("derived_seed_fingerprint_sha256") or res.receipt.get("seed_fingerprint_sha256")
+    fp = res.receipt.get("derived_seed_fingerprint_sha256")
     if isinstance(fp, str) and fp:
         state.log_lines.append(f"derived_seed_fingerprint_sha256: {fp}")
     if seed_path_label:
@@ -4066,7 +4150,7 @@ def _run_stamp_plan(
     if audit_dir_path is not None:
         state.log_lines.append(f"authored_sources_dir: {_display_path(audit_dir_path, max_len=44)}")
     if zip_path is not None:
-        state.log_lines.append(f"entropy_pack_zip: {_display_path(zip_path, max_len=44)}")
+        state.log_lines.append(f"authored_pack.zip: {_display_path(zip_path, max_len=44)}")
     if evidence_path is not None:
         state.log_lines.append(f"evidence_bundle: {_display_path(evidence_path, max_len=44)}")
     if evidence_sha:
@@ -4429,6 +4513,7 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
 
     if label == "Start":
         if ch in (ord("s"), ord("S")):
+            _set_current_lane(state, "authored")
             state.selected = state.menu.index("Sources")
             _close_stamp_panel(state)
             state.focus = "menu"
@@ -4443,12 +4528,15 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
         if ch in (curses.KEY_ENTER, 10, 13):
             if state.insane:
                 _start_ui_select_sfx_best_effort()
+            _set_current_lane(state, "folder")
+            state.stamp_config.input_mode = "folder"
             state.selected = state.menu.index("Stamp")
             state.focus = "menu"
-            state.status = "Stamp: review defaults or press I to change input."
+            state.status = "Pack a Folder: review defaults or press I to choose input."
             return True
 
     if label == "Sources":
+        _set_current_lane(state, "authored")
         if ch in (curses.KEY_UP, ord("k")) and state.focus == "entropy" and state.authored_sources:
             state.entropy_selected = max(0, state.entropy_selected - 1)
             state.status = "Ready."
@@ -4485,7 +4573,7 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
                 state.focus = "entropy"
                 state.status = "Ready."
             else:
-                state.status = "Add an authored source with A, T, Space, or P."
+                state.status = "Compose from sources with A, T, Space, or P."
             return True
 
     if label == "Stamp":
@@ -4524,8 +4612,10 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
             return True
         if ch in (ord("u"), ord("U")):
             if cfg.input_mode == "sources":
+                _set_current_lane(state, "folder")
                 cfg.input_mode = "folder"
             else:
+                _set_current_lane(state, "authored")
                 cfg.input_mode = "sources"
                 cfg.input_path = ""
             state.log_lines = []
@@ -4648,7 +4738,13 @@ def run_tui(stdscr, *, insane: bool = False, godel_source: Optional[str] = None)
                 state.drop_paste_buf = ""
                 state.drop_paste_last_ns = 0
                 if paths:
-                    _queue_drop_paths(state, paths, play_sfx=bool(state.insane), max_apply=7)
+                    _queue_drop_paths(
+                        state,
+                        paths,
+                        play_sfx=bool(state.insane),
+                        apply_mode=_current_drop_apply_mode(state),
+                        max_apply=7,
+                    )
         # Poll the filesystem landing zone occasionally (not every tick) to stay cheap.
         if state.tick % 4 == 0:
             _poll_drop_dir(state)

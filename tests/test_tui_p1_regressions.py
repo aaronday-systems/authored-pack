@@ -298,6 +298,59 @@ class TestTuiP1Regressions(unittest.TestCase):
             self.assertTrue(receipt_snapshots)
             self.assertTrue(all(snapshot == receipt for snapshot in receipt_snapshots))
             self.assertEqual(state.status, "Done.")
+            self.assertTrue(any(line.startswith("authored_pack.zip: ") for line in state.log_lines))
+            self.assertFalse(any("entropy_pack_zip" in line for line in state.log_lines))
+
+    def test_run_stamp_from_config_allows_authored_sources_with_one_source(self) -> None:
+        m = self.m
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            out_dir = tmp_path / "out"
+            out_dir.mkdir()
+
+            state = m.AppState(theme=m.Theme(normal=0, reverse=0, header=0))
+            state.authored_sources.append(
+                m.AuthoredSource(kind="text", name="note", sha256=hashlib.sha256(b"hello").hexdigest(), size_bytes=5, text="hello")
+            )
+            state.stamp_config.input_mode = "sources"
+            state.stamp_config.out_path = str(out_dir)
+            state.stamp_config.derive_seed = False
+
+            m._run_stamp_from_config(state, DummyStdScr())
+
+            self.assertEqual(state.status, "Done.")
+            self.assertIsNotNone(state.last_pack_dir)
+            self.assertTrue(any(line == "Stamp complete." for line in state.log_lines))
+
+    def test_run_stamp_from_config_blocks_mix_sources_until_seven_ready(self) -> None:
+        m = self.m
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            out_dir = tmp_path / "out"
+            out_dir.mkdir()
+
+            state = m.AppState(theme=m.Theme(normal=0, reverse=0, header=0))
+            for idx in range(3):
+                state.authored_sources.append(
+                    m.AuthoredSource(
+                        kind="text",
+                        name=f"note{idx}",
+                        sha256=hashlib.sha256(f"note{idx}".encode("utf-8")).hexdigest(),
+                        size_bytes=5,
+                        text=f"note{idx}",
+                    )
+                )
+            state.stamp_config.input_mode = "sources"
+            state.stamp_config.out_path = str(out_dir)
+            state.stamp_config.derive_seed = True
+            state.stamp_config.mix_sources = True
+
+            m._run_stamp_from_config(state, DummyStdScr())
+
+            self.assertEqual(state.status, "Failed.")
+            self.assertEqual(state.log_lines[0], "Stamp blocked: staged sources are not ready to mix into the seed.")
+            self.assertTrue(any("Mix-ready: 3/7" in line for line in state.log_lines))
+            self.assertTrue(any("Need 4 more sources to use staged sources in seed." in line for line in state.log_lines))
 
     def test_poll_drop_dir_retries_transient_failures_until_success(self) -> None:
         m = self.m
@@ -313,7 +366,7 @@ class TestTuiP1Regressions(unittest.TestCase):
 
             orig_prepare = m._prepare_drop_actions
 
-            def fake_prepare_drop_actions(paths, *, seen_keys=None, max_apply=None):
+            def fake_prepare_drop_actions(paths, *, seen_keys=None, apply_mode="auto", max_apply=None):
                 call_count["n"] += 1
                 if call_count["n"] == 1:
                     return [
@@ -360,7 +413,7 @@ class TestTuiP1Regressions(unittest.TestCase):
 
             orig_prepare = m._prepare_drop_actions
 
-            def fake_prepare_drop_actions(paths, *, seen_keys=None, max_apply=None):
+            def fake_prepare_drop_actions(paths, *, seen_keys=None, apply_mode="auto", max_apply=None):
                 call_count["n"] += 1
                 return [
                     m.DropPreparedAction(

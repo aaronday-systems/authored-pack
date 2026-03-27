@@ -158,13 +158,32 @@ class TestTuiAuditQuickWins(unittest.TestCase):
                 (photo_dir / f"{idx:02d}.jpg").write_bytes(f"img-{idx}".encode("utf-8"))
 
             state = self._state()
-            msgs = m._apply_drop_paths(state, [str(photo_dir)], max_apply=7)
+            actions = m._prepare_drop_actions([str(photo_dir)], apply_mode="sources", max_apply=7)
+            msgs = m._apply_drop_actions_to_state(state, actions, play_sfx=False)
 
             self.assertTrue(any("Photo folder sampled:" in msg for msg in msgs))
             self.assertEqual(len(state.authored_sources), 7)
             self.assertEqual(state.stamp_config.input_mode, "sources")
             self.assertEqual(state.stamp_config.input_path, "")
             self.assertIsNone(state.last_input_dir)
+
+    def test_prepare_drop_actions_in_folder_mode_sets_input_dir_not_sources(self) -> None:
+        m = self.m
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            folder = tmp_path / "folder"
+            folder.mkdir()
+            (folder / "a.txt").write_text("hello", encoding="utf-8")
+
+            state = self._state()
+            actions = m._prepare_drop_actions([str(folder)], apply_mode="folder")
+            msgs = m._apply_drop_actions_to_state(state, actions, play_sfx=False)
+
+            self.assertTrue(any("Input dir set:" in msg for msg in msgs))
+            self.assertEqual(state.authored_sources, [])
+            self.assertEqual(state.stamp_config.input_mode, "folder")
+            self.assertEqual(state.stamp_config.input_path, str(folder.resolve()))
+            self.assertEqual(state.last_input_dir, folder.resolve())
 
     def test_action_entropy_add_text_prefers_sources_mode(self) -> None:
         m = self.m
@@ -189,7 +208,7 @@ class TestTuiAuditQuickWins(unittest.TestCase):
 
         m._action_entropy_tap(state, stdscr)
 
-        self.assertEqual(state.status, "Authored source collected.")
+        self.assertEqual(state.status, "Done.")
         self.assertEqual(len(state.authored_sources), 1)
         self.assertEqual(state.stamp_config.input_mode, "sources")
         self.assertEqual(state.stamp_config.input_path, "")
@@ -218,7 +237,7 @@ class TestTuiAuditQuickWins(unittest.TestCase):
         self.assertTrue(footer_calls)
         _, _, line, attr = footer_calls[-1]
         self.assertEqual(attr, state.theme.reverse)
-        self.assertIn("Enter: stamp", line)
+        self.assertIn("Enter: folder", line)
         self.assertIn("M: mode", line)
 
     def test_sources_footer_spells_out_delete_and_clear(self) -> None:
@@ -247,6 +266,8 @@ class TestTuiAuditQuickWins(unittest.TestCase):
         self.assertTrue(keep_running)
         self.assertEqual(state.menu[state.selected], "Stamp")
         self.assertIsNone(state.stamp_panel_draft)
+        self.assertEqual(state.current_lane, "folder")
+        self.assertEqual(state.stamp_config.input_mode, "folder")
 
     def test_stamp_requires_explicit_input_choice_before_running(self) -> None:
         m = self.m

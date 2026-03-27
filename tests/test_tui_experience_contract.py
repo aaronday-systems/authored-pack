@@ -79,20 +79,24 @@ class TestTuiExperienceContract(unittest.TestCase):
 
     def test_start_card_leads_with_the_first_success_path(self) -> None:
         joined = self._preview("Start")
-        self.assertIn("Authored Pack turns a folder or staged sources into a verifiable pack.", joined)
-        self.assertIn("stamp a normal directory", joined.lower())
-        self.assertIn("verify the resulting pack", joined.lower())
-        self.assertIn("machine-sidecar route", joined)
+        self.assertIn("Pack a Folder", joined)
+        self.assertIn("Compose from Sources", joined)
+        self.assertIn("Verify a Pack", joined)
+        self.assertIn("Enter -> Pack a Folder", joined)
+        self.assertNotIn("machine-sidecar route", joined)
 
-    def test_sources_card_prioritizes_empty_state_and_readiness_meter(self) -> None:
+    def test_sources_card_prioritizes_empty_state_and_collection_actions(self) -> None:
         joined = self._preview("Sources")
+        self.assertIn("AUTHORED SOURCES // compose from chosen materials", joined)
+        self.assertIn("Collected: 0 sources", joined)
+        self.assertIn("Kinds: photo 0  text 0  tap 0", joined)
         self.assertIn("Add a photo, text note, or tap sample.", joined)
-        self.assertIn("SLOT RAIL [photo 0] [text 0] [tap 0] ready 0/7", joined)
-        self.assertIn("AUTHORED SOURCES // stage photos, text, or taps", joined)
-        self.assertIn("No authored sources yet.", joined)
-        self.assertIn("Menu focus", joined)
+        self.assertIn("optional for the folder path", joined.lower())
+        self.assertNotIn("ready 0/7", joined.lower())
+        self.assertNotIn("lockdown", joined.lower())
+        self.assertNotIn("eligible", joined.lower())
 
-    def test_sources_card_keeps_the_slot_rail_ascii_and_type_counts_visible(self) -> None:
+    def test_sources_card_keeps_collection_summary_ascii_and_type_counts_visible(self) -> None:
         state = self._state()
         state.authored_sources = [
             SimpleNamespace(kind="photo", name="photo.jpg", sha256="a" * 64, size_bytes=1, meta={}),
@@ -101,18 +105,20 @@ class TestTuiExperienceContract(unittest.TestCase):
         ]
 
         joined = "\n".join(self.m._authored_sources_preview(state, width=200, height=40))
-        rail_line = next(line for line in joined.splitlines() if line.startswith("SLOT RAIL"))
+        summary_line = next(line for line in joined.splitlines() if line.startswith("Kinds:"))
 
-        self.assertIn("SLOT RAIL [photo 1] [text 1] [tap 1] ready 3/7", joined)
-        self.assertTrue(all(ord(ch) < 128 for ch in rail_line))
+        self.assertIn("Collected: 3 sources", joined)
+        self.assertIn("Kinds: photo 1  text 1  tap 1", joined)
+        self.assertTrue(all(ord(ch) < 128 for ch in summary_line))
 
     def test_stamp_card_summarizes_review_before_advanced_prompts(self) -> None:
         joined = self._preview("Stamp")
-        self.assertIn("Current defaults:", joined)
+        self.assertIn("- lane: Pack a Folder", joined)
+        self.assertIn("- input mode: Folder", joined)
         self.assertIn("- input: not set", joined)
         self.assertIn("Enter -> open review panel", joined)
         self.assertIn("Creates a content-addressed pack and optional zip.", joined)
-        self.assertIn("prompt ladder", joined)
+        self.assertNotIn("prompt ladder", joined)
 
     def test_verify_card_focuses_on_integrity_audit(self) -> None:
         joined = self._preview("Verify")
