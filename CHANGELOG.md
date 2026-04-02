@@ -2,6 +2,12 @@
 
 All notable public-release changes to EPS will be documented here.
 
+## [0.0.1] - 2026-03-30
+
+### Changed
+- aligned calm TUI amber with Control Plane's runtime amber (`172` on xterm-256)
+- reset runtime/package version to `0.0.1`
+
 ## [1.0.0] - pending public release
 
 ### Added

@@ -1,3 +1,21 @@
+Metadata-Version: 2.1
+Name: authored-pack
+Version: 1.0.0
+Summary: Authored Pack is a deterministic pack/verify tool for humans and agents.
+Author: Aaron Day
+License: Copyright (c) 2026 Aaron Day. All rights reserved.
+        
+        This repository contains proprietary code.
+        No part of this codebase may be used, copied, modified, merged,
+        published, distributed, sublicensed, or sold without explicit
+        written permission from Aaron Day.
+        
+        No license is granted, implied, or offered for any use of this software or associated materials without prior written permission from Aaron Day.
+        
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+License-File: LICENSE
+
 # Authored Pack
 
 Authored Pack is a small deterministic tool for assembling, verifying, inspecting, and exporting bounded artifact sets.

@@ -11,28 +11,29 @@ from .manifest import DEFAULT_DERIVATION_VERSION, stable_dumps
 from .pack import StampResult, _output_would_self_ingest_input, inspect_pack, stamp_pack, verify_pack
 
 CLI_DESCRIPTION = (
-    f"{__product_name__} is a small deterministic pack/verify tool for humans and agents. "
-    "It turns a directory into a verifiable pack with a manifest and receipt, and can optionally derive "
-    "reproducible seed material from the pack root."
+    f"{__product_name__} is a small deterministic assembly/verify tool for humans and agents. "
+    "It assembles a directory into a verifiable pack with a manifest and receipt, and can optionally "
+    "export authored_pack.zip or derive reproducible seed material from the pack root."
 )
 
 CLI_EPILOG = """\
 First clean success:
-  authored-pack stamp --input /ABS/PATH/TO/DIR --out ./out --zip
+  authored-pack assemble --input /ABS/PATH/TO/DIR --out ./out --zip
   authored-pack verify --pack ./out/<pack_root_sha256>
 
 Human path:
   python3 -B bin/authored_pack.py
-  stage sources if you need them, then stamp and verify
+  stage sources if you need them, then assemble and verify
 
 Machine path:
-  authored-pack stamp --input /ABS/PATH/TO/DIR --out ./out --json
-  stamp-bin is subtractive and uses repo-relative defaults
+  authored-pack assemble --input /ABS/PATH/TO/DIR --out ./out --json
+  consume-bin is subtractive and uses repo-relative defaults
 
 Trust boundary:
   use OS randomness for ordinary secret generation
   Authored Pack is not an RNG, not automatic secrecy, not signed provenance,
   and not sealed storage
+  governed attestation belongs to Attestation Engine
 """
 
 
@@ -103,7 +104,7 @@ def _validate_seed_flags(args: argparse.Namespace) -> None:
 
 
 def _command_name_from_argv(argv_list: Sequence[str], *, default_command: str = "authored-pack") -> str:
-    known = {"stamp", "verify", "inspect", "stamp-bin"}
+    known = {"assemble", "stamp", "verify", "inspect", "consume-bin", "stamp-bin"}
     for item in argv_list:
         token = str(item).strip()
         if token in known:
@@ -158,7 +159,7 @@ def _stamp(args: argparse.Namespace) -> int:
             payload["evidence_bundle_path"] = str(res.evidence_bundle_path)
         if res.evidence_bundle_sha256:
             payload["evidence_bundle_sha256"] = res.evidence_bundle_sha256
-        print(_json_success("stamp", payload))
+        print(_json_success(str(getattr(args, "cmd", "assemble")), payload))
     else:
         print(f"pack_dir: {res.pack_dir}")
         print(f"pack_root_sha256: {res.pack_root_sha256}")
@@ -315,7 +316,7 @@ def _stamp_bin(args: argparse.Namespace) -> int:
             payload["evidence_bundle_path"] = str(res.stamp.evidence_bundle_path)
         if res.stamp.evidence_bundle_sha256:
             payload["evidence_bundle_sha256"] = res.stamp.evidence_bundle_sha256
-        print(_json_success("stamp-bin", payload))
+        print(_json_success(str(getattr(args, "cmd", "consume-bin")), payload))
         return 0
 
     # Human-readable.
@@ -350,80 +351,80 @@ def build_parser(*, prog: str = "authored-pack") -> argparse.ArgumentParser:
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    stamp = sub.add_parser("stamp", help="Operator path: turn a directory into a deterministic verifiable pack")
-    stamp.add_argument("--input", required=True, help="Directory of artifacts to include")
-    stamp.add_argument("--out", required=True, help="Content-addressed output directory for the stamped pack")
-    stamp.add_argument("--pack-id", default=None, help="Optional human label stored in manifest metadata (affects root)")
-    stamp.add_argument("--notes", default=None, help="Optional notes stored in manifest metadata (affects root)")
-    stamp.add_argument(
+    assemble = sub.add_parser("assemble", aliases=["stamp"], help="Primary create path: assemble a deterministic verifiable pack")
+    assemble.add_argument("--input", required=True, help="Directory of artifacts to include")
+    assemble.add_argument("--out", required=True, help="Content-addressed output directory for the assembled pack")
+    assemble.add_argument("--pack-id", default=None, help="Optional human label stored in manifest metadata (affects root)")
+    assemble.add_argument("--notes", default=None, help="Optional notes stored in manifest metadata (affects root)")
+    assemble.add_argument(
         "--created-at-utc",
         default=None,
         help="Optional ISO8601 UTC timestamp stored in manifest (affects root); omitted when unset",
     )
-    stamp.add_argument(
+    assemble.add_argument(
         "--dice",
         action="append",
         default=[],
         help="Optional die roll like d6=4; repeatable; stored in manifest (affects root)",
     )
-    stamp.add_argument("--include-hidden", action="store_true", help="Include dotfiles in input scan")
-    stamp.add_argument("--zip", action="store_true", help="Write authored_pack.zip alongside pack dir")
+    assemble.add_argument("--include-hidden", action="store_true", help="Include dotfiles in input scan")
+    assemble.add_argument("--zip", action="store_true", help="Write authored_pack.zip alongside pack dir")
 
-    stamp.add_argument("--derive-seed", action="store_true", help=f"Derive reproducible seed material via HKDF ({DEFAULT_DERIVATION_VERSION})")
-    stamp.add_argument("--write-seed", action="store_true", help="Write derived seed material as seed_master.{hex,b64} (requires --derive-seed)")
-    stamp.add_argument("--print-seed", action="store_true", help="Print derived seed material as seed_master.{hex,b64} to stdout (requires --derive-seed, incompatible with --json)")
-    stamp.add_argument("--evidence-bundle", action="store_true", help="Write authored_evidence_<root>.zip + .sha256 (tamper-evident local audit bundle)")
+    assemble.add_argument("--derive-seed", action="store_true", help=f"Derive reproducible seed material via HKDF ({DEFAULT_DERIVATION_VERSION})")
+    assemble.add_argument("--write-seed", action="store_true", help="Write derived seed material as seed_master.{hex,b64} (requires --derive-seed)")
+    assemble.add_argument("--print-seed", action="store_true", help="Print derived seed material as seed_master.{hex,b64} to stdout (requires --derive-seed, incompatible with --json)")
+    assemble.add_argument("--evidence-bundle", action="store_true", help="Write authored_evidence_<root>.zip + .sha256 (tamper-evident local audit bundle)")
 
-    stamp.add_argument("--json", action="store_true", help="Emit JSON envelope to stdout")
-    stamp.set_defaults(func=_stamp)
+    assemble.add_argument("--json", action="store_true", help="Emit JSON envelope to stdout")
+    assemble.set_defaults(func=_stamp)
 
-    verify = sub.add_parser("verify", help="Post-run audit: verify a stamped pack directory or .zip")
+    verify = sub.add_parser("verify", help="Post-run audit: verify an assembled pack directory or .zip")
     verify.add_argument("--pack", required=True, help="Path to pack dir or authored_pack.zip")
     verify.add_argument("--max-manifest-mib", type=int, default=4, help="Maximum manifest.json size to accept (default: 4)")
     verify.add_argument("--json", action="store_true", help="Emit JSON envelope to stdout")
     verify.set_defaults(func=_verify)
 
-    inspect = sub.add_parser("inspect", help="Summarize a stamped pack directory or .zip for machine or human review")
+    inspect = sub.add_parser("inspect", help="Summarize an assembled pack directory or .zip for machine or human review")
     inspect.add_argument("--pack", required=True, help="Path to pack dir or authored_pack.zip")
     inspect.add_argument("--max-manifest-mib", type=int, default=4, help="Maximum manifest.json size to accept while inspecting (default: 4)")
     inspect.add_argument("--artifact-preview", type=int, default=20, help="How many artifact entries to include in the summary preview (default: 20)")
     inspect.add_argument("--json", action="store_true", help="Emit JSON envelope to stdout")
     inspect.set_defaults(func=_inspect)
 
-    stamp_bin = sub.add_parser("stamp-bin", help="Machine sidecar: subtractively consume source-bin files and emit receipts")
-    stamp_bin.add_argument(
+    consume_bin = sub.add_parser("consume-bin", aliases=["stamp-bin"], help="Machine sidecar: subtractively consume source-bin files and assemble a pack")
+    consume_bin.add_argument(
         "--source-bin",
         default="./bins/source_bin",
         help="Directory containing source files to consume (moved, not copied) (default: ./bins/source_bin)",
     )
-    stamp_bin.add_argument(
+    consume_bin.add_argument(
         "--out",
         default="./bins/authored_out",
-        help="Output directory for stamped pack (content-addressed) (default: ./bins/authored_out)",
+        help="Output directory for assembled pack (content-addressed) (default: ./bins/authored_out)",
     )
-    stamp_bin.add_argument("--count", type=int, default=7, help="How many files to consume and stamp (default: 7)")
-    stamp_bin.add_argument("--min-remaining", type=int, default=50, help="Refuse if remaining after consumption would be below this (default: 50)")
-    stamp_bin.add_argument("--allow-low-bin", action="store_true", help="Proceed even if low-watermark would be violated (prints warning)")
-    stamp_bin.add_argument("--recursive", action="store_true", help="Scan source bin recursively (default)")
-    stamp_bin.add_argument("--no-recursive", dest="recursive", action="store_false", help="Only scan top-level of source bin")
-    stamp_bin.set_defaults(recursive=True)
-    stamp_bin.add_argument("--include-hidden", action="store_true", help="Include dotfiles while scanning source bin")
+    consume_bin.add_argument("--count", type=int, default=7, help="How many files to consume and assemble (default: 7)")
+    consume_bin.add_argument("--min-remaining", type=int, default=50, help="Refuse if remaining after consumption would be below this (default: 50)")
+    consume_bin.add_argument("--allow-low-bin", action="store_true", help="Proceed even if low-watermark would be violated (prints warning)")
+    consume_bin.add_argument("--recursive", action="store_true", help="Scan source bin recursively (default)")
+    consume_bin.add_argument("--no-recursive", dest="recursive", action="store_false", help="Only scan top-level of source bin")
+    consume_bin.set_defaults(recursive=True)
+    consume_bin.add_argument("--include-hidden", action="store_true", help="Include dotfiles while scanning source bin")
     # Push-button defaults: on.
-    stamp_bin.add_argument("--zip", action=argparse.BooleanOptionalAction, default=True, help="Write authored_pack.zip alongside pack dir (default: on)")
-    stamp_bin.add_argument(
+    consume_bin.add_argument("--zip", action=argparse.BooleanOptionalAction, default=True, help="Write authored_pack.zip alongside pack dir (default: on)")
+    consume_bin.add_argument(
         "--derive-seed",
         action=argparse.BooleanOptionalAction,
         default=True,
         help=f"Derive reproducible seed material via HKDF ({DEFAULT_DERIVATION_VERSION}) (default: on)",
     )
-    stamp_bin.add_argument(
+    consume_bin.add_argument(
         "--evidence-bundle",
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Write authored_evidence_<root>.zip + .sha256 (tamper-evident) (default: on)",
     )
-    stamp_bin.add_argument("--json", action="store_true", help="Emit JSON envelope to stdout")
-    stamp_bin.set_defaults(func=_stamp_bin)
+    consume_bin.add_argument("--json", action="store_true", help="Emit JSON envelope to stdout")
+    consume_bin.set_defaults(func=_stamp_bin)
 
     return p
 

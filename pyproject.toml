@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "authored-pack"
 version = "1.0.0"
@@ -9,6 +13,9 @@ requires-python = ">=3.11"
 
 [project.scripts]
 authored-pack = "authored_pack.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["authored_pack*"]
 
 [tool.pytest.ini_options]
 addopts = "-q"

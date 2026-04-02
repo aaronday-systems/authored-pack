@@ -132,7 +132,7 @@ class TestTuiP1Regressions(unittest.TestCase):
                 m.shutil.copy2 = orig_copy2
 
             self.assertEqual(state.status, "Failed.")
-            self.assertTrue(any(line == "Stamp failed." for line in state.log_lines))
+            self.assertTrue(any(line == "Assemble failed." for line in state.log_lines))
             self.assertTrue(created_tmp_dirs)
             self.assertFalse(created_tmp_dirs[0].exists())
 
@@ -320,7 +320,7 @@ class TestTuiP1Regressions(unittest.TestCase):
 
             self.assertEqual(state.status, "Done.")
             self.assertIsNotNone(state.last_pack_dir)
-            self.assertTrue(any(line == "Stamp complete." for line in state.log_lines))
+            self.assertTrue(any(line == "Assemble complete." for line in state.log_lines))
 
     def test_run_stamp_from_config_blocks_mix_sources_until_seven_ready(self) -> None:
         m = self.m
@@ -348,7 +348,7 @@ class TestTuiP1Regressions(unittest.TestCase):
             m._run_stamp_from_config(state, DummyStdScr())
 
             self.assertEqual(state.status, "Failed.")
-            self.assertEqual(state.log_lines[0], "Stamp blocked: staged sources are not ready to mix into the seed.")
+            self.assertEqual(state.log_lines[0], "Assemble blocked: staged sources are not ready to mix into the seed.")
             self.assertTrue(any("Sources ready for seed: 3/7" in line for line in state.log_lines))
             self.assertTrue(any("Need 4 more collected sources to use this option." in line for line in state.log_lines))
 
@@ -542,8 +542,42 @@ class TestTuiP1Regressions(unittest.TestCase):
 
             self.assertEqual(state.status, "Failed.")
             self.assertEqual(state.log_lines[0], "Verify failed.")
+            self.assertTrue(any(line.startswith("verify_target: ") for line in state.log_lines))
             self.assertTrue(any("pack path not found:" in line for line in state.log_lines))
             self.assertFalse(any("unsupported pack path" in line for line in state.log_lines))
+
+    def test_run_verify_plan_surfaces_ds_store_hints(self) -> None:
+        m = self.m
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            pack_dir = tmp_path / ("a" * 64)
+            pack_dir.mkdir()
+            (pack_dir / "manifest.json").write_text("{}", encoding="utf-8")
+
+            state = m.AppState(theme=m.Theme(normal=0, reverse=0, header=0))
+            orig_verify_pack = m.verify_pack
+
+            def fake_verify_pack(_pack, **_kwargs):
+                return SimpleNamespace(
+                    ok=False,
+                    root_sha256="",
+                    payload_root_sha256="",
+                    file_count=0,
+                    total_bytes=0,
+                    errors=["unexpected payload files present: payload/.DS_Store"],
+                )
+
+            try:
+                m.verify_pack = fake_verify_pack
+                m._run_verify_plan(state, DummyStdScr(), pack_s=str(pack_dir), allow_large_manifest=False)
+            finally:
+                m.verify_pack = orig_verify_pack
+
+            self.assertEqual(state.status, "Failed.")
+            self.assertTrue(any(line.startswith("verify_target: ") for line in state.log_lines))
+            self.assertTrue(any("macOS added .DS_Store" in line for line in state.log_lines))
+            self.assertTrue(any("Try authored_pack.zip" in line for line in state.log_lines))
+            self.assertTrue(any("Press P to choose another pack path." in line for line in state.log_lines))
 
     def test_failed_verify_of_plain_directory_does_not_poison_remembered_pack_path(self) -> None:
         m = self.m
@@ -604,7 +638,23 @@ class TestTuiP1Regressions(unittest.TestCase):
                 m._stamp_with_insane_fx = orig_stamp_with_fx
 
             self.assertEqual(state.status, "Done.")
-            self.assertTrue(any(line == "Stamp complete." for line in state.log_lines))
+            self.assertTrue(any(line == "Assemble complete." for line in state.log_lines))
+
+    def test_noisy_stamp_failure_triggers_failure_fx(self) -> None:
+        m = self.m
+        state = m.AppState(theme=m.Theme(normal=0, reverse=0, header=0), insane=True)
+        state.palette = m.InsanePalette(bg=[0], header=[0], menu_hot=[0], menu_dim=0, divider=0, text=0, ok=0, warn=0, info=0)
+
+        def fail_stamp():
+            raise ValueError("boom")
+
+        with mock.patch.object(m, "_start_supernova_sfx_best_effort"), mock.patch.object(m, "_fx_kaleidoscope"), mock.patch.object(
+            m, "_fx_stamp_failure"
+        ) as fx_fail:
+            with self.assertRaisesRegex(ValueError, "boom"):
+                m._stamp_with_insane_fx(DummyStdScr(), state, fail_stamp, min_stamping_s=0.0, created_s=0.0)
+
+        fx_fail.assert_called_once()
 
     def test_verify_config_edits_clear_old_log_lines(self) -> None:
         m = self.m

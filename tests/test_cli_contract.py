@@ -55,6 +55,32 @@ class TestCliContract(unittest.TestCase):
             self.assertNotIn("entropy_root_sha256", payload["result"]["receipt"])
             self.assertTrue(payload["result"]["pack_dir"])
 
+    def test_assemble_json_emits_success_envelope(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            rc, stdout, stderr = self._run_cli(
+                [
+                    "assemble",
+                    "--input",
+                    str(input_dir),
+                    "--out",
+                    str(out_dir),
+                    "--json",
+                ]
+            )
+
+            self.assertEqual(rc, 0)
+            self.assertEqual(stderr, "")
+            payload = json.loads(stdout)
+            self.assertEqual(payload["ok"], True)
+            self.assertEqual(payload["command"], "assemble")
+            self.assertIn("result", payload)
+
     def test_help_machine_path_uses_non_destructive_json_example(self) -> None:
         proc = subprocess.run(
             [sys.executable, "-m", "authored_pack", "--help"],
@@ -65,8 +91,8 @@ class TestCliContract(unittest.TestCase):
         )
 
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
-        self.assertIn("authored-pack stamp --input /ABS/PATH/TO/DIR --out ./out --json", proc.stdout)
-        self.assertIn("stamp-bin is subtractive", proc.stdout)
+        self.assertIn("authored-pack assemble --input /ABS/PATH/TO/DIR --out ./out --json", proc.stdout)
+        self.assertIn("consume-bin is subtractive", proc.stdout)
 
     def test_verify_json_emits_failure_envelope(self) -> None:
         rc, stdout, stderr = self._run_cli(["verify", "--pack", "/no/such/path", "--json"])

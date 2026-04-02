@@ -344,10 +344,11 @@ def init_theme() -> Theme:
         try:
             curses.start_color()
             curses.use_default_colors()
-            amber = 214 if getattr(curses, "COLORS", 0) >= 256 else curses.COLOR_YELLOW
+            # Match Control Plane calm amber identity (AMBER_256 = 172).
+            amber = 172 if getattr(curses, "COLORS", 0) >= 256 else curses.COLOR_YELLOW
             bg = curses.COLOR_BLACK
-            curses.init_pair(1, amber, bg)
-            curses.init_pair(2, bg, amber)
+            _init_pair_safe(1, amber, bg)
+            _init_pair_safe(2, bg, amber)
             normal = curses.color_pair(1)
             reverse = curses.color_pair(2)
             header = reverse
@@ -483,6 +484,57 @@ def init_insane_palette() -> InsanePalette:
     return InsanePalette(bg=bg, header=header, menu_hot=menu_hot, menu_dim=menu_dim, divider=divider, text=text, ok=ok, warn=warn, info=info)
 
 
+def init_failure_palette() -> InsanePalette:
+    if not curses.has_colors():
+        return InsanePalette(
+            bg=[curses.A_REVERSE],
+            header=[curses.A_REVERSE | curses.A_BOLD],
+            menu_hot=[curses.A_REVERSE | curses.A_BOLD],
+            menu_dim=curses.A_BOLD,
+            divider=curses.A_BOLD,
+            text=curses.A_BOLD,
+            ok=curses.A_BOLD,
+            warn=curses.A_REVERSE | curses.A_BOLD,
+            info=curses.A_BOLD,
+        )
+
+    curses.start_color()
+    try:
+        curses.use_default_colors()
+    except curses.error:
+        pass
+
+    is_256 = getattr(curses, "COLORS", 0) >= 256
+    red = 196 if is_256 else curses.COLOR_RED
+    red_dark = 52 if is_256 else curses.COLOR_RED
+    red_deep = 88 if is_256 else curses.COLOR_RED
+    white = 231 if is_256 else curses.COLOR_WHITE
+    black = 16 if is_256 else curses.COLOR_BLACK
+
+    _init_pair_safe(71, red, black)
+    _init_pair_safe(72, black, red)
+    _init_pair_safe(73, black, red_dark)
+    _init_pair_safe(74, black, red_deep)
+    _init_pair_safe(75, white, red_dark)
+
+    bg = [
+        curses.color_pair(73),
+        curses.color_pair(74),
+        curses.color_pair(73),
+        curses.color_pair(74),
+    ]
+    header = [curses.color_pair(72) | curses.A_BOLD]
+    menu_hot = [curses.color_pair(72) | curses.A_BOLD]
+    menu_dim = curses.color_pair(71) | curses.A_BOLD
+    divider = curses.color_pair(71) | curses.A_BOLD
+    text = curses.color_pair(71) | curses.A_BOLD
+    ok = curses.color_pair(71) | curses.A_BOLD
+    warn = curses.color_pair(72) | curses.A_BOLD
+    info = curses.color_pair(75) | curses.A_BOLD
+
+    return InsanePalette(bg=bg, header=header, menu_hot=menu_hot, menu_dim=menu_dim, divider=divider, text=text, ok=ok, warn=warn, info=info)
+
+
 @dataclass
 class ViewerState:
     title: str
@@ -559,6 +611,7 @@ class AppState:
     theme: Theme
     insane: bool = False
     palette: Optional[InsanePalette] = None
+    failure_palette: Optional[InsanePalette] = None
     tick: int = 0
     godel_source_arg: Optional[str] = None
     godel_words: List[str] = field(default_factory=list)
@@ -590,15 +643,15 @@ class AppState:
     reward_ticks: int = 0
     menu: List[str] = field(
         default_factory=lambda: [
+            "Help",
             "Start",
             "Sources",
             "Stamp",
             "Verify",
-            "Help",
         ]
     )
     selected: int = 0
-    status: str = "Ready."
+    status: str = "Help: start here."
     log_lines: List[str] = field(default_factory=list)
     viewer: Optional[ViewerState] = None
     stamp_config: StampConfig = field(default_factory=StampConfig)
@@ -1061,7 +1114,7 @@ def _prepare_drop_actions(
             if mode == "sources":
                 actions.append(
                     DropPreparedAction(
-                        message=f"Not usable as authored sources: {_display_path(p, max_len=44)}. Use Stamp -> Input for whole folders.",
+                        message=f"Not usable as authored sources: {_display_path(p, max_len=44)}. Use Assemble -> Input for whole folders.",
                         success=False,
                         terminal=True,
                         seen_key=seen_key,
@@ -1310,7 +1363,7 @@ def _dropzone_preview(state: AppState, *, width: int, height: int) -> List[str]:
         lines.append(f"   Recent items: {sample}")
     lines.append("")
     lines.append("Auto-import rules:")
-    lines.append("- Dropped directory: sets default Stamp input dir")
+    lines.append("- Dropped directory: sets default Assemble input dir")
     lines.append("- Dropped image file: added as Authored Source (photo)")
     lines.append("- Dropped .txt/.md: added as Authored Source (text)")
     lines.append("")
@@ -1799,30 +1852,40 @@ def _header_action_for_label(label: str) -> str:
     actions = {
         "Start": "start",
         "Sources": "sources",
-        "Stamp": "stamp",
+        "Stamp": "assemble",
         "Verify": "verify",
         "Help": "help",
     }
     return actions.get(label, "none")
 
 
+def _display_menu_label(label: str) -> str:
+    if label == "Stamp":
+        return "Assemble"
+    return label
+
+
 def _quickstart_lines() -> List[str]:
     return [
         "START // choose what to do",
         "",
-        "Pack a Folder",
-        "- use a folder you already have",
-        "- stamp it now, verify it later",
+        "Choose the path that matches what you already have.",
         "",
-        "Compose from Sources",
-        "- build a pack from photos, notes, or taps",
+        "Pack a Folder You Already Have",
+        "- use this when you already have a folder to ship",
+        "- next: choose a folder, then review in Assemble",
         "",
-        "Verify a Pack",
-        "- check a stamped pack folder or zip",
+        "Build a Pack from Collected Sources",
+        "- use this when you want photos, notes, or taps first",
+        "- next: go to Sources to collect materials",
         "",
-        "Enter = Pack a Folder",
-        "S = Compose from Sources",
-        "V = Verify a Pack",
+        "Check a Pack You Already Assembled",
+        "- use this when you already have an assembled pack dir or zip",
+        "- next: choose a pack dir or zip to verify",
+        "",
+        "Enter = choose a folder",
+        "S = go to Sources",
+        "V = go to Verify",
     ]
 
 
@@ -1869,7 +1932,7 @@ def _stamp_panel_rows(state: AppState) -> List[StampPanelRow]:
                     StampPanelRow("write_sources", "Save source record", "on" if cfg.write_sources else "off", "toggle"),
                 ]
             )
-    rows.append(StampPanelRow("confirm", "Stamp now", "run now", "action"))
+    rows.append(StampPanelRow("confirm", "Assemble now", "run now", "action"))
     return rows
 
 
@@ -1879,7 +1942,7 @@ def _stamp_panel_lines(state: AppState, *, width: int, height: int) -> List[str]
         return []
     state.stamp_panel_selected = max(0, min(int(state.stamp_panel_selected), len(rows) - 1))
     lines = [
-        "STAMP REVIEW // check settings",
+        "ASSEMBLE REVIEW // check settings",
         "Up/Down move  Enter edit  Space toggle  Esc back",
     ]
     for idx, row in enumerate(rows):
@@ -1899,7 +1962,7 @@ def _stamp_panel_lines(state: AppState, *, width: int, height: int) -> List[str]
         lines.append(f"Sources ready for seed: {eligible}/{state.entropy_min_sources}")
         if eligible < int(state.entropy_min_sources):
             lines.append(f"Need {int(state.entropy_min_sources) - eligible} more collected sources to use this option.")
-    lines.append("Writes a pack folder with manifest, receipt, and payload.")
+    lines.append("Writes a deterministic pack folder with manifest, receipt, and payload.")
     if cfg.derive_seed:
         lines.append("Seed output follows this review choice.")
     else:
@@ -1915,7 +1978,7 @@ def _stamp_preview_lines(state: AppState, *, width: int, height: int) -> List[st
     input_label = "Authored Sources" if cfg.input_mode == "sources" else _display_path(Path(input_path).expanduser() if input_path not in ("", "@sources") else input_path, max_len=44) if input_path not in ("", "@sources") else input_path
     output_label = _display_path(Path(_effective_stamp_output(state, cfg)).expanduser(), max_len=44)
     lines = [
-        "STAMP // set what to pack",
+        "ASSEMBLE // set what to pack",
         "",
         f"- What to pack: {input_label}",
         f"- Save in: {output_label}",
@@ -1930,12 +1993,14 @@ def _stamp_preview_lines(state: AppState, *, width: int, height: int) -> List[st
     lines.extend(
         [
             "",
+            "Next: press I to choose what to pack, then Enter to review.",
+            "",
             "I = choose what to pack",
             "O = choose where to save it",
-            "Enter = review and stamp",
-            "U/D/Z/E = toggle sources, seed, zip, evidence",
+            "Enter = review and assemble",
+            "Toggle: Authored Sources / Derive seed / Zip copy / Evidence zip",
             "",
-            "Writes a pack folder and optional zip copy.",
+            "Writes a deterministic pack folder and optional zip export.",
         ]
     )
     return lines[:height]
@@ -1945,34 +2010,97 @@ def _verify_preview_lines(state: AppState) -> List[str]:
     cfg = state.verify_config
     pack_path = _effective_verify_path(state)
     pack_label = _display_path(Path(pack_path).expanduser(), max_len=44) if pack_path else "not set"
-    return [
-        "VERIFY // check a stamped pack",
+    lines = [
+        "VERIFY // check an assembled pack",
+        "",
+        "Best target:",
+        "- authored_pack.zip",
+        "- also works: out/<pack_root_sha256>/",
+        "- pointing at out/ uses the newest pack inside it",
         "",
         "Current target:",
         f"- pack: {pack_label}",
-        f"- allow large manifest: {'yes' if cfg.allow_large_manifest else 'no'}",
+    ]
+    if state.last_pack_dir is not None:
+        lines.append(f"- last assembled here: {_display_path(state.last_pack_dir, max_len=44)}")
+    lines.extend(
+        [
         "",
         "Enter = verify this path",
         "P = choose pack path",
         "L = toggle large-manifest cap",
+        f"- allow large manifest: {'yes' if cfg.allow_large_manifest else 'no'}",
         "",
         "Checks pack root, payload hashes, and receipt consistency.",
+        ]
+    )
+    return lines
+
+
+def _verify_failure_lines(pack: Path, errors: Sequence[str], *, auto_selected: bool = False) -> List[str]:
+    lines = [
+        "Verify failed.",
+        f"verify_target: {_display_path(pack, max_len=44)}",
     ]
+    if auto_selected:
+        lines.append("used most recent pack in that folder")
+    lines.extend(f"- {e}" for e in errors)
+
+    hints: List[str] = []
+    if any("unexpected payload files present:" in e and ".DS_Store" in e for e in errors):
+        hints.extend(
+            [
+                "Hint: macOS added .DS_Store after assembly.",
+                "Try authored_pack.zip, or remove the extra file and verify again.",
+            ]
+        )
+    elif any("unexpected payload files present:" in e for e in errors):
+        hints.extend(
+            [
+                "Hint: the pack directory changed after assembly.",
+                "Try authored_pack.zip, or verify a clean assembled copy.",
+            ]
+        )
+    if any("missing manifest.json" in e or "unsupported pack path:" in e for e in errors):
+        hints.extend(
+            [
+                "Hint: verify an assembled pack dir (out/<pack_root_sha256>/) or authored_pack.zip.",
+                "Tip: pointing at an out/ folder uses the most recent pack inside it.",
+            ]
+        )
+    if any("manifest.json" in e and "file too large" in e for e in errors):
+        hints.append("Hint: manifest.json is a file-list; very large packs need a larger cap (enable 'allow large manifest').")
+    hints.append("Press P to choose another pack path. Enter retries this target.")
+
+    if hints:
+        lines.append("")
+        lines.extend(hints)
+    return lines
 
 
 def _help_summary_lines(_state: AppState) -> List[str]:
     return [
-        "HELP // what this tool does",
+        "HELP // start here",
         "",
-        "Authored Pack is a small deterministic pack/verify tool for humans and agents.",
+        "Authored Pack is a deterministic assemble/verify tool for humans.",
         "",
-        "human flow",
-        "1. Pack a folder, or compose from sources.",
-        "2. Stamp a verifiable pack.",
-        "3. Verify it later or after handoff.",
+        "most common path",
+        "1. Press Down for Start.",
+        "2. Choose the folder you want to pack.",
+        "3. In Assemble, review settings and write the pack.",
+        "4. In Verify, check the pack dir or zip later.",
+        "",
+        "workflow",
+        "folder  -> Start   -> Assemble -> Verify",
+        "sources -> Sources -> Assemble -> Verify",
+        "                         +-> authored_pack.zip",
+        "",
+        "key actions",
+        "Down = begin  Enter = act  Esc = back  Q = quit  M = mode",
+        "Verify expects out/<pack_root_sha256>/ or authored_pack.zip.",
         "",
         "trust boundary",
-        "Not an RNG. Noisy mode is ceremony only. Evidence is tamper-evident, not signed.",
+        "Noisy mode changes presentation only. Evidence is tamper-evident, not signed.",
         "",
         "more detail",
         "Enter = open this help in a viewer",
@@ -2022,6 +2150,25 @@ def _selection_preview(state: AppState, label: str, *, width: int, height: int) 
     return [ln[:width] for ln in preview[:height]]
 
 
+def _stamp_failure_alarm_active(state: AppState) -> bool:
+    if not state.insane:
+        return False
+    label = state.menu[state.selected] if 0 <= state.selected < len(state.menu) else ""
+    if label != "Stamp":
+        return False
+    if state.status != "Failed.":
+        return False
+    if state.stamp_panel_draft is not None:
+        return False
+    return bool(state.log_lines and str(state.log_lines[0]).startswith("Assemble failed."))
+
+
+def _current_insane_palette(state: AppState) -> Optional[InsanePalette]:
+    if _stamp_failure_alarm_active(state) and state.failure_palette is not None:
+        return state.failure_palette
+    return state.palette
+
+
 def _draw_header(stdscr, state: AppState, cols: int) -> None:
     head_attr = state.theme.header | (curses.A_REVERSE if state.interaction_flash_ticks > 0 else 0)
     header_identity = build_header_identity_line(APP_NAME, EPS_TUI_TITLE, EPS_TUI_VERSION, cols)
@@ -2048,10 +2195,11 @@ def _draw_header(stdscr, state: AppState, cols: int) -> None:
 
 
 def _draw_insane_background(stdscr, state: AppState, rows: int, cols: int) -> None:
-    if state.palette is None:
+    pal = _current_insane_palette(state)
+    if pal is None:
         return
     # Glitch stripes: horizontal bands plus shifting vertical segments.
-    bg = state.palette.bg
+    bg = pal.bg
     if not bg:
         return
 
@@ -2084,7 +2232,7 @@ def _draw_insane_background(stdscr, state: AppState, rows: int, cols: int) -> No
                 ch = " "
             if interaction_flash and ((row_seed + x + y + state.tick) % 13 == 0):
                 ch = "█"
-                attr = _cycle(state.palette.menu_hot, state.tick + x + y, speed=1, default=attr) | curses.A_BOLD
+                attr = _cycle(pal.menu_hot, state.tick + x + y, speed=1, default=attr) | curses.A_BOLD
             safe_addstr(stdscr, y, x, (ch * run), attr)
             x += run
 
@@ -2503,6 +2651,146 @@ def _start_supernova_sfx_best_effort(*, duration_s: float = 5.0) -> None:
     t.start()
 
 
+def _write_stamp_failure_cascade_wav(
+    wav_path: Path,
+    *,
+    duration_s: float = 2.2,
+    sample_rate: int = 44100,
+) -> None:
+    dur = max(0.5, min(float(duration_s), 6.0))
+    sr = int(sample_rate)
+    n = max(1, int(dur * sr))
+    # Descending A-minor flavored cascade.
+    note_semitones = [12.0, 10.0, 7.0, 5.0, 3.0, 0.0, -2.0, -5.0]
+    note_len = max(1, n // len(note_semitones))
+    base_hz = 220.0
+    amp = 0.18
+    phase_root = 0.0
+    phase_minor = 0.0
+    phase_sub = 0.0
+
+    wav_path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(wav_path), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sr)
+        out = bytearray()
+        for i in range(n):
+            note_idx = min(len(note_semitones) - 1, i // note_len)
+            local_i = i - (note_idx * note_len)
+            local_t = float(local_i) / float(sr)
+            note_prog = float(local_i) / float(max(1, note_len - 1))
+            semi = float(note_semitones[note_idx])
+            root_hz = float(base_hz) * (2.0 ** (semi / 12.0))
+            minor_hz = root_hz * (2.0 ** (3.0 / 12.0))
+            sub_hz = root_hz / 2.0
+            vibrato = 1.0 + (0.007 * math.sin(2.0 * math.pi * 5.2 * local_t))
+            phase_root += (2.0 * math.pi * root_hz * vibrato) / float(sr)
+            phase_minor += (2.0 * math.pi * minor_hz * vibrato) / float(sr)
+            phase_sub += (2.0 * math.pi * sub_hz) / float(sr)
+
+            attack = min(1.0, local_t / 0.012)
+            release = max(0.0, 1.0 - note_prog)
+            env = attack * (release * release)
+            global_tail = max(0.0, 1.0 - (float(i) / float(max(1, n - 1))) * 0.25)
+            mix = (
+                0.62 * _triangle_wave(phase_root)
+                + 0.26 * _triangle_wave(phase_minor)
+                + 0.12 * math.sin(phase_sub)
+            )
+            s = max(-1.0, min(1.0, mix * env * global_tail))
+            si = int(max(-32767, min(32767, s * (32767.0 * amp))))
+            out += int(si).to_bytes(2, "little", signed=True)
+        wf.writeframes(out)
+
+
+def _start_stamp_failure_sfx_best_effort(*, duration_s: float = 2.2) -> None:
+    if not _audio_player_command(Path("eps_stamp_failure.wav")):
+        return
+
+    tmp_dir = Path(tempfile.gettempdir())
+    wav_path = tmp_dir / f"eps_stamp_failure_{os.getpid()}_{int(time.time() * 1000)}.wav"
+    dur = max(0.5, min(float(duration_s), 6.0))
+
+    def _worker() -> None:
+        try:
+            _write_stamp_failure_cascade_wav(wav_path, duration_s=dur)
+            cmd = _audio_player_command(wav_path)
+            if not cmd:
+                return
+            p = subprocess.Popen(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            try:
+                p.wait(timeout=max(1.0, dur + 1.0))
+            except Exception:
+                try:
+                    p.terminate()
+                    p.wait(timeout=0.2)
+                except Exception:
+                    try:
+                        p.kill()
+                        p.wait(timeout=0.2)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        finally:
+            try:
+                wav_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+    t = threading.Thread(target=_worker, name="eps_stamp_failure_sfx", daemon=True)
+    t.start()
+
+
+def _fx_stamp_failure(stdscr, state: AppState, *, duration_s: float = 2.2, fps: int = 25) -> None:
+    if not state.insane:
+        return
+
+    pal = state.failure_palette or init_failure_palette()
+    rows, cols = stdscr.getmaxyx()
+    frames = max(1, int(round(float(duration_s) * int(fps))))
+    band_h = max(1, rows // 9)
+    title = "STAMP FAILED"
+    subtitle = "Review the error, fix the target, and try again."
+
+    _start_stamp_failure_sfx_best_effort(duration_s=float(duration_s))
+    try:
+        stdscr.nodelay(True)
+        stdscr.timeout(0)
+    except curses.error:
+        pass
+
+    for f in range(frames):
+        stdscr.erase()
+        for y in range(rows):
+            idx = ((y + (f * 2)) // band_h) % max(1, len(pal.bg))
+            attr = pal.bg[idx]
+            if ((y + f) % max(3, band_h * 2)) == 0:
+                attr = pal.menu_hot[0]
+            safe_addstr(stdscr, y, 0, (" " * cols), attr)
+
+        title_y = max(3, rows // 2 - 1)
+        subtitle_y = min(rows - 2, title_y + 2)
+        title_attr = pal.menu_hot[0] | curses.A_BOLD
+        subtitle_attr = pal.text
+        safe_addstr(stdscr, title_y, max(0, (cols - len(title)) // 2), title[:cols], title_attr)
+        safe_addstr(stdscr, subtitle_y, max(0, (cols - len(subtitle)) // 2), subtitle[:cols], subtitle_attr)
+        stdscr.refresh()
+        time.sleep(max(0.0, 1.0 / float(fps)))
+
+    try:
+        stdscr.nodelay(False)
+        stdscr.timeout(50 if state.insane else 100)
+    except curses.error:
+        pass
+
+
 def _fx_no_entropy(stdscr, state: AppState, *, duration_s: float = 5.0, fps: int = 25) -> None:
     """
     Error payoff: flash red with a skull/crossbones + admonition.
@@ -2833,6 +3121,7 @@ def _stamp_with_insane_fx(stdscr, state: AppState, fn, *, min_stamping_s: float 
 
     th.join()
     if holder.get("exc") is not None:
+        _fx_stamp_failure(stdscr, state, duration_s=2.2, fps=25)
         raise holder["exc"]  # type: ignore[misc]
 
     # Phase 2: end burst.
@@ -2842,10 +3131,11 @@ def _stamp_with_insane_fx(stdscr, state: AppState, fn, *, min_stamping_s: float 
 
 
 def _draw_insane_header(stdscr, state: AppState, cols: int) -> None:
-    if state.palette is None:
+    pal = _current_insane_palette(state)
+    if pal is None:
         return
 
-    head_attr = _cycle(state.palette.header, state.tick, speed=1, default=state.palette.text)
+    head_attr = _cycle(pal.header, state.tick, speed=1, default=pal.text)
     safe_addstr(stdscr, 0, 0, (" " * cols), head_attr)
 
     _update_godel_phrase(state)
@@ -2865,13 +3155,13 @@ def _draw_insane_header(stdscr, state: AppState, cols: int) -> None:
     s = (state.status or "").strip()
     s_l = s.lower()
     if "fail" in s_l:
-        risk_attr = state.palette.warn
+        risk_attr = pal.warn
         risk = "WARN"
     elif "done" in s_l:
-        risk_attr = state.palette.ok
+        risk_attr = pal.ok
         risk = "OK"
     else:
-        risk_attr = state.palette.info
+        risk_attr = pal.info
         risk = "INFO"
     label = state.menu[state.selected] if 0 <= state.selected < len(state.menu) else ""
     action = _header_action_for_label(label)
@@ -2879,45 +3169,47 @@ def _draw_insane_header(stdscr, state: AppState, cols: int) -> None:
     safe_addstr(stdscr, 1, 0, meta[:cols].ljust(cols), risk_attr)
 
     div = ("═" * max(0, cols - 2)) if cols >= 2 else ""
-    safe_addstr(stdscr, 2, 0, ("╬" + div + "╬")[:cols].ljust(cols), state.palette.divider)
+    safe_addstr(stdscr, 2, 0, ("╬" + div + "╬")[:cols].ljust(cols), pal.divider)
 
 
 def _draw_insane_menu(stdscr, state: AppState, top: int, left_w: int, height: int) -> None:
-    if state.palette is None:
+    pal = _current_insane_palette(state)
+    if pal is None:
         return
     for i in range(height):
         idx = i
         y = top + i
         if idx >= len(state.menu):
-            safe_addstr(stdscr, y, 0, " " * left_w, state.palette.menu_dim)
+            safe_addstr(stdscr, y, 0, " " * left_w, pal.menu_dim)
             continue
-        label = state.menu[idx]
+        label = _display_menu_label(state.menu[idx])
         selected = idx == state.selected
         if selected and state.focus == "menu":
-            attr = _cycle(state.palette.menu_hot, state.tick + idx, speed=2, default=state.palette.menu_dim)
+            attr = _cycle(pal.menu_hot, state.tick + idx, speed=2, default=pal.menu_dim)
         elif selected:
-            attr = state.palette.menu_dim | curses.A_BOLD
+            attr = pal.menu_dim | curses.A_BOLD
         else:
-            attr = state.palette.menu_dim
+            attr = pal.menu_dim
         prefix = ">> " if selected else "   "
         text = (prefix + label)[:left_w].ljust(left_w)
         safe_addstr(stdscr, y, 0, text, attr)
 
 
 def _draw_insane_viewer(stdscr, state: AppState, top: int, cols: int, rows: int) -> None:
-    if state.viewer is None or state.palette is None:
+    pal = _current_insane_palette(state)
+    if state.viewer is None or pal is None:
         return
     v = state.viewer
     body_h = rows - top - 1
-    title_attr = _cycle(state.palette.header, state.tick, speed=2, default=state.palette.text)
+    title_attr = _cycle(pal.header, state.tick, speed=2, default=pal.text)
     safe_addstr(stdscr, top, 0, (f"[VIEW] {v.title}")[:cols].ljust(cols), title_attr)
     for i in range(body_h - 1):
         src_idx = v.top + i
         y = top + 1 + i
         if src_idx >= len(v.lines):
-            safe_addstr(stdscr, y, 0, " " * cols, state.palette.text)
+            safe_addstr(stdscr, y, 0, " " * cols, pal.text)
             continue
-        safe_addstr(stdscr, y, 0, v.lines[src_idx][:cols].ljust(cols), state.palette.text)
+        safe_addstr(stdscr, y, 0, v.lines[src_idx][:cols].ljust(cols), pal.text)
 
 
 def _authored_sources_preview(state: AppState, *, width: int, height: int) -> List[str]:
@@ -2934,14 +3226,14 @@ def _authored_sources_preview(state: AppState, *, width: int, height: int) -> Li
     if state.focus == "entropy" and state.authored_sources:
         lines.append("List focus. Up/Down moves. Enter previews. Tab returns to menu.")
     else:
-        lines.append("A add photos  T add text  Space record taps  P import paths")
+        lines.append("A add photo(s)  T add text note  Space record tap sample  P import files/folders")
     lines.append("")
     if not state.authored_sources:
-        lines.append("These become the pack contents when you stamp from Authored Sources.")
+        lines.append("These become the pack contents when you assemble from Authored Sources.")
         lines.append("You can ignore this screen if you just want to pack a normal folder.")
         lines.append("Add a photo, text note, or tap sample.")
         return lines[:height]
-    lines.append("When you are ready, go to Stamp and choose Authored Sources.")
+    lines.append("Tab to inspect sources. Enter goes to Assemble with Authored Sources.")
     lines.append("")
     if state.drop_import_count > 0:
         lines.append(f"Imported paths this run: {state.drop_import_count}")
@@ -2972,7 +3264,8 @@ def _authored_sources_preview(state: AppState, *, width: int, height: int) -> Li
 
 
 def _draw_insane_right_pane(stdscr, state: AppState, top: int, left_w: int, cols: int, rows: int) -> None:
-    if state.palette is None:
+    pal = _current_insane_palette(state)
+    if pal is None:
         return
     body_h = rows - top - 1
     right_x = left_w + 1
@@ -2983,16 +3276,17 @@ def _draw_insane_right_pane(stdscr, state: AppState, top: int, left_w: int, cols
 
     for i in range(body_h):
         y = top + i
-        safe_addstr(stdscr, y, left_w, "║", state.palette.divider)
+        safe_addstr(stdscr, y, left_w, "║", pal.divider)
 
     for i in range(body_h):
         y = top + i
         line = preview[i] if i < len(preview) else ""
-        attr = state.palette.text if i % 2 == 0 else _cycle(state.palette.bg, state.tick + i, speed=4, default=state.palette.text)
+        attr = pal.text if i % 2 == 0 else _cycle(pal.bg, state.tick + i, speed=4, default=pal.text)
         safe_addstr(stdscr, y, right_x, line[:right_w].ljust(right_w), attr)
 
 
 def _draw_footer(stdscr, state: AppState, rows: int, cols: int) -> None:
+    failure_pal = _current_insane_palette(state) if _stamp_failure_alarm_active(state) else None
     if state.viewer is not None:
         legend = "Up/Down/PgUp/PgDn: scroll  Esc/q/b: back"
         msg = state.status.strip() if state.status else ""
@@ -3002,7 +3296,8 @@ def _draw_footer(stdscr, state: AppState, rows: int, cols: int) -> None:
                 line = f"{legend}{' ' * (cols - len(legend) - len(msg))}{msg}"
             else:
                 line = f"{legend}  {msg}"
-        safe_addstr(stdscr, rows - 1, 0, line[:cols].ljust(cols), state.theme.reverse)
+        attr = failure_pal.menu_hot[0] if failure_pal and failure_pal.menu_hot else state.theme.reverse
+        safe_addstr(stdscr, rows - 1, 0, line[:cols].ljust(cols), attr)
         return
 
     label = state.menu[state.selected] if 0 <= state.selected < len(state.menu) else ""
@@ -3010,7 +3305,7 @@ def _draw_footer(stdscr, state: AppState, rows: int, cols: int) -> None:
         if state.focus == "entropy" and state.authored_sources:
             legend = "Up/Down: list  Tab: menu  Enter: preview  D: delete  C: clear  Esc: back"
         elif state.authored_sources:
-            legend = "Up/Down: menu  Enter: stamp  Tab: list  A/T/Space/P: add  M: mode  Q: quit"
+            legend = "Up/Down: menu  Enter: assemble  Tab: list  A/T/Space/P: add  M: mode  Q: quit"
         else:
             legend = "Up/Down: menu  Tab: list  A/T/Space/P: add  M: mode  Q: quit"
     elif label == "Stamp":
@@ -3021,9 +3316,12 @@ def _draw_footer(stdscr, state: AppState, rows: int, cols: int) -> None:
     elif label == "Verify":
         legend = "Enter: verify  P: path  L: large-manifest  M: mode  Q: quit"
     elif label == "Help":
-        legend = "Enter: help  R: README  M: mode  Q: quit"
+        legend = "Down: Start  Enter: viewer  R: README  M: mode  Q: quit"
     elif label == "Start":
-        legend = "Enter: pack folder  S: sources  V: verify  M: mode  Q: quit"
+        if cols < 72:
+            legend = "Enter: folder  S: Sources  V: Verify  Q: quit"
+        else:
+            legend = "Enter: choose folder  S: go to Sources  V: go to Verify  M: mode  Q: quit"
     else:
         legend = "Up/Down: move  Enter: select  M: mode  Q: quit"
     msg = state.status.strip() if state.status else ""
@@ -3034,7 +3332,8 @@ def _draw_footer(stdscr, state: AppState, rows: int, cols: int) -> None:
             line = f"{legend}{' ' * (cols - len(legend) - len(msg))}{msg}"
         else:
             line = f"{legend}  {msg}"
-    safe_addstr(stdscr, rows - 1, 0, line[:cols].ljust(cols), state.theme.reverse)
+    attr = failure_pal.menu_hot[0] if failure_pal and failure_pal.menu_hot else state.theme.reverse
+    safe_addstr(stdscr, rows - 1, 0, line[:cols].ljust(cols), attr)
 
 
 def _draw_menu(stdscr, state: AppState, top: int, left_w: int, height: int) -> None:
@@ -3044,7 +3343,7 @@ def _draw_menu(stdscr, state: AppState, top: int, left_w: int, height: int) -> N
         if idx >= len(state.menu):
             safe_addstr(stdscr, y, 0, " " * left_w, state.theme.normal)
             continue
-        label = state.menu[idx]
+        label = _display_menu_label(state.menu[idx])
         selected = idx == state.selected
         prefix = "> " if selected else "  "
         text = (prefix + label)[:left_w].ljust(left_w)
@@ -3773,7 +4072,7 @@ def _edit_stamp_text_row(state: AppState, stdscr, key: str) -> None:
         return
     setattr(cfg, key, raw.strip())
     state.log_lines = []
-    state.status = "Stamp field updated."
+    state.status = "Assemble field updated."
 
 
 def _toggle_stamp_panel_value(state: AppState, key: str) -> None:
@@ -3923,7 +4222,7 @@ def _edit_stamp_advanced(state: AppState, stdscr, cfg: Optional[StampConfig] = N
         return
     exclude_picker = cfg.exclude_picker
     if cfg.input_mode != "sources":
-        exclude_picker = _prompt_bool_curses(stdscr, "(Authored Pack) pick files to exclude before stamp", default=cfg.exclude_picker)
+        exclude_picker = _prompt_bool_curses(stdscr, "(Authored Pack) pick files to exclude before assemble", default=cfg.exclude_picker)
         if exclude_picker is None:
             state.status = "Ready."
             return
@@ -3966,11 +4265,11 @@ def _edit_stamp_advanced(state: AppState, stdscr, cfg: Optional[StampConfig] = N
     cfg.write_seed = bool(write_seed)
     cfg.show_seed = bool(show_seed)
     cfg.write_sources = bool(write_sources)
-    state.status = "Stamp options updated."
+    state.status = "Assemble options updated."
 
 
 def _edit_verify_path(state: AppState, stdscr) -> bool:
-    raw = _prompt_str_curses(stdscr, "(Authored Pack) pack path (dir or .zip)", default=_effective_verify_path(state) or "./out")
+    raw = _prompt_str_curses(stdscr, "(Authored Pack) verify target (.zip, assembled dir, or out/)", default=_effective_verify_path(state) or "./out")
     if raw is None:
         state.status = "Ready."
         return False
@@ -3999,7 +4298,7 @@ def _run_stamp_plan(
     write_sources: bool,
     evidence_bundle: bool,
 ) -> None:
-    state.status = "Stamp: review..."
+    state.status = "Assemble: review..."
     state.log_lines = []
 
     tmp_payload_dir: Optional[Path] = None
@@ -4057,7 +4356,7 @@ def _run_stamp_plan(
                 need_more = int(state.entropy_min_sources) - len(mixed_sources)
                 state.status = "Failed."
                 state.log_lines = [
-                    "Stamp blocked: staged sources are not ready to mix into the seed.",
+                    "Assemble blocked: staged sources are not ready to mix into the seed.",
                     f"Sources ready for seed: {len(mixed_sources)}/{state.entropy_min_sources}",
                     f"Need {need_more} more collected sources to use this option.",
                     f"Tap sources need >= {LOCKDOWN_MIN_TAP_EVENTS} key events.",
@@ -4073,7 +4372,7 @@ def _run_stamp_plan(
         elif derive_seed and mix_sources:
             state.status = "Failed."
             state.log_lines = [
-                "Stamp blocked: staged sources were requested for the seed, but none are available.",
+                "Assemble blocked: staged sources were requested for the seed, but none are available.",
                 "Go to Sources and add or import some first.",
             ]
             try:
@@ -4137,12 +4436,12 @@ def _run_stamp_plan(
         if state.insane:
             res = _stamp_with_insane_fx(stdscr, state, _do_stamp, min_stamping_s=5.0, created_s=5.0)
         else:
-            state.status = "Stamping..."
+            state.status = "Assembling..."
             state.log_lines = ["Building pack..."]
             draw(stdscr, state)
             res = _do_stamp()
     except Exception as exc:
-        state.log_lines = ["Stamp failed.", f"- {exc}"]
+        state.log_lines = ["Assemble failed.", f"- {exc}"]
         state.status = "Failed."
         return
     finally:
@@ -4161,7 +4460,7 @@ def _run_stamp_plan(
     evidence_path = getattr(res, "evidence_bundle_path", None)
     evidence_sha = getattr(res, "evidence_bundle_sha256", None)
     state.log_lines = [
-        "Stamp complete.",
+        "Assemble complete.",
         f"input: {_display_path(input_dir, max_len=44)}",
         f"out: {_display_path(out_dir, max_len=44)}",
         f"pack: {_display_path(res.pack_dir, max_len=44)}",
@@ -4204,7 +4503,7 @@ def _run_stamp_from_config(state: AppState, stdscr) -> None:
     else:
         input_s = _effective_stamp_input(state)
         if not input_s:
-            state.status = "Set an input folder or switch to Authored Sources before stamping."
+            state.status = "Set an input folder or switch to Authored Sources before assembling."
             return
     out_s = _effective_stamp_output(state)
     _run_stamp_plan(
@@ -4229,7 +4528,7 @@ def _run_stamp_from_config(state: AppState, stdscr) -> None:
 
 def _action_stamp(state: AppState, stdscr) -> None:
     # In-curses prompt sequence (no dropping out of the UI).
-    state.status = "Stamp: configure..."
+    state.status = "Assemble: configure..."
     state.log_lines = []
     rows, cols = stdscr.getmaxyx()
     stdscr.move(rows - 1, 0)
@@ -4242,67 +4541,67 @@ def _action_stamp(state: AppState, stdscr) -> None:
     input_s = _prompt_str_curses(stdscr, "(Authored Pack) input folder or Authored Sources", default=default_in)
     if input_s is None:
         state.status = "Ready."
-        state.log_lines = ["Stamp cancelled."]
+        state.log_lines = ["Assemble cancelled."]
         return
     out_s = _prompt_str_curses(stdscr, "(Authored Pack) output folder", default=default_out)
     if out_s is None:
         state.status = "Ready."
-        state.log_lines = ["Stamp cancelled."]
+        state.log_lines = ["Assemble cancelled."]
         return
     pack_id_s = _prompt_str_curses(stdscr, "(Authored Pack) label (optional)", default=cfg.pack_id)
     if pack_id_s is None:
         state.status = "Ready."
-        state.log_lines = ["Stamp cancelled."]
+        state.log_lines = ["Assemble cancelled."]
         return
     notes_s = _prompt_str_curses(stdscr, "(Authored Pack) note (optional)", default=cfg.notes)
     if notes_s is None:
         state.status = "Ready."
-        state.log_lines = ["Stamp cancelled."]
+        state.log_lines = ["Assemble cancelled."]
         return
     created_at_s = _prompt_str_curses(stdscr, "(Authored Pack) timestamp UTC (optional)", default=cfg.created_at_utc)
     if created_at_s is None:
         state.status = "Ready."
-        state.log_lines = ["Stamp cancelled."]
+        state.log_lines = ["Assemble cancelled."]
         return
     include_hidden = _prompt_bool_curses(stdscr, "(Authored Pack) include hidden files", default=cfg.include_hidden)
     if include_hidden is None:
         state.status = "Ready."
-        state.log_lines = ["Stamp cancelled."]
+        state.log_lines = ["Assemble cancelled."]
         return
     exclude_picker = False
     input_choice = _normalize_single_path_input(input_s.strip(), allow_sources=True)
     if input_choice != "@sources":
-        exclude_picker = _prompt_bool_curses(stdscr, "(Authored Pack) pick files to exclude before stamp", default=cfg.exclude_picker)
+        exclude_picker = _prompt_bool_curses(stdscr, "(Authored Pack) pick files to exclude before assemble", default=cfg.exclude_picker)
         if exclude_picker is None:
             state.status = "Ready."
-            state.log_lines = ["Stamp cancelled."]
+            state.log_lines = ["Assemble cancelled."]
             return
     zip_pack = _prompt_bool_curses(stdscr, "(Authored Pack) write authored_pack.zip", default=cfg.zip_pack)
     if zip_pack is None:
         state.status = "Ready."
-        state.log_lines = ["Stamp cancelled."]
+        state.log_lines = ["Assemble cancelled."]
         return
     derive_seed = _prompt_bool_curses(stdscr, "(Authored Pack) derive seed", default=cfg.derive_seed)
     if derive_seed is None:
         state.status = "Ready."
-        state.log_lines = ["Stamp cancelled."]
+        state.log_lines = ["Assemble cancelled."]
         return
     mix_sources = False
     if derive_seed and state.authored_sources:
         mix_sources = _prompt_bool_curses(stdscr, "(Authored Pack) use collected sources in seed", default=cfg.mix_sources)
         if mix_sources is None:
             state.status = "Ready."
-            state.log_lines = ["Stamp cancelled."]
+            state.log_lines = ["Assemble cancelled."]
             return
     write_seed = _prompt_bool_curses(stdscr, "(Authored Pack) write seed files (chmod 600)", default=cfg.write_seed) if derive_seed else False
     if derive_seed and write_seed is None:
         state.status = "Ready."
-        state.log_lines = ["Stamp cancelled."]
+        state.log_lines = ["Assemble cancelled."]
         return
     show_seed = _prompt_bool_curses(stdscr, "(Authored Pack) show seed in UI", default=cfg.show_seed) if derive_seed else False
     if derive_seed and show_seed is None:
         state.status = "Ready."
-        state.log_lines = ["Stamp cancelled."]
+        state.log_lines = ["Assemble cancelled."]
         return
     write_sources_default = cfg.write_sources or bool(mix_sources)
     write_sources = (
@@ -4316,7 +4615,7 @@ def _action_stamp(state: AppState, stdscr) -> None:
     )
     if derive_seed and write_sources is None:
         state.status = "Ready."
-        state.log_lines = ["Stamp cancelled."]
+        state.log_lines = ["Assemble cancelled."]
         return
     evidence_default = bool(derive_seed)
     evidence_bundle = _prompt_bool_curses(
@@ -4326,7 +4625,7 @@ def _action_stamp(state: AppState, stdscr) -> None:
     )
     if evidence_bundle is None:
         state.status = "Ready."
-        state.log_lines = ["Stamp cancelled."]
+        state.log_lines = ["Assemble cancelled."]
         return
 
     cfg.input_mode = "sources" if input_choice == "@sources" else "folder"
@@ -4371,7 +4670,7 @@ def _run_verify_plan(state: AppState, stdscr, *, pack_s: str, allow_large_manife
     pack = Path(_normalize_single_path_input(pack_s)).expanduser()
     auto_selected = False
     if not pack.exists():
-        state.log_lines = ["Verify failed.", f"- pack path not found: {_display_path(pack, max_len=44)}"]
+        state.log_lines = _verify_failure_lines(pack, [f"pack path not found: {_display_path(pack, max_len=44)}"])
         state.status = "Failed."
         return
     if pack.is_dir() and not (pack / "manifest.json").is_file():
@@ -4391,7 +4690,7 @@ def _run_verify_plan(state: AppState, stdscr, *, pack_s: str, allow_large_manife
         draw(stdscr, state)
         res = verify_pack(pack, max_manifest_bytes=int(cap))
     except Exception as exc:
-        state.log_lines = ["Verify failed.", f"- {exc}"]
+        state.log_lines = _verify_failure_lines(pack, [str(exc)], auto_selected=auto_selected)
         state.status = "Failed."
         return
     remember_pack = auto_selected or (pack.is_dir() and (pack / "manifest.json").is_file()) or (
@@ -4416,13 +4715,7 @@ def _run_verify_plan(state: AppState, stdscr, *, pack_s: str, allow_large_manife
             state.log_lines.insert(3 if auto_selected else 2, f"payload_root_sha256: {res.payload_root_sha256}")
         state.status = "Done."
     else:
-        state.log_lines = ["Verify failed."] + [f"- {e}" for e in res.errors]
-        if any("missing manifest.json" in e for e in res.errors):
-            state.log_lines.append("")
-            state.log_lines.append("Hint: verify expects a stamped pack dir (out/<root_sha256>/) or authored_pack.zip.")
-        if any("manifest.json" in e and "file too large" in e for e in res.errors):
-            state.log_lines.append("")
-            state.log_lines.append("Hint: manifest.json is a file-list; very large packs need a larger cap (enable 'allow large manifest').")
+        state.log_lines = _verify_failure_lines(pack, list(res.errors), auto_selected=auto_selected)
         state.status = "Failed."
 
 
@@ -4465,6 +4758,8 @@ def _action_verify(state: AppState, stdscr) -> None:
 def _ensure_noisy_profile_assets(state: AppState) -> None:
     if state.palette is None:
         state.palette = init_insane_palette()
+    if state.failure_palette is None:
+        state.failure_palette = init_failure_palette()
     if state.godel_words or state.godel_phrase:
         return
 
@@ -4526,7 +4821,7 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
     if ch == 27:
         if label == "Stamp" and state.stamp_panel_draft is not None:
             _close_stamp_panel(state)
-            state.status = "Stamp review closed."
+            state.status = "Assemble review closed."
             return True
         if state.focus != "menu":
             state.focus = "menu"
@@ -4571,7 +4866,7 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
             if _edit_stamp_input(state, stdscr, state.stamp_config, allow_sources=False):
                 state.selected = state.menu.index("Stamp")
                 state.focus = "menu"
-                state.status = "Folder chosen. Review and stamp when ready."
+                state.status = "Folder chosen. Review and assemble when ready."
             return True
 
     if label == "Sources":
@@ -4611,7 +4906,7 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
             if state.authored_sources:
                 state.selected = state.menu.index("Stamp")
                 state.focus = "menu"
-                state.status = "Authored Sources selected. Review and stamp when ready."
+                state.status = "Authored Sources selected. Review and assemble when ready."
             else:
                 state.status = "Compose from sources with A, T, Space, or P."
             return True
@@ -4622,11 +4917,11 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
             rows = _stamp_panel_rows(state)
             if ch in (curses.KEY_UP, ord("k")):
                 state.stamp_panel_selected = max(0, state.stamp_panel_selected - 1)
-                state.status = "Stamp review."
+                state.status = "Assemble review."
                 return True
             if ch in (curses.KEY_DOWN, ord("j")):
                 state.stamp_panel_selected = min(max(0, len(rows) - 1), state.stamp_panel_selected + 1)
-                state.status = "Stamp review."
+                state.status = "Assemble review."
                 return True
             if ch == ord(" "):
                 row = rows[max(0, min(int(state.stamp_panel_selected), len(rows) - 1))]
@@ -4659,7 +4954,7 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
                 cfg.input_mode = "sources"
                 cfg.input_path = ""
             state.log_lines = []
-            state.status = f"Stamp input mode: {'Authored Sources' if cfg.input_mode == 'sources' else 'folder'}."
+            state.status = f"Assemble input mode: {'Authored Sources' if cfg.input_mode == 'sources' else 'folder'}."
             return True
         if ch in (ord("d"), ord("D")):
             cfg.derive_seed = not cfg.derive_seed
@@ -4807,7 +5102,7 @@ def run_tui(stdscr, *, insane: bool = False, godel_source: Optional[str] = None)
 def main(argv: Optional[Sequence[str]] = None) -> int:
     p = argparse.ArgumentParser(
         prog="authored-pack-tui",
-        description="Calm-first TUI for Authored Pack. Default is Calm Mode; Noisy Mode keeps the ceremony cues without changing pack semantics.",
+        description="Calm-first TUI for Authored Pack. Default is Calm Mode; Noisy Mode keeps the ceremony cues without changing assembly semantics.",
     )
     p.add_argument("--mode", choices=("calm", "noisy"), default="calm", help="Start in calm or noisy mode (default: calm)")
     p.add_argument("--noisy", action="store_true", help="Start in Noisy Mode")
@@ -4826,7 +5121,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print("authored-pack-tui: error: no TTY detected (curses requires an interactive terminal).", file=sys.stderr)
         print(
             "hint: run from a real terminal, or use the headless CLI: "
-            "`python3 -m authored_pack stamp --input <dir> --out ./out`",
+            "`python3 -m authored_pack assemble --input <dir> --out ./out`",
             file=sys.stderr,
         )
         return 2

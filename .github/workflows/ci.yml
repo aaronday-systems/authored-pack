@@ -21,3 +21,9 @@ jobs:
         run: pytest -q
       - name: CLI help smoke
         run: python3 -m authored_pack --help
+      - name: TUI PTY smoke
+        run: python3 scripts/smoke_tui_pty.py
+      - name: Installed CLI smoke
+        run: bash scripts/smoke_install.sh
+      - name: Demo smoke
+        run: bash scripts/demo_v1.sh

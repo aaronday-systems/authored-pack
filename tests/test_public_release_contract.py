@@ -17,6 +17,18 @@ class TestPublicReleaseContract(unittest.TestCase):
         data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
         self.assertEqual(data["project"]["version"], __version__)
 
+    def test_cli_reports_runtime_and_package_version(self) -> None:
+        data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        proc = subprocess.run(
+            [sys.executable, "-m", "authored_pack", "--version"],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+        self.assertEqual(proc.stdout.strip(), f"authored-pack {data['project']['version']}")
+
     def test_readme_states_public_v1_boundary(self) -> None:
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn("Current release: `v1.0.0`", readme)
@@ -40,6 +52,9 @@ class TestPublicReleaseContract(unittest.TestCase):
         workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
         self.assertIn("pytest -q", workflow)
         self.assertIn("python3 -m authored_pack --help", workflow)
+        self.assertIn("python3 scripts/smoke_tui_pty.py", workflow)
+        self.assertIn("bash scripts/smoke_install.sh", workflow)
+        self.assertIn("bash scripts/demo_v1.sh", workflow)
 
     def test_gitignore_ignores_local_claude_settings(self) -> None:
         text = (ROOT / ".gitignore").read_text(encoding="utf-8")
@@ -64,6 +79,9 @@ class TestPublicReleaseContract(unittest.TestCase):
             "docs/CANONICAL_DEMO.md",
             "docs/PUBLIC_COPY_ASSETS.md",
             "scripts/demo_v1.sh",
+            "scripts/smoke_tui_pty.py",
+            "scripts/smoke_install.sh",
+            "setup.py",
         ):
             self.assertTrue((ROOT / rel).is_file(), msg=rel)
 

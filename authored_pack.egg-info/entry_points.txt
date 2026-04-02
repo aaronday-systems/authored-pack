@@ -1,0 +1,2 @@
+[console_scripts]
+authored-pack = authored_pack.cli:main

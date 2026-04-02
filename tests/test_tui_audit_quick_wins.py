@@ -22,12 +22,13 @@ def _load_authored_pack_tui_module():
 
 
 class RecordingStdScr:
-    def __init__(self, inputs: list[int] | None = None) -> None:
+    def __init__(self, inputs: list[int] | None = None, *, size: tuple[int, int] = (24, 80)) -> None:
         self.inputs = list(inputs or [])
+        self.size = tuple(size)
         self.calls: list[tuple[int, int, str, int]] = []
 
     def getmaxyx(self) -> tuple[int, int]:
-        return (24, 80)
+        return self.size
 
     def move(self, *_args, **_kwargs) -> None:
         return None
@@ -275,8 +276,22 @@ class TestTuiAuditQuickWins(unittest.TestCase):
         self.assertTrue(footer_calls)
         _, _, line, attr = footer_calls[-1]
         self.assertEqual(attr, state.theme.reverse)
-        self.assertIn("Enter: pack folder", line)
+        self.assertIn("Enter: choose folder", line)
         self.assertIn("M: mode", line)
+
+    def test_help_footer_calls_out_viewer_and_readme(self) -> None:
+        m = self.m
+        state = self._state()
+        state.selected = state.menu.index("Help")
+        stdscr = RecordingStdScr()
+
+        m._draw_footer(stdscr, state, 24, 80)
+
+        footer_calls = [call for call in stdscr.calls if call[0] == 23 and call[1] == 0]
+        _, _, line, _ = footer_calls[-1]
+        self.assertIn("Down: Start", line)
+        self.assertIn("Enter: viewer", line)
+        self.assertIn("R: README", line)
 
     def test_sources_footer_spells_out_delete_and_clear(self) -> None:
         m = self.m
@@ -292,6 +307,68 @@ class TestTuiAuditQuickWins(unittest.TestCase):
         _, _, line, _ = footer_calls[-1]
         self.assertIn("D: delete", line)
         self.assertIn("C: clear", line)
+
+    def test_start_footer_stays_actionable_on_narrow_terminal(self) -> None:
+        m = self.m
+        state = self._state()
+        state.selected = state.menu.index("Start")
+        stdscr = RecordingStdScr(size=(24, 64))
+
+        m._draw_footer(stdscr, state, 24, 64)
+
+        footer_calls = [call for call in stdscr.calls if call[0] == 23 and call[1] == 0]
+        _, _, line, _ = footer_calls[-1]
+        self.assertIn("Enter: folder", line)
+        self.assertIn("Q: quit", line)
+
+    def test_help_footer_teaches_how_to_leave_launch_screen(self) -> None:
+        m = self.m
+        state = self._state()
+        state.selected = state.menu.index("Help")
+        stdscr = RecordingStdScr()
+
+        m._draw_footer(stdscr, state, 24, 80)
+
+        footer_calls = [call for call in stdscr.calls if call[0] == 23 and call[1] == 0]
+        _, _, line, _ = footer_calls[-1]
+        self.assertIn("Down: Start", line)
+        self.assertIn("Enter: viewer", line)
+        self.assertIn("R: README", line)
+
+    def test_init_theme_uses_amber_calm_palette(self) -> None:
+        m = self.m
+        with mock.patch.object(m.curses, "has_colors", return_value=True), mock.patch.object(m.curses, "start_color"), mock.patch.object(
+            m.curses, "use_default_colors"
+        ), mock.patch.object(m.curses, "color_pair", side_effect=lambda pair_id: pair_id * 10), mock.patch.object(
+            m, "_init_pair_safe"
+        ) as init_pair, mock.patch.object(m.curses, "COLORS", 256, create=True), mock.patch.object(m.curses, "COLOR_YELLOW", 3), mock.patch.object(
+            m.curses, "COLOR_BLACK", 0
+        ):
+            theme = m.init_theme()
+
+        init_pair.assert_any_call(1, 172, 0)
+        init_pair.assert_any_call(2, 0, 172)
+        self.assertEqual(theme.normal, 10)
+        self.assertEqual(theme.reverse, 20)
+        self.assertEqual(theme.header, 20)
+
+    def test_noisy_failed_stamp_renders_with_failure_palette(self) -> None:
+        m = self.m
+        state = self._state()
+        state.insane = True
+        state.palette = m.InsanePalette(bg=[11], header=[12], menu_hot=[13], menu_dim=14, divider=15, text=16, ok=17, warn=18, info=19)
+        state.failure_palette = m.InsanePalette(bg=[91, 92], header=[93], menu_hot=[94], menu_dim=95, divider=96, text=97, ok=98, warn=99, info=100)
+        state.selected = state.menu.index("Stamp")
+        state.status = "Failed."
+        state.log_lines = ["Assemble failed.", "- boom"]
+        stdscr = RecordingStdScr()
+
+        m.draw(stdscr, state)
+
+        attrs = [call[3] for call in stdscr.calls]
+        self.assertIn(94, attrs)
+        self.assertIn(96, attrs)
+        self.assertIn(97, attrs)
 
     def test_start_enter_moves_to_stamp_without_running(self) -> None:
         m = self.m
@@ -337,12 +414,30 @@ class TestTuiAuditQuickWins(unittest.TestCase):
         state = self._state()
         state.selected = state.menu.index("Stamp")
         state.status = "Review open."
-        state.log_lines = ["Stamp failed.", "- old error"]
+        state.log_lines = ["Assemble failed.", "- old error"]
 
         preview = "\n".join(m._selection_preview(state, "Stamp", width=120, height=30))
 
-        self.assertIn("STAMP // set what to pack", preview)
-        self.assertNotIn("Stamp failed.", preview)
+        self.assertIn("ASSEMBLE // set what to pack", preview)
+        self.assertNotIn("Assemble failed.", preview)
+
+    def test_stamp_review_preview_stays_readable_on_narrow_terminal(self) -> None:
+        m = self.m
+        state = self._state()
+        state.selected = state.menu.index("Stamp")
+        state.stamp_config = m.StampConfig(
+            input_mode="folder",
+            input_path=str(Path.home() / "Desktop" / "Authored Pack" / "very-long-input-folder-name"),
+            out_path=str(Path.home() / "Desktop" / "Authored Pack" / "very-long-output-folder-name"),
+        )
+        m._open_stamp_panel(state)
+
+        preview = m._selection_preview(state, "Stamp", width=64, height=20)
+        joined = "\n".join(preview)
+
+        self.assertTrue(all(len(line) <= 64 for line in preview))
+        self.assertIn("ASSEMBLE REVIEW // check settings", joined)
+        self.assertIn("What to pack:", joined)
 
     def test_verify_enter_without_target_opens_path_edit(self) -> None:
         m = self.m
@@ -401,7 +496,7 @@ class TestTuiAuditQuickWins(unittest.TestCase):
             self.assertEqual(state.status, "Done.")
             self.assertIsNotNone(state.last_pack_dir)
             self.assertTrue(state.last_pack_dir is not None and (state.last_pack_dir / "manifest.json").is_file())
-            self.assertTrue(any(line == "Stamp complete." for line in state.log_lines))
+            self.assertTrue(any(line == "Assemble complete." for line in state.log_lines))
 
             state.verify_config = m.VerifyConfig(pack_path=str(state.last_pack_dir), allow_large_manifest=False)
             m._run_verify_from_config(state, RecordingStdScr())

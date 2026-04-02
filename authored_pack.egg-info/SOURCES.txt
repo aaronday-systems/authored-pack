@@ -1,0 +1,17 @@
+LICENSE
+README.md
+pyproject.toml
+setup.py
+authored_pack/__init__.py
+authored_pack/__main__.py
+authored_pack/binmode.py
+authored_pack/cli.py
+authored_pack/hkdf.py
+authored_pack/manifest.py
+authored_pack/pack.py
+authored_pack/safeio.py
+authored_pack.egg-info/PKG-INFO
+authored_pack.egg-info/SOURCES.txt
+authored_pack.egg-info/dependency_links.txt
+authored_pack.egg-info/entry_points.txt
+authored_pack.egg-info/top_level.txt
