@@ -1859,6 +1859,29 @@ def _header_action_for_label(label: str) -> str:
     return actions.get(label, "none")
 
 
+def _screen_name(label: str) -> str:
+    shown = _display_menu_label(label)
+    return shown if shown else "Help"
+
+
+def _header_next_action(label: str, state: "AppState") -> str:
+    if label == "Start":
+        return "Enter chooses a folder"
+    if label == "Sources":
+        if state.authored_sources:
+            return "Enter uses staged sources"
+        return "T/Space/P stage sources"
+    if label == "Stamp":
+        if state.stamp_panel_draft is not None:
+            return "Enter edits or runs assemble"
+        return "Enter reviews assemble plan"
+    if label == "Verify":
+        return "Enter verifies selected pack"
+    if label == "Help":
+        return "Down opens Start"
+    return "Enter selects"
+
+
 def _display_menu_label(label: str) -> str:
     if label == "Stamp":
         return "Assemble"
@@ -1867,25 +1890,24 @@ def _display_menu_label(label: str) -> str:
 
 def _quickstart_lines() -> List[str]:
     return [
-        "START // choose what to do",
+        "START // choose a path and expected result",
         "",
-        "Choose the path that matches what you already have.",
+        "Choose the path that matches what you already have now.",
         "",
-        "Pack a Folder You Already Have",
+        "[FOLDER] Pack a Folder You Already Have",
         "- use this when you already have a folder to ship",
-        "- next: choose a folder, then review in Assemble",
+        "- Enter -> choose folder -> opens Assemble with that folder",
         "",
-        "Build a Pack from Collected Sources",
+        "[SOURCES] Build a Pack from Collected Sources",
         "- use this when you want photos, notes, or taps first",
-        "- next: go to Sources to collect materials",
+        "- S -> stage sources -> then Enter on Sources uses them in Assemble",
         "",
-        "Check a Pack You Already Assembled",
+        "[VERIFY] Check a Pack You Already Assembled",
         "- use this when you already have an assembled pack dir or zip",
-        "- next: choose a pack dir or zip to verify",
+        "- V -> choose verify target -> Enter shows pass/fail result",
         "",
-        "Enter = choose a folder",
-        "S = go to Sources",
-        "V = go to Verify",
+        "NEXT",
+        "Enter = choose folder  |  S = stage sources  |  V = verify a pack",
     ]
 
 
@@ -1896,11 +1918,11 @@ def _stamp_panel_rows(state: AppState) -> List[StampPanelRow]:
     else:
         input_label = _display_path(_effective_stamp_input(state, cfg) or "not set", max_len=28)
     rows = [
-        StampPanelRow("input", "What to pack", input_label),
-        StampPanelRow("output", "Save in", _display_path(_effective_stamp_output(state, cfg), max_len=28)),
+        StampPanelRow("input", "Input", input_label),
+        StampPanelRow("output", "Output folder", _display_path(_effective_stamp_output(state, cfg), max_len=28)),
         StampPanelRow("zip_pack", "Zip copy", "on" if cfg.zip_pack else "off", "toggle"),
-        StampPanelRow("derive_seed", "Derive seed", "on" if cfg.derive_seed else "off", "toggle"),
-        StampPanelRow("evidence_bundle", "Evidence zip", "on" if cfg.evidence_bundle else "off", "toggle"),
+        StampPanelRow("derive_seed", "Create reproducible seed material", "on" if cfg.derive_seed else "off", "toggle"),
+        StampPanelRow("evidence_bundle", "Write audit bundle zip", "on" if cfg.evidence_bundle else "off", "toggle"),
         StampPanelRow("advanced", "More options", "shown" if state.stamp_panel_show_advanced else "hidden", "action"),
     ]
     if state.stamp_panel_show_advanced:
@@ -1929,10 +1951,10 @@ def _stamp_panel_rows(state: AppState) -> List[StampPanelRow]:
                 [
                     StampPanelRow("write_seed", "Write seed files", "on" if cfg.write_seed else "off", "toggle"),
                     StampPanelRow("show_seed", "Reveal seed in UI", "on" if cfg.show_seed else "off", "toggle"),
-                    StampPanelRow("write_sources", "Save source record", "on" if cfg.write_sources else "off", "toggle"),
+                    StampPanelRow("write_sources", "Include source record in pack", "on" if cfg.write_sources else "off", "toggle"),
                 ]
             )
-    rows.append(StampPanelRow("confirm", "Assemble now", "run now", "action"))
+    rows.append(StampPanelRow("confirm", "Assemble now", "write pack to output folder", "action"))
     return rows
 
 
@@ -1942,9 +1964,28 @@ def _stamp_panel_lines(state: AppState, *, width: int, height: int) -> List[str]
         return []
     state.stamp_panel_selected = max(0, min(int(state.stamp_panel_selected), len(rows) - 1))
     lines = [
-        "ASSEMBLE REVIEW // check settings",
+        "ASSEMBLE REVIEW // confirm what will be written",
         "Up/Down move  Enter edit  Space toggle  Esc back",
     ]
+    cfg = state.stamp_panel_draft or state.stamp_config
+    input_mode = "staged sources" if cfg.input_mode == "sources" else "folder"
+    result_bits = ["pack folder"]
+    if cfg.zip_pack:
+        result_bits.append("zip export")
+    if cfg.derive_seed:
+        result_bits.append("seed material")
+    if cfg.evidence_bundle:
+        result_bits.append("audit bundle")
+    lines.extend(
+        [
+            "",
+            "READY",
+            f"- input: {input_mode}",
+            f"- output: {_display_path(_effective_stamp_output(state, cfg), max_len=max(20, width - 12))}",
+            f"- result: {', '.join(result_bits)}",
+            "",
+        ]
+    )
     for idx, row in enumerate(rows):
         prefix = "> " if idx == state.stamp_panel_selected else "  "
         if row.kind == "action":
@@ -1953,7 +1994,6 @@ def _stamp_panel_lines(state: AppState, *, width: int, height: int) -> List[str]
             line = f"{prefix}{row.label}: {row.value}"
         lines.append(_shorten_middle(line, max(12, width - 1)))
     lines.append("")
-    cfg = state.stamp_panel_draft or state.stamp_config
     lines.append(f"Packing from: {'Authored Sources' if cfg.input_mode == 'sources' else 'Folder'}")
     if cfg.input_mode == "sources":
         lines.append(f"Collected: {len(state.authored_sources)} source{'s' if len(state.authored_sources) != 1 else ''}")
@@ -1962,9 +2002,9 @@ def _stamp_panel_lines(state: AppState, *, width: int, height: int) -> List[str]
         lines.append(f"Sources ready for seed: {eligible}/{state.entropy_min_sources}")
         if eligible < int(state.entropy_min_sources):
             lines.append(f"Need {int(state.entropy_min_sources) - eligible} more collected sources to use this option.")
-    lines.append("Writes a deterministic pack folder with manifest, receipt, and payload.")
+    lines.append("Enter on 'Assemble now' writes the pack with these settings.")
     if cfg.derive_seed:
-        lines.append("Seed output follows this review choice.")
+        lines.append("Seed output follows these review choices.")
     else:
         lines.append("Seed output is off.")
     return [ln[:width] for ln in lines[:height]]
@@ -1978,29 +2018,36 @@ def _stamp_preview_lines(state: AppState, *, width: int, height: int) -> List[st
     input_label = "Authored Sources" if cfg.input_mode == "sources" else _display_path(Path(input_path).expanduser() if input_path not in ("", "@sources") else input_path, max_len=44) if input_path not in ("", "@sources") else input_path
     output_label = _display_path(Path(_effective_stamp_output(state, cfg)).expanduser(), max_len=44)
     lines = [
-        "ASSEMBLE // set what to pack",
+        "ASSEMBLE // choose input and expected result",
         "",
-        f"- What to pack: {input_label}",
-        f"- Save in: {output_label}",
-        f"- Zip copy: {'on' if cfg.zip_pack else 'off'}",
-        f"- Derive seed: {'on' if cfg.derive_seed else 'off'}",
+        "NOW",
+        f"- Input: {input_label}",
+        f"- Output folder: {output_label}",
+        f"- Zip export: {'on' if cfg.zip_pack else 'off'}",
+        f"- Seed material: {'on' if cfg.derive_seed else 'off'}",
+        f"- Audit bundle: {'on' if cfg.evidence_bundle else 'off'}",
     ]
     if cfg.input_mode == "sources":
-        lines.append(f"- Collected: {len(state.authored_sources)} source{'s' if len(state.authored_sources) != 1 else ''}")
+        lines.append(f"- Staged sources: {len(state.authored_sources)}")
     if cfg.derive_seed and cfg.mix_sources:
         eligible = len(_lockdown_eligible_sources(state.authored_sources))
         lines.append(f"- Sources ready for seed: {eligible}/{state.entropy_min_sources}")
     lines.extend(
         [
             "",
-            "Next: press I to choose what to pack, then Enter to review.",
+            "NEXT",
+            "1. I -> choose input",
+            "2. O -> choose output folder",
+            "3. U/D/Z/E -> adjust options",
+            "4. Enter -> review and assemble",
             "",
-            "I = choose what to pack",
-            "O = choose where to save it",
-            "Enter = review and assemble",
-            "Toggle: Authored Sources / Derive seed / Zip copy / Evidence zip",
+            "YOU GET",
+            "- pack folder with manifest.json, receipt.json, and payload/",
+            f"- authored_pack.zip: {'yes' if cfg.zip_pack else 'no'}",
+            f"- seed material: {'yes' if cfg.derive_seed else 'no'}",
+            f"- audit bundle zip: {'yes' if cfg.evidence_bundle else 'no'}",
             "",
-            "Writes a deterministic pack folder and optional zip export.",
+            "Assemble writes a new pack into the output folder.",
         ]
     )
     return lines[:height]
@@ -2011,14 +2058,14 @@ def _verify_preview_lines(state: AppState) -> List[str]:
     pack_path = _effective_verify_path(state)
     pack_label = _display_path(Path(pack_path).expanduser(), max_len=44) if pack_path else "not set"
     lines = [
-        "VERIFY // check an assembled pack",
+        "VERIFY // choose a pack and check it",
         "",
-        "Best target:",
+        "WHAT YOU CAN VERIFY",
         "- authored_pack.zip",
         "- also works: out/<pack_root_sha256>/",
         "- pointing at out/ uses the newest pack inside it",
         "",
-        "Current target:",
+        "TARGET SELECTED",
         f"- pack: {pack_label}",
     ]
     if state.last_pack_dir is not None:
@@ -2026,12 +2073,15 @@ def _verify_preview_lines(state: AppState) -> List[str]:
     lines.extend(
         [
         "",
-        "Enter = verify this path",
+        "NEXT",
+        "Enter = verify target and show result",
         "P = choose pack path",
-        "L = toggle large-manifest cap",
-        f"- allow large manifest: {'yes' if cfg.allow_large_manifest else 'no'}",
+        "L = allow larger manifest files",
+        f"- large manifest mode: {'on' if cfg.allow_large_manifest else 'off'}",
+        "- use this only when very large packs are expected",
         "",
-        "Checks pack root, payload hashes, and receipt consistency.",
+        "RESULT ON SUCCESS",
+        "- pass/fail status plus pack roots, file count, and bytes checked",
         ]
     )
     return lines
@@ -2039,7 +2089,10 @@ def _verify_preview_lines(state: AppState) -> List[str]:
 
 def _verify_failure_lines(pack: Path, errors: Sequence[str], *, auto_selected: bool = False) -> List[str]:
     lines = [
-        "Verify failed.",
+        "VERIFY RESULT // failed",
+        "RESULT: verification failed",
+        "WHY THIS MATTERS: this pack no longer matches its recorded contents.",
+        "",
         f"verify_target: {_display_path(pack, max_len=44)}",
     ]
     if auto_selected:
@@ -2074,7 +2127,8 @@ def _verify_failure_lines(pack: Path, errors: Sequence[str], *, auto_selected: b
 
     if hints:
         lines.append("")
-        lines.extend(hints)
+        lines.append("NEXT STEPS")
+        lines.extend(f"- {hint}" if not str(hint).startswith("- ") else str(hint) for hint in hints)
     return lines
 
 
@@ -2084,25 +2138,33 @@ def _help_summary_lines(_state: AppState) -> List[str]:
         "",
         "Authored Pack is a deterministic assemble/verify tool for humans.",
         "",
-        "most common path",
+        "WHAT THIS SCREEN IS FOR",
+        "- use Start when you want to build a new pack",
+        "- use Verify when you want to check a pack you already have",
+        "",
+        "MOST COMMON PATH",
         "1. Press Down for Start.",
         "2. Choose the folder you want to pack.",
         "3. In Assemble, review settings and write the pack.",
         "4. In Verify, check the pack dir or zip later.",
         "",
-        "workflow",
+        "WORKFLOW",
         "folder  -> Start   -> Assemble -> Verify",
         "sources -> Sources -> Assemble -> Verify",
         "                         +-> authored_pack.zip",
         "",
-        "key actions",
+        "KEY ACTIONS",
         "Down = begin  Enter = act  Esc = back  Q = quit  M = mode",
         "Verify expects out/<pack_root_sha256>/ or authored_pack.zip.",
         "",
-        "trust boundary",
+        "RESULT",
+        "- Assemble writes a pack folder and optional zip export",
+        "- Verify tells you whether the pack is self-consistent",
+        "",
+        "TRUST BOUNDARY",
         "Noisy mode changes presentation only. Evidence is tamper-evident, not signed.",
         "",
-        "more detail",
+        "MORE DETAIL",
         "Enter = open this help in a viewer",
         "R = README",
     ]
@@ -2120,13 +2182,13 @@ def _entropy_source_kind_counts(sources: Sequence["AuthoredSource"]) -> Dict[str
 def _source_collection_line(state: AppState, *, width: int) -> str:
     total = len(state.authored_sources)
     plural = "" if total == 1 else "s"
-    line = f"Collected: {total} source{plural}"
+    line = f"STAGED: {total} source{plural} for next assemble"
     return line[: max(0, int(width))]
 
 
 def _source_kind_line(state: AppState, *, width: int) -> str:
     counts = _entropy_source_kind_counts(state.authored_sources)
-    line = f"Kinds: photo {counts['photo']}  text {counts['text']}  tap {counts['tap']}"
+    line = f"KINDS : photo {counts['photo']}  text {counts['text']}  tap {counts['tap']}"
     return line[: max(0, int(width))]
 
 
@@ -2146,7 +2208,7 @@ def _selection_preview(state: AppState, label: str, *, width: int, height: int) 
 
     show_result_log = state.status in ("Done.", "Failed.")
     if state.log_lines and show_result_log and (label == "Verify" or (label == "Stamp" and state.stamp_panel_draft is None)):
-        preview = state.log_lines[-max(1, (height - 1)) :]
+        preview = state.log_lines[-max(1, height) :]
     return [ln[:width] for ln in preview[:height]]
 
 
@@ -2160,7 +2222,7 @@ def _stamp_failure_alarm_active(state: AppState) -> bool:
         return False
     if state.stamp_panel_draft is not None:
         return False
-    return bool(state.log_lines and str(state.log_lines[0]).startswith("Assemble failed."))
+    return bool(state.log_lines and any("assemble failed" in str(line).lower() for line in state.log_lines[:2]))
 
 
 def _current_insane_palette(state: AppState) -> Optional[InsanePalette]:
@@ -2174,19 +2236,13 @@ def _draw_header(stdscr, state: AppState, cols: int) -> None:
     header_identity = build_header_identity_line(APP_NAME, EPS_TUI_TITLE, EPS_TUI_VERSION, cols)
     safe_addstr(stdscr, 0, 0, header_identity[:cols].ljust(cols), head_attr)
 
-    # Keep semantics simple and monotone-safe.
-    mode = "offline"
     s = (state.status or "").strip().lower()
-    if "fail" in s:
-        risk = "WARN"
-    elif "done" in s:
-        risk = "OK"
-    else:
-        risk = "INFO"
     label = state.menu[state.selected] if 0 <= state.selected < len(state.menu) else ""
-    action = _header_action_for_label(label)
-    profile = _ui_profile_name(state).lower()
-    status_line = f"MODE: {mode}  PROFILE: {profile}  RISK: {risk}  ACTION: {action}"
+    status_line = (
+        f"SCREEN: {_screen_name(label)}  "
+        f"NEXT: {_header_next_action(label, state)}  "
+        f"STATUS: {(state.status or 'Ready.').strip() or 'Ready.'}"
+    )
     status_attr = state.theme.normal | (curses.A_REVERSE if state.interaction_flash_ticks > 0 else 0)
     safe_addstr(stdscr, 1, 0, status_line[:cols].ljust(cols), status_attr)
 
@@ -3156,16 +3212,16 @@ def _draw_insane_header(stdscr, state: AppState, cols: int) -> None:
     s_l = s.lower()
     if "fail" in s_l:
         risk_attr = pal.warn
-        risk = "WARN"
     elif "done" in s_l:
         risk_attr = pal.ok
-        risk = "OK"
     else:
         risk_attr = pal.info
-        risk = "INFO"
     label = state.menu[state.selected] if 0 <= state.selected < len(state.menu) else ""
-    action = _header_action_for_label(label)
-    meta = f" MODE=OFFLINE  PROFILE=NOISY  RISK={risk}  ACTION={action}  STATUS={s or 'Ready'} "
+    meta = (
+        f" SCREEN={_screen_name(label).upper()}  "
+        f"NEXT={_header_next_action(label, state).upper()}  "
+        f"STATUS={s or 'Ready'} "
+    )
     safe_addstr(stdscr, 1, 0, meta[:cols].ljust(cols), risk_attr)
 
     div = ("═" * max(0, cols - 2)) if cols >= 2 else ""
@@ -3216,7 +3272,7 @@ def _authored_sources_preview(state: AppState, *, width: int, height: int) -> Li
     """
     Right-pane content for the Sources screen.
     """
-    header = "AUTHORED SOURCES // collect what you want in the pack"
+    header = "AUTHORED SOURCES // stage items for next assemble"
     lines: List[str] = [
         header,
         _source_collection_line(state, width=width),
@@ -3226,17 +3282,20 @@ def _authored_sources_preview(state: AppState, *, width: int, height: int) -> Li
     if state.focus == "entropy" and state.authored_sources:
         lines.append("List focus. Up/Down moves. Enter previews. Tab returns to menu.")
     else:
-        lines.append("A add photo(s)  T add text note  Space record tap sample  P import files/folders")
+        lines.append("T = type note text       -> stage text source")
+        lines.append("Space = tap keys         -> stage tap source")
+        lines.append("P = import files/folders -> stage photo/text sources")
     lines.append("")
     if not state.authored_sources:
-        lines.append("These become the pack contents when you assemble from Authored Sources.")
-        lines.append("You can ignore this screen if you just want to pack a normal folder.")
-        lines.append("Add a photo, text note, or tap sample.")
+        lines.append("RESULT: nothing is written yet. These items stage the next Assemble run.")
+        lines.append("NEXT: add 1+ item, then press Enter to use staged sources in Assemble.")
+        lines.append("ALT: skip this screen and assemble a normal folder from Start.")
         return lines[:height]
-    lines.append("Tab to inspect sources. Enter goes to Assemble with Authored Sources.")
+    lines.append("RESULT: Enter uses this staged source list as pack input.")
+    lines.append("NEXT: Enter = go to Assemble  |  Tab = inspect one source")
     lines.append("")
     if state.drop_import_count > 0:
-        lines.append(f"Imported paths this run: {state.drop_import_count}")
+        lines.append(f"RESULT: imported {state.drop_import_count} path(s) into staged sources.")
         lines.append("")
 
     sel = max(0, min(int(state.entropy_selected), len(state.authored_sources) - 1))
@@ -3305,9 +3364,9 @@ def _draw_footer(stdscr, state: AppState, rows: int, cols: int) -> None:
         if state.focus == "entropy" and state.authored_sources:
             legend = "Up/Down: list  Tab: menu  Enter: preview  D: delete  C: clear  Esc: back"
         elif state.authored_sources:
-            legend = "Up/Down: menu  Enter: assemble  Tab: list  A/T/Space/P: add  M: mode  Q: quit"
+            legend = "Up/Down: menu  Enter: assemble  Tab: list  T/Space/P: add  M: mode  Q: quit"
         else:
-            legend = "Up/Down: menu  Tab: list  A/T/Space/P: add  M: mode  Q: quit"
+            legend = "Up/Down: menu  Tab: list  T/Space/P: add  M: mode  Q: quit"
     elif label == "Stamp":
         if state.stamp_panel_draft is not None:
             legend = "Up/Down: move  Enter: edit/save  Space: toggle  Esc: back"
@@ -4441,7 +4500,12 @@ def _run_stamp_plan(
             draw(stdscr, state)
             res = _do_stamp()
     except Exception as exc:
-        state.log_lines = ["Assemble failed.", f"- {exc}"]
+        state.log_lines = [
+            "ASSEMBLE RESULT // failed",
+            "RESULT: assemble failed.",
+            f"why: {exc}",
+            "NEXT: review input/output choices, then try again.",
+        ]
         state.status = "Failed."
         return
     finally:
@@ -4459,18 +4523,28 @@ def _run_stamp_plan(
     zip_path = getattr(res, "zip_path", None)
     evidence_path = getattr(res, "evidence_bundle_path", None)
     evidence_sha = getattr(res, "evidence_bundle_sha256", None)
+    result_bits = ["pack folder", "manifest.json", "receipt.json", "payload/"]
+    if zip_path is not None:
+        result_bits.append("authored_pack.zip")
+    if payload_root:
+        result_bits.append("payload root")
+    if fp := res.receipt.get("derived_seed_fingerprint_sha256"):
+        if isinstance(fp, str) and fp:
+            result_bits.append("seed fingerprint")
     state.log_lines = [
-        "Assemble complete.",
+        "ASSEMBLE RESULT // created",
+        "RESULT: pack written successfully.",
+        f"CREATED: {', '.join(result_bits)}",
         f"input: {_display_path(input_dir, max_len=44)}",
-        f"out: {_display_path(out_dir, max_len=44)}",
-        f"pack: {_display_path(res.pack_dir, max_len=44)}",
+        f"output_folder: {_display_path(out_dir, max_len=44)}",
+        f"pack_dir: {_display_path(res.pack_dir, max_len=44)}",
+        "NEXT: press Down for Verify, or stay here to review details.",
         f"pack_root_sha256: {pack_root}",
     ]
     if payload_root:
         state.log_lines.append(f"payload_root_sha256: {payload_root}")
     if exclude_relpaths:
         state.log_lines.append(f"excluded_artifacts: {len(exclude_relpaths)}")
-    fp = res.receipt.get("derived_seed_fingerprint_sha256")
     if isinstance(fp, str) and fp:
         state.log_lines.append(f"derived_seed_fingerprint_sha256: {fp}")
     if seed_path_label:
@@ -4703,16 +4777,22 @@ def _run_verify_plan(state: AppState, stdscr, *, pack_s: str, allow_large_manife
         state.last_pack_dir = pack
     if res.ok:
         state.log_lines = [
-            "Verify ok.",
+            "VERIFY RESULT // checked",
+            "RESULT: pack is self-consistent.",
             f"verified_path: {_display_path(pack, max_len=44)}",
             f"pack_root_sha256: {res.root_sha256}",
-            f"artifact_count_verified: {res.file_count}",
-            f"artifact_bytes_verified: {res.total_bytes}",
         ]
         if auto_selected:
-            state.log_lines.insert(1, "used most recent pack in that folder")
+            state.log_lines.insert(2, "RESULT: used most recent pack in that folder.")
         if res.payload_root_sha256:
-            state.log_lines.insert(3 if auto_selected else 2, f"payload_root_sha256: {res.payload_root_sha256}")
+            state.log_lines.append(f"payload_root_sha256: {res.payload_root_sha256}")
+        state.log_lines.extend(
+            [
+            f"files_checked: {res.file_count}",
+            f"bytes_checked: {res.total_bytes}",
+            "NEXT: press P to choose another target, or Esc to keep browsing.",
+            ]
+        )
         state.status = "Done."
     else:
         state.log_lines = _verify_failure_lines(pack, list(res.errors), auto_selected=auto_selected)
@@ -4879,9 +4959,6 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
             state.entropy_selected = min(max(0, len(state.authored_sources) - 1), state.entropy_selected + 1)
             state.status = "Ready."
             return True
-        if ch in (ord("a"), ord("A")):
-            _action_entropy_add_photos(state, stdscr)
-            return True
         if ch in (ord("t"), ord("T")):
             _action_entropy_add_text(state, stdscr)
             return True
@@ -4908,7 +4985,7 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
                 state.focus = "menu"
                 state.status = "Authored Sources selected. Review and assemble when ready."
             else:
-                state.status = "Compose from sources with A, T, Space, or P."
+                state.status = "Compose from sources with T, Space, or P."
             return True
 
     if label == "Stamp":

@@ -46,12 +46,10 @@ If you change any of the following, you must add or update tests in the same pul
 
 ## Before You Open A PR
 
-Run:
+Run the canonical release check:
 
 ```bash
-pytest -q
-python3 -m pytest -q
-python3 -m authored_pack --help
+bash scripts/release_check.sh
 ```
 
 If the change touches release-facing docs, also verify the README commands still match the runtime behavior.

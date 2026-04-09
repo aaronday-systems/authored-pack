@@ -360,7 +360,7 @@ class TestTuiAuditQuickWins(unittest.TestCase):
         state.failure_palette = m.InsanePalette(bg=[91, 92], header=[93], menu_hot=[94], menu_dim=95, divider=96, text=97, ok=98, warn=99, info=100)
         state.selected = state.menu.index("Stamp")
         state.status = "Failed."
-        state.log_lines = ["Assemble failed.", "- boom"]
+        state.log_lines = ["ASSEMBLE RESULT // failed", "RESULT: assemble failed."]
         stdscr = RecordingStdScr()
 
         m.draw(stdscr, state)
@@ -409,17 +409,34 @@ class TestTuiAuditQuickWins(unittest.TestCase):
         self.assertEqual(state.focus, "menu")
         self.assertIn("Authored Sources selected", state.status)
 
+    def test_sources_import_shortcut_uses_p_not_a(self) -> None:
+        m = self.m
+        state = self._state()
+        state.selected = state.menu.index("Sources")
+
+        with mock.patch.object(m, "_action_sources_import_paths") as import_paths:
+            keep_running = m.handle_key(RecordingStdScr(), state, ord("a"))
+
+        self.assertTrue(keep_running)
+        import_paths.assert_not_called()
+
+        with mock.patch.object(m, "_action_sources_import_paths") as import_paths:
+            keep_running = m.handle_key(RecordingStdScr(), state, ord("p"))
+
+        self.assertTrue(keep_running)
+        import_paths.assert_called_once_with(state, mock.ANY)
+
     def test_stamp_preview_ignores_stale_failure_logs_when_not_in_result_state(self) -> None:
         m = self.m
         state = self._state()
         state.selected = state.menu.index("Stamp")
         state.status = "Review open."
-        state.log_lines = ["Assemble failed.", "- old error"]
+        state.log_lines = ["ASSEMBLE RESULT // failed", "RESULT: assemble failed."]
 
         preview = "\n".join(m._selection_preview(state, "Stamp", width=120, height=30))
 
-        self.assertIn("ASSEMBLE // set what to pack", preview)
-        self.assertNotIn("Assemble failed.", preview)
+        self.assertIn("ASSEMBLE // choose input and expected result", preview)
+        self.assertNotIn("RESULT: assemble failed.", preview)
 
     def test_stamp_review_preview_stays_readable_on_narrow_terminal(self) -> None:
         m = self.m
@@ -436,8 +453,8 @@ class TestTuiAuditQuickWins(unittest.TestCase):
         joined = "\n".join(preview)
 
         self.assertTrue(all(len(line) <= 64 for line in preview))
-        self.assertIn("ASSEMBLE REVIEW // check settings", joined)
-        self.assertIn("What to pack:", joined)
+        self.assertIn("ASSEMBLE REVIEW // confirm what will be written", joined)
+        self.assertIn("Input:", joined)
 
     def test_verify_enter_without_target_opens_path_edit(self) -> None:
         m = self.m
@@ -496,13 +513,13 @@ class TestTuiAuditQuickWins(unittest.TestCase):
             self.assertEqual(state.status, "Done.")
             self.assertIsNotNone(state.last_pack_dir)
             self.assertTrue(state.last_pack_dir is not None and (state.last_pack_dir / "manifest.json").is_file())
-            self.assertTrue(any(line == "Assemble complete." for line in state.log_lines))
+            self.assertTrue(any(line == "RESULT: pack written successfully." for line in state.log_lines))
 
             state.verify_config = m.VerifyConfig(pack_path=str(state.last_pack_dir), allow_large_manifest=False)
             m._run_verify_from_config(state, RecordingStdScr())
 
             self.assertEqual(state.status, "Done.")
-            self.assertTrue(any(line == "Verify ok." for line in state.log_lines))
+            self.assertTrue(any(line == "RESULT: pack is self-consistent." for line in state.log_lines))
 
 
 if __name__ == "__main__":

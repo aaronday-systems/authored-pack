@@ -132,7 +132,7 @@ class TestTuiP1Regressions(unittest.TestCase):
                 m.shutil.copy2 = orig_copy2
 
             self.assertEqual(state.status, "Failed.")
-            self.assertTrue(any(line == "Assemble failed." for line in state.log_lines))
+            self.assertTrue(any(line == "RESULT: assemble failed." for line in state.log_lines))
             self.assertTrue(created_tmp_dirs)
             self.assertFalse(created_tmp_dirs[0].exists())
 
@@ -320,7 +320,7 @@ class TestTuiP1Regressions(unittest.TestCase):
 
             self.assertEqual(state.status, "Done.")
             self.assertIsNotNone(state.last_pack_dir)
-            self.assertTrue(any(line == "Assemble complete." for line in state.log_lines))
+            self.assertTrue(any(line == "RESULT: pack written successfully." for line in state.log_lines))
 
     def test_run_stamp_from_config_blocks_mix_sources_until_seven_ready(self) -> None:
         m = self.m
@@ -516,7 +516,7 @@ class TestTuiP1Regressions(unittest.TestCase):
 
             self.assertEqual(state.status, "Done.")
             self.assertTrue(any(line.startswith("verified_path: ") for line in state.log_lines))
-            self.assertTrue(any("used most recent pack in that folder" == line for line in state.log_lines))
+            self.assertTrue(any("used most recent pack in that folder" in line.lower() for line in state.log_lines))
 
     def test_effective_verify_path_preserves_missing_hash_dir_request(self) -> None:
         m = self.m
@@ -541,7 +541,7 @@ class TestTuiP1Regressions(unittest.TestCase):
             m._run_verify_plan(state, DummyStdScr(), pack_s=str(missing), allow_large_manifest=False)
 
             self.assertEqual(state.status, "Failed.")
-            self.assertEqual(state.log_lines[0], "Verify failed.")
+            self.assertEqual(state.log_lines[0], "VERIFY RESULT // failed")
             self.assertTrue(any(line.startswith("verify_target: ") for line in state.log_lines))
             self.assertTrue(any("pack path not found:" in line for line in state.log_lines))
             self.assertFalse(any("unsupported pack path" in line for line in state.log_lines))
@@ -638,7 +638,7 @@ class TestTuiP1Regressions(unittest.TestCase):
                 m._stamp_with_insane_fx = orig_stamp_with_fx
 
             self.assertEqual(state.status, "Done.")
-            self.assertTrue(any(line == "Assemble complete." for line in state.log_lines))
+            self.assertTrue(any(line == "RESULT: pack written successfully." for line in state.log_lines))
 
     def test_noisy_stamp_failure_triggers_failure_fx(self) -> None:
         m = self.m
@@ -659,7 +659,7 @@ class TestTuiP1Regressions(unittest.TestCase):
     def test_verify_config_edits_clear_old_log_lines(self) -> None:
         m = self.m
         state = m.AppState(theme=m.Theme(normal=0, reverse=0, header=0))
-        state.log_lines = ["Verify ok."]
+        state.log_lines = ["VERIFY RESULT // checked", "RESULT: pack is self-consistent."]
 
         with mock.patch.object(m, "_prompt_str_curses", return_value="/tmp/example.pack"):
             self.assertTrue(m._edit_verify_path(state, DummyStdScr()))

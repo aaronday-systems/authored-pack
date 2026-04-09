@@ -8,6 +8,7 @@ import select
 import struct
 import subprocess
 import sys
+import tempfile
 import termios
 import time
 from pathlib import Path
@@ -42,7 +43,15 @@ def _drain_fd(fd: int, transcript: bytearray, *, timeout_s: float) -> None:
         transcript.extend(chunk)
 
 
-def _run_case(name: str, *, argv: list[str], actions: list[tuple[float, bytes]], rows: int = 24, cols: int = 80) -> None:
+def _run_case(
+    name: str,
+    *,
+    argv: list[str],
+    actions: list[tuple[float, bytes]],
+    required_substrings: list[str] | None = None,
+    rows: int = 24,
+    cols: int = 80,
+) -> None:
     master_fd, slave_fd = pty.openpty()
     _set_winsize(slave_fd, rows=rows, cols=cols)
     env = os.environ.copy()
@@ -95,42 +104,74 @@ def _run_case(name: str, *, argv: list[str], actions: list[tuple[float, bytes]],
         raise AssertionError(f"{name}: setupterm failure detected\n{text}")
     if "authored-pack-tui: error:" in text:
         raise AssertionError(f"{name}: unexpected tui error detected\n{text}")
+    for needle in required_substrings or []:
+        if needle.lower() not in text:
+            tail = text[-4000:]
+            raise AssertionError(f"{name}: missing transcript marker {needle!r}\n{tail}")
     print(f"ok: {name}")
 
 
 def main() -> int:
-    cases = [
-        (
-            "calm-start-quit",
-            {
-                "argv": list(BASE_CMD),
-                "actions": [(0.35, b"q")],
-            },
-        ),
-        (
-            "calm-start-path-cancel-quit",
-            {
-                "argv": list(BASE_CMD),
-                "actions": [(0.35, b"j\n"), (0.25, b"\x1b"), (0.2, b"q")],
-            },
-        ),
-        (
-            "calm-stamp-review-open-close-quit",
-            {
-                "argv": list(BASE_CMD),
-                "actions": [(0.35, b"jjj\n"), (0.25, b"\x1b"), (0.2, b"q")],
-            },
-        ),
-        (
-            "noisy-start-quit",
-            {
-                "argv": list(BASE_CMD) + ["--noisy"],
-                "actions": [(0.5, b"q")],
-            },
-        ),
-    ]
-    for name, cfg in cases:
-        _run_case(name, **cfg)
+    with tempfile.TemporaryDirectory(prefix="authored-pack-pty-smoke-") as tmp:
+        tmp_path = Path(tmp)
+        input_dir = tmp_path / "input"
+        out_dir = tmp_path / "out"
+        input_dir.mkdir()
+        (input_dir / "note.txt").write_text("demo\n", encoding="utf-8")
+        (input_dir / "sample.bin").write_bytes(b"\x00\x01\x02")
+
+        cases = [
+            (
+                "calm-start-quit",
+                {
+                    "argv": list(BASE_CMD),
+                    "actions": [(0.35, b"q")],
+                },
+            ),
+            (
+                "calm-start-path-cancel-quit",
+                {
+                    "argv": list(BASE_CMD),
+                    "actions": [(0.35, b"j\n"), (0.25, b"\x1b"), (0.2, b"q")],
+                },
+            ),
+            (
+                "calm-stamp-review-open-close-quit",
+                {
+                    "argv": list(BASE_CMD),
+                    "actions": [(0.35, b"jjj\n"), (0.25, b"\x1b"), (0.2, b"q")],
+                },
+            ),
+            (
+                "calm-folder-review-assemble-verify-quit",
+                {
+                    "argv": list(BASE_CMD),
+                    "actions": [
+                        (0.35, b"j\n"),
+                        (0.35, f"{input_dir}\n".encode("utf-8")),
+                        (0.3, b"o"),
+                        (0.15, b"\n"),
+                        (0.35, f"{out_dir}\n".encode("utf-8")),
+                        (0.35, b"jjjjj\n"),
+                        (1.0, b"j\n"),
+                        (0.75, b"q"),
+                    ],
+                    "required_substrings": [
+                        "result: pack written successfully.",
+                        "result: pack is self-consistent.",
+                    ],
+                },
+            ),
+            (
+                "noisy-start-quit",
+                {
+                    "argv": list(BASE_CMD) + ["--noisy"],
+                    "actions": [(0.5, b"q")],
+                },
+            ),
+        ]
+        for name, cfg in cases:
+            _run_case(name, **cfg)
     return 0
 
 

@@ -79,11 +79,16 @@ class TestPublicReleaseContract(unittest.TestCase):
             "docs/CANONICAL_DEMO.md",
             "docs/PUBLIC_COPY_ASSETS.md",
             "scripts/demo_v1.sh",
+            "scripts/release_check.sh",
             "scripts/smoke_tui_pty.py",
             "scripts/smoke_install.sh",
             "setup.py",
         ):
             self.assertTrue((ROOT / rel).is_file(), msg=rel)
+
+    def test_contributing_points_to_release_check(self) -> None:
+        text = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+        self.assertIn("bash scripts/release_check.sh", text)
 
     def test_public_copy_assets_keep_verify_and_link_language_honest(self) -> None:
         text = (ROOT / "docs" / "PUBLIC_COPY_ASSETS.md").read_text(encoding="utf-8")
