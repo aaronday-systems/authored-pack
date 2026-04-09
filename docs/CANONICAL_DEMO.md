@@ -22,10 +22,10 @@ bash scripts/demo_v1.sh
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/authored-pack-demo.XXXXXX")"
 mkdir -p "$tmp/input" "$tmp/out"
 printf 'hello from Authored Pack\n' > "$tmp/input/note.txt"
-printf 'operator supplied bytes\n' > "$tmp/input/context.txt"
+printf 'demo context bytes\n' > "$tmp/input/context.txt"
 printf '\x00\x01\x02' > "$tmp/input/sample.bin"
 
-python3 -m authored_pack stamp --input "$tmp/input" --out "$tmp/out" --zip
+python3 -m authored_pack assemble --input "$tmp/input" --out "$tmp/out" --zip
 pack_dir="$(find "$tmp/out" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
 python3 -m authored_pack verify --pack "$pack_dir"
 python3 -m authored_pack verify --pack "$pack_dir/authored_pack.zip"

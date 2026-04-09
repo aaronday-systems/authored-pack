@@ -15,6 +15,9 @@ CLI_DESCRIPTION = (
     "It assembles a directory into a verifiable pack with a manifest and receipt, and can optionally "
     "export authored_pack.zip or derive reproducible seed material from the pack root."
 )
+REPO_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_SOURCE_BIN = REPO_ROOT / "bins" / "source_bin"
+DEFAULT_AUTHORED_OUT = REPO_ROOT / "bins" / "authored_out"
 
 CLI_EPILOG = """\
 First clean success:
@@ -27,7 +30,7 @@ Human path:
 
 Machine path:
   authored-pack assemble --input /ABS/PATH/TO/DIR --out ./out --json
-  consume-bin is subtractive and uses repo-relative defaults
+  consume-bin is subtractive; pass explicit paths outside the repo
 
 Trust boundary:
   use OS randomness for ordinary secret generation
@@ -333,9 +336,13 @@ def _stamp_bin(args: argparse.Namespace) -> int:
     print(f"pack_dir: {res.stamp.pack_dir}")
     print(f"pack_root_sha256: {res.stamp.pack_root_sha256}")
     print(f"payload_root_sha256: {res.stamp.payload_root_sha256}")
+    if res.stamp.zip_path is not None:
+        print(f"zip_path: {res.stamp.zip_path}")
     fp = res.stamp.receipt.get("derived_seed_fingerprint_sha256")
     if isinstance(fp, str) and fp:
         print(f"derived_seed_fingerprint_sha256: {fp}")
+    if res.stamp.evidence_bundle_path is not None:
+        print(f"evidence_bundle_path: {res.stamp.evidence_bundle_path}")
     if res.stamp.evidence_bundle_sha256:
         print(f"evidence_bundle_sha256: {res.stamp.evidence_bundle_sha256}")
     return 0
@@ -349,7 +356,7 @@ def build_parser(*, prog: str = "authored-pack") -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
-    sub = p.add_subparsers(dest="cmd", required=True)
+    sub = p.add_subparsers(dest="cmd", required=True, metavar="{assemble,verify,inspect,consume-bin}")
 
     assemble = sub.add_parser("assemble", aliases=["stamp"], help="Primary create path: assemble a deterministic verifiable pack")
     assemble.add_argument("--input", required=True, help="Directory of artifacts to include")
@@ -394,13 +401,13 @@ def build_parser(*, prog: str = "authored-pack") -> argparse.ArgumentParser:
     consume_bin = sub.add_parser("consume-bin", aliases=["stamp-bin"], help="Machine sidecar: subtractively consume source-bin files and assemble a pack")
     consume_bin.add_argument(
         "--source-bin",
-        default="./bins/source_bin",
-        help="Directory containing source files to consume (moved, not copied) (default: ./bins/source_bin)",
+        default=str(DEFAULT_SOURCE_BIN),
+        help="Directory containing source files to consume (moved, not copied) (default: repo-root ./bins/source_bin)",
     )
     consume_bin.add_argument(
         "--out",
-        default="./bins/authored_out",
-        help="Output directory for assembled pack (content-addressed) (default: ./bins/authored_out)",
+        default=str(DEFAULT_AUTHORED_OUT),
+        help="Output directory for assembled pack (content-addressed) (default: repo-root ./bins/authored_out)",
     )
     consume_bin.add_argument("--count", type=int, default=7, help="How many files to consume and assemble (default: 7)")
     consume_bin.add_argument("--min-remaining", type=int, default=50, help="Refuse if remaining after consumption would be below this (default: 50)")
@@ -440,7 +447,7 @@ def main(argv: Optional[Sequence[str]] = None, *, prog: Optional[str] = None) ->
     parser = build_parser(prog=prog_name)
     if not argv_list:
         parser.print_help()
-        return 0
+        return 2
     if argv_list in (["--version"], ["-V"]):
         print(f"{prog_name} {__version__}")
         return 0
@@ -462,7 +469,9 @@ def main(argv: Optional[Sequence[str]] = None, *, prog: Optional[str] = None) ->
                 error_type = exc.error_type
                 details = exc.details
             print(_json_failure(command, error_type, msg, details=details))
-            return 1
+            if isinstance(exc, CliCommandError):
+                return int(exc.exit_code)
+            return 2 if isinstance(exc, ValueError) else 1
         print(f"{prog_name}: error: {msg}", file=sys.stderr)
         if isinstance(exc, ValueError) and "must be a directory" in msg and "--input" in msg:
             print("hint: pass an existing directory path; many terminals let you drag a folder into the window to paste its absolute path.", file=sys.stderr)

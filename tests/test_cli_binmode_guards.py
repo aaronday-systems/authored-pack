@@ -63,7 +63,7 @@ class TestCliBinmodeGuards(unittest.TestCase):
                 ]
             )
 
-            self.assertEqual(rc, 1)
+            self.assertEqual(rc, 2)
             self.assertEqual(stderr, "")
             payload = json.loads(stdout)
             self.assertEqual(payload["ok"], False)
@@ -115,7 +115,7 @@ class TestCliBinmodeGuards(unittest.TestCase):
                 ]
             )
 
-            self.assertEqual(rc, 1)
+            self.assertEqual(rc, 2)
             self.assertEqual(stderr, "")
             payload = json.loads(stdout)
             self.assertEqual(payload["ok"], False)
@@ -144,7 +144,7 @@ class TestCliBinmodeGuards(unittest.TestCase):
                 ]
             )
 
-            self.assertEqual(rc, 1)
+            self.assertEqual(rc, 2)
             payload = json.loads(stdout)
             self.assertEqual(payload["ok"], False)
             self.assertEqual(payload["command"], "stamp")
@@ -173,7 +173,7 @@ class TestCliBinmodeGuards(unittest.TestCase):
                 ]
             )
 
-            self.assertEqual(rc, 1)
+            self.assertEqual(rc, 2)
             self.assertEqual(stderr, "")
             payload = json.loads(stdout)
             self.assertEqual(payload["ok"], False)
@@ -202,7 +202,7 @@ class TestCliBinmodeGuards(unittest.TestCase):
                 ]
             )
 
-            self.assertEqual(rc, 1)
+            self.assertEqual(rc, 2)
             self.assertEqual(stderr, "")
             payload = json.loads(stdout)
             self.assertEqual(payload["ok"], False)
@@ -304,7 +304,7 @@ class TestCliBinmodeGuards(unittest.TestCase):
                 ]
             )
 
-            self.assertEqual(rc, 1)
+            self.assertEqual(rc, 2)
             self.assertEqual(stderr, "")
             payload = json.loads(stdout)
             self.assertEqual(payload["ok"], False)
@@ -339,7 +339,7 @@ class TestCliBinmodeGuards(unittest.TestCase):
                 ]
             )
 
-            self.assertEqual(rc, 1)
+            self.assertEqual(rc, 2)
             self.assertEqual(stderr, "")
             payload = json.loads(stdout)
             self.assertEqual(payload["ok"], False)

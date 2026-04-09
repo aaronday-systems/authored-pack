@@ -163,7 +163,7 @@ class TestCliContract(unittest.TestCase):
     def test_inspect_json_missing_pack_emits_failure_envelope(self) -> None:
         rc, stdout, stderr = self._run_cli(["inspect", "--pack", "/no/such/path", "--json"])
 
-        self.assertEqual(rc, 1)
+        self.assertEqual(rc, 2)
         self.assertEqual(stderr, "")
         payload = json.loads(stdout)
         self.assertEqual(payload["ok"], False)
@@ -198,7 +198,7 @@ class TestCliContract(unittest.TestCase):
     def test_stamp_json_usage_error_emits_failure_envelope(self) -> None:
         rc, stdout, stderr = self._run_cli(["stamp", "--json"])
 
-        self.assertEqual(rc, 1)
+        self.assertEqual(rc, 2)
         self.assertEqual(stderr, "")
         payload = json.loads(stdout)
         self.assertEqual(payload["ok"], False)
@@ -227,7 +227,7 @@ class TestCliContract(unittest.TestCase):
                 ]
             )
 
-            self.assertEqual(rc, 1)
+            self.assertEqual(rc, 2)
             self.assertEqual(stderr, "")
             payload = json.loads(stdout)
         self.assertEqual(payload["ok"], False)
@@ -255,7 +255,7 @@ class TestCliContract(unittest.TestCase):
                 ]
             )
 
-            self.assertEqual(rc, 1)
+            self.assertEqual(rc, 2)
             self.assertEqual(stderr, "")
             payload = json.loads(stdout)
             self.assertEqual(payload["ok"], False)
@@ -298,7 +298,7 @@ class TestCliContract(unittest.TestCase):
             ]
         )
 
-        self.assertEqual(rc, 1)
+        self.assertEqual(rc, 2)
         self.assertEqual(stderr, "")
         payload = json.loads(stdout)
         self.assertEqual(payload["ok"], False)
@@ -389,7 +389,7 @@ class TestCliContract(unittest.TestCase):
     def test_json_usage_failure_without_subcommand_reports_eps_command(self) -> None:
         rc, stdout, stderr = self._run_cli(["--json"])
 
-        self.assertEqual(rc, 1)
+        self.assertEqual(rc, 2)
         self.assertEqual(stderr, "")
         payload = json.loads(stdout)
         self.assertEqual(payload["ok"], False)
@@ -398,10 +398,47 @@ class TestCliContract(unittest.TestCase):
     def test_bare_cli_prints_help(self) -> None:
         rc, stdout, stderr = self._run_cli([])
 
-        self.assertEqual(rc, 0)
+        self.assertEqual(rc, 2)
         self.assertEqual(stderr, "")
         self.assertIn("usage: authored-pack", stdout)
         self.assertIn("First clean success", stdout)
+
+    def test_consume_bin_defaults_anchor_to_repo_root(self) -> None:
+        parser = cli.build_parser()
+        ns = parser.parse_args(["consume-bin", "--json"])
+
+        self.assertEqual(Path(ns.source_bin), cli.DEFAULT_SOURCE_BIN)
+        self.assertEqual(Path(ns.out), cli.DEFAULT_AUTHORED_OUT)
+
+    def test_human_stamp_bin_output_includes_zip_and_evidence_paths_when_present(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            source_bin = tmp_path / "source_bin"
+            out_dir = tmp_path / "out"
+            source_bin.mkdir()
+            out_dir.mkdir()
+            (source_bin / "a.bin").write_bytes(b"entropy")
+
+            rc, stdout, stderr = self._run_cli(
+                [
+                    "stamp-bin",
+                    "--source-bin",
+                    str(source_bin),
+                    "--out",
+                    str(out_dir),
+                    "--count",
+                    "1",
+                    "--min-remaining",
+                    "0",
+                    "--allow-low-bin",
+                ]
+            )
+
+            self.assertEqual(rc, 0)
+            self.assertEqual(stderr, "")
+            self.assertIn("pack_dir:", stdout)
+            self.assertIn("zip_path:", stdout)
+            self.assertIn("evidence_bundle_path:", stdout)
 
     def test_cli_version_flag_prints_runtime_version(self) -> None:
         rc, stdout, stderr = self._run_cli(["--version"])

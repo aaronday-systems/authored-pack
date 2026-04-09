@@ -7,6 +7,7 @@ Read these first before making changes:
 - `CONTRIBUTING.md`
 - `docs/authored_pack_plan_2026-03-30.md`
 - `docs/repo_architect_handoff_2026-03-30.md`
+- `docs/dev_architect_handoff_2026-04-09.md`
 
 ## Core Invariants
 

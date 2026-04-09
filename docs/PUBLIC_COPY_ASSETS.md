@@ -24,7 +24,7 @@ It makes a legible pack with:
 
 It is not an RNG, not secrecy theater, and not a platform claim. Just a small honest tool.
 
-Repo + demo: <add public link>
+Repo + demo: include the public repo URL and short demo clip with the post.
 
 ## LinkedIn Draft
 
@@ -66,12 +66,12 @@ What it is not:
 - left menu on `Start`
 - right pane showing the first-success path
 
-3. TUI stamp review
-- `Stamp` selected
+3. TUI assemble review
+- `Assemble` selected
 - inline review panel open
 - compact rows visible, no prompt ladder
 
-4. CLI stamp success
+4. CLI assemble success
 - one short terminal capture showing `pack_dir`, `pack_root_sha256`, `payload_root_sha256`, `zip_path`
 
 5. CLI verify success
@@ -86,9 +86,9 @@ Length target: 25 to 40 seconds.
 
 Sequence:
 1. Open on the TUI `Start` screen for 2 to 3 seconds.
-2. Cut to `Stamp` review panel with clean defaults.
+2. Cut to `Assemble` review panel with clean defaults.
 3. Cut to terminal running `bash scripts/demo_v1.sh`.
-4. Let `stamp` finish and hold on the root output for 1 second.
+4. Let `assemble` finish and hold on the root output for 1 second.
 5. Let `verify` dir and `verify` zip succeed.
 6. End on the pack directory contents or README top block.
 

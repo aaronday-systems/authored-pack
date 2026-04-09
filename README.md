@@ -31,16 +31,16 @@ Or start the interactive path:
 python3 -B bin/authored_pack.py
 ```
 
-Or use the installed primary CLI:
-
-```bash
-authored-pack --help
-```
-
 Or use the module entrypoint directly from the repo:
 
 ```bash
 python3 -m authored_pack --help
+```
+
+If you prefer an installed CLI, install this repo into any isolated Python environment you already use, then run:
+
+```bash
+authored-pack --help
 ```
 
 ## What You Provide
@@ -96,12 +96,16 @@ Do not describe it as a secret unless you add a separate secret input outside th
 
 ## Install / Run
 
-No install required. Run with system Python 3.11+:
+Run directly from a clone with system Python 3.11+:
 
 - TUI: `python3 -B bin/authored_pack.py`
 - TUI noisy mode: `python3 -B bin/authored_pack.py --noisy`
-- Installed primary entrypoint: `authored-pack --help`
 - Module entrypoint: `python3 -m authored_pack --help`
+
+Optional installed CLI:
+- install this repo into an isolated Python environment you already prefer
+- examples: `pipx`, `uv tool`, or a local virtualenv
+- then run: `authored-pack --help`
 
 Primary public create verb: `assemble`
 - compatibility alias kept for now: `stamp`
