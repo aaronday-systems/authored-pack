@@ -1,6 +1,6 @@
 # Changelog
 
-All notable public-release changes to EPS will be documented here.
+All notable public-release changes to Authored Pack will be documented here.
 
 ## [0.0.1] - 2026-03-30
 
@@ -8,7 +8,7 @@ All notable public-release changes to EPS will be documented here.
 - aligned calm TUI amber with Control Plane's runtime amber (`172` on xterm-256)
 - reset runtime/package version to `0.0.1`
 
-## [1.0.0] - pending public release
+## [1.0.0] - 2026-04-09
 
 ### Added
 - public repo scaffolding: `CONTRIBUTING.md`, `SECURITY.md`, and GitHub Actions CI
@@ -16,7 +16,7 @@ All notable public-release changes to EPS will be documented here.
 - explicit V1 contract language in `README.md`
 
 ### Changed
-- froze EPS public V1 around the deterministic pack/verify core
+- froze Authored Pack public V1 around the deterministic pack/verify core
 - promoted `pack_root_sha256` and `payload_root_sha256` as the primary public identities
 - clarified that derived seed material is reproducible and not automatic secrecy
 - clarified that sealed/break-glass mode is future design only, not part of V1 runtime behavior

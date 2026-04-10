@@ -13,7 +13,7 @@ The correct framing is:
 - Authored Pack contributes deterministic packaging, hashing, commitment, schema, verification, and optional derivation
 - Authored Pack may then emit agent-ingestion instructions against that packaged material
 
-The correct one-line description is:
+This is the future-design one-line description for sealed mode only, not the current public pitch:
 
 > Authored Pack turns deliberate secret material into a legible, verifiable pack, and can optionally seal that pack for break-glass use.
 

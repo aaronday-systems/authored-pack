@@ -2,7 +2,7 @@
 
 ## Scope
 
-EPS is a deterministic packaging and verification tool. It is not an RNG, not automatic secrecy, and not signed provenance.
+Authored Pack is a deterministic packaging and verification tool. It is not an RNG, not automatic secrecy, and not signed provenance.
 
 Security-sensitive areas include:
 - manifest and receipt integrity
@@ -35,15 +35,15 @@ Please include:
 - impact assessment
 - any proposed fix direction if you have one
 
-## What EPS Does And Does Not Promise
+## What Authored Pack Does And Does Not Promise
 
-EPS currently provides:
+Authored Pack currently provides:
 - deterministic packaging
 - internal consistency verification
 - optional reproducible derived seed material
 - local tamper-evident evidence bundles
 
-EPS does not currently provide:
+Authored Pack does not currently provide:
 - fresh randomness generation
 - secrecy once a public receipt discloses derivation inputs
 - signed provenance

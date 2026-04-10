@@ -1,5 +1,7 @@
 # Authored Pack Dev Architect Handoff — 2026-04-09
 
+Maintainer note: this is repo-local handoff context for future improvement sessions, not part of the current public product contract.
+
 This is a durable repo-local handoff for the current `authored-pack` improvement slice.
 
 Its purpose is simple:
@@ -87,21 +89,21 @@ python3 -m authored_pack --help
 bash scripts/release_check.sh
 ```
 
-Observed caveat:
+Observed note:
 
-- in this sandbox, `scripts/smoke_install.sh` attempted a modern pip install first, then fell back to `setup.py install` because build/network/tooling constraints prevented a clean pip-path proof
+- `scripts/smoke_install.sh` remains at a historical path name, but the current proof is repo-local: it runs `python3 -m authored_pack`, parses the JSON envelope, and consumes the returned object without any `pip` install step
 
 ## Remaining Questions Worth Architect Attention
 
 ### P1
 
-- Decide whether the install proof should remain dual-path (`pip` first with fallback) or whether the repo should deliberately bless only run-from-clone plus optional isolated install examples.
-- Confirm whether the remaining `setup.py` fallback is acceptable as a release-hardening transition state.
+- Decide whether the historical script path `scripts/smoke_install.sh` should be renamed to better match its current repo-local consumer-smoke role.
+- Confirm whether public docs should continue to keep installed-CLI packaging out of the primary release contract unless a separate install lane is explicitly proven.
 
 ### P2
 
 - Consider adding richer JSON `details` for generic `ValueError` CLI failures so agent consumers get more structured failure envelopes.
-- Decide whether a later release should fully prove an isolated install flow in CI or keep packaging claims intentionally modest.
+- Decide whether a later release should introduce a separately named installed-CLI proof lane or keep packaging claims intentionally modest.
 
 ## Do Not Reopen Without Cause
 

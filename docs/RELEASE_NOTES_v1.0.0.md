@@ -1,14 +1,15 @@
 # Authored Pack v1.0.0 Release Notes
 
-Date: 2026-03-22
-Status: public release target
+Date: 2026-04-09
+Status: released
 
 ## Release Summary
 
 Authored Pack `v1.0.0` is the public deterministic core:
-- `stamp`
+- `assemble`
 - `verify`
-- `stamp-bin`
+- `inspect`
+- `consume-bin`
 - calm/noisy TUI flows
 - `pack_root_sha256` and `payload_root_sha256`
 - optional reproducible derived seed material
@@ -47,7 +48,8 @@ Stable public artifacts in V1:
 - `manifest.json` (`authored.pack.v1`)
 - `receipt.json` (`authored.receipt.v1`)
 - public zip projection with final receipt state
-- JSON CLI envelopes for `stamp`, `verify`, and `stamp-bin`
+- JSON CLI envelopes for `assemble`, `verify`, `inspect`, and `consume-bin`
+- compatibility aliases remain available for `stamp` and `stamp-bin`
 
 ## Trust Boundary Notes
 
@@ -55,11 +57,11 @@ Stable public artifacts in V1:
 - Omitting `seed_master.*` from the public zip is not a secrecy control.
 - Evidence bundles are tamper-evident local audit artifacts, not signed provenance.
 
-## Release Readiness
+## Release Verification
 
-Before tagging `v1.0.0`, confirm:
+Release verification used for `v1.0.0`:
 - `pytest -q`
 - `python3 -m pytest -q`
 - `python3 -m authored_pack --help`
-- one real stamp/verify smoke run from the README commands
+- one real assemble/verify smoke run from the README commands
 - clean public-safe tracked file set

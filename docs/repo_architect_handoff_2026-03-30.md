@@ -1,5 +1,7 @@
 # Authored Pack Repo Architect Handoff — 2026-03-30
 
+Maintainer note: this is an internal architect handoff, not part of the current public product contract.
+
 This is a positioning and language handoff for `authored-pack`.
 
 It is not a request to kill the repo.

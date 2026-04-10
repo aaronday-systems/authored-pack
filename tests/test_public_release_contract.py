@@ -32,24 +32,43 @@ class TestPublicReleaseContract(unittest.TestCase):
     def test_readme_states_public_v1_boundary(self) -> None:
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn("Current release: `v1.0.0`", readme)
-        self.assertIn("install this repo into an isolated Python environment you already prefer", readme)
-        self.assertIn("examples: `pipx`, `uv tool`, or a local virtualenv", readme)
-        self.assertIn("authored-pack --help", readme)
+        self.assertIn("repo-local execution from a clone", readme)
+        self.assertIn("Installed-CLI packaging flows are intentionally not the primary release contract.", readme)
+        self.assertIn("python3 -m authored_pack --help", readme)
         self.assertIn("source-available", readme)
         self.assertIn("not OSI open source", readme)
         self.assertIn("Sealed mode is not implemented in V1", readme)
         self.assertIn("macOS terminals", readme)
         self.assertIn("Linux terminals", readme)
         self.assertIn("best-effort", readme)
+        self.assertNotIn("pipx", readme)
+        self.assertNotIn("uv tool", readme)
+        self.assertNotIn("authored-pack --help", readme)
         self.assertNotIn("--insane", readme)
         self.assertNotIn("entropy_root_sha256", readme)
         self.assertNotIn("seed_fingerprint_sha256", readme)
         self.assertLess(readme.index("## Quick Start"), readme.index("## Trust Boundary"))
 
+    def test_security_policy_uses_current_product_identity(self) -> None:
+        text = (ROOT / "SECURITY.md").read_text(encoding="utf-8")
+        self.assertIn("Authored Pack is a deterministic packaging and verification tool.", text)
+        self.assertIn("## What Authored Pack Does And Does Not Promise", text)
+        self.assertNotIn("EPS is a deterministic packaging and verification tool.", text)
+        self.assertNotIn("## What EPS Does And Does Not Promise", text)
+
+    def test_changelog_reflects_released_authored_pack_v1(self) -> None:
+        text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        self.assertIn("All notable public-release changes to Authored Pack will be documented here.", text)
+        self.assertIn("## [1.0.0] - 2026-04-09", text)
+        self.assertIn("froze Authored Pack public V1 around the deterministic pack/verify core", text)
+        self.assertNotIn("pending public release", text)
+        self.assertNotIn("changes to EPS", text)
+
     def test_sealed_architecture_doc_is_marked_future_only(self) -> None:
         text = (ROOT / "docs" / "SEALED_PACK_ARCHITECTURE.md").read_text(encoding="utf-8")
         self.assertIn("future design only", text)
         self.assertIn("not implemented in Authored Pack v1.0.0", text)
+        self.assertIn("future-design one-line description for sealed mode only, not the current public pitch", text)
 
     def test_ci_workflow_calls_canonical_release_check(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
@@ -72,6 +91,7 @@ class TestPublicReleaseContract(unittest.TestCase):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertNotIn("ssot/ui/", readme)
         self.assertNotIn("fresh, unpredictable bits", readme)
+        self.assertNotIn("SEALED_PACK_ARCHITECTURE.md", readme)
 
     def test_public_demo_and_copy_assets_exist(self) -> None:
         for rel in (
@@ -104,9 +124,13 @@ class TestPublicReleaseContract(unittest.TestCase):
         copy_assets = (ROOT / "docs" / "PUBLIC_COPY_ASSETS.md").read_text(encoding="utf-8")
         self.assertIn("python3 -m authored_pack assemble", demo_script)
         self.assertNotIn("python3 -m authored_pack stamp --input", demo_script)
-        self.assertIn('"$venv_dir/bin/authored-pack" assemble --input "$input_dir"', install_smoke)
-        self.assertIn('"command":"assemble"', install_smoke)
-        self.assertNotIn('"$venv_dir/bin/authored-pack" stamp --input "$input_dir"', install_smoke)
+        self.assertIn("hello from Authored Pack", demo_script)
+        self.assertNotIn("hello from EPS", demo_script)
+        self.assertIn('repo_cli assemble --input "$input_dir" --out "$out_dir" --zip --json', install_smoke)
+        self.assertIn('assert payload["command"] == "assemble"', install_smoke)
+        self.assertIn('assert result["pack_type"] == "zip"', install_smoke)
+        self.assertIn('repo_cli_smoke_consumer=', install_smoke)
+        self.assertNotIn('pip install "$ROOT"', install_smoke)
         self.assertIn("python3 -m authored_pack assemble", demo_doc)
         self.assertNotIn("python3 -m authored_pack stamp --input", demo_doc)
         self.assertIn("CLI assemble success", copy_assets)
@@ -115,6 +139,36 @@ class TestPublicReleaseContract(unittest.TestCase):
     def test_release_notes_do_not_reintroduce_operator_input_positioning(self) -> None:
         text = (ROOT / "docs" / "RELEASE_NOTES_v1.0.0.md").read_text(encoding="utf-8")
         self.assertNotIn("operator-supplied inputs", text)
+
+    def test_release_notes_match_current_public_surface(self) -> None:
+        text = (ROOT / "docs" / "RELEASE_NOTES_v1.0.0.md").read_text(encoding="utf-8")
+        self.assertIn("Date: 2026-04-09", text)
+        self.assertIn("Status: released", text)
+        self.assertIn("- `assemble`", text)
+        self.assertIn("- `inspect`", text)
+        self.assertIn("- `consume-bin`", text)
+        self.assertIn("JSON CLI envelopes for `assemble`, `verify`, `inspect`, and `consume-bin`", text)
+        self.assertIn("compatibility aliases remain available for `stamp` and `stamp-bin`", text)
+        self.assertIn("Release verification used for `v1.0.0`", text)
+        self.assertIn("one real assemble/verify smoke run from the README commands", text)
+        self.assertNotIn("Status: public release target", text)
+        self.assertNotIn("Before tagging `v1.0.0`, confirm:", text)
+        self.assertNotIn("- `stamp`\n- `verify`\n- `stamp-bin`", text)
+
+    def test_historical_release_notes_are_fenced_as_legacy(self) -> None:
+        text = (ROOT / "docs" / "RELEASE_NOTES_v0.2.0.md").read_text(encoding="utf-8")
+        self.assertIn("Historical note: this is a pre-`Authored Pack v1.0.0` archive", text)
+        self.assertIn("It is not the current public contract", text)
+
+    def test_internal_handoff_docs_are_marked_maintainer_only(self) -> None:
+        for rel in (
+            "docs/authored_pack_plan_2026-03-30.md",
+            "docs/repo_architect_handoff_2026-03-30.md",
+            "docs/dev_architect_handoff_2026-04-09.md",
+        ):
+            text = (ROOT / rel).read_text(encoding="utf-8")
+            self.assertIn("Maintainer note:", text, msg=rel)
+            self.assertIn("not part of the current public product contract", text, msg=rel)
 
     def test_tui_public_strings_do_not_reintroduce_entropy_positioning(self) -> None:
         text = (ROOT / "bin" / "authored_pack.py").read_text(encoding="utf-8")

@@ -7,7 +7,7 @@ out_dir="$tmp_root/out"
 
 mkdir -p "$input_dir" "$out_dir"
 
-printf 'hello from EPS\n' > "$input_dir/note.txt"
+printf 'hello from Authored Pack\n' > "$input_dir/note.txt"
 printf 'demo context\n' > "$input_dir/context.txt"
 printf '\x00\x01\x02' > "$input_dir/sample.bin"
 

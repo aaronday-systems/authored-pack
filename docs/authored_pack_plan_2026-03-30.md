@@ -1,5 +1,7 @@
 # Authored Pack Plan — 2026-03-30
 
+Maintainer note: this is a repo-local planning document, not part of the current public product contract.
+
 This is the working plan for `authored-pack` based on the current ontology decision.
 
 ## Locked Rules

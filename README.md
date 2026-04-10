@@ -37,11 +37,8 @@ Or use the module entrypoint directly from the repo:
 python3 -m authored_pack --help
 ```
 
-If you prefer an installed CLI, install this repo into any isolated Python environment you already use, then run:
-
-```bash
-authored-pack --help
-```
+Public support target for v1 is repo-local execution from a clone with system Python 3.11+.
+Installed-CLI packaging flows are intentionally not the primary release contract.
 
 ## What You Provide
 
@@ -101,11 +98,6 @@ Run directly from a clone with system Python 3.11+:
 - TUI: `python3 -B bin/authored_pack.py`
 - TUI noisy mode: `python3 -B bin/authored_pack.py --noisy`
 - Module entrypoint: `python3 -m authored_pack --help`
-
-Optional installed CLI:
-- install this repo into an isolated Python environment you already prefer
-- examples: `pipx`, `uv tool`, or a local virtualenv
-- then run: `authored-pack --help`
 
 Primary public create verb: `assemble`
 - compatibility alias kept for now: `stamp`
@@ -210,7 +202,6 @@ It is not OSI open source.
 - canonical demo: `docs/CANONICAL_DEMO.md`
 - public copy assets: `docs/PUBLIC_COPY_ASSETS.md`
 - release notes: `docs/RELEASE_NOTES_v1.0.0.md`
-- sealed-mode future design only: `docs/SEALED_PACK_ARCHITECTURE.md`
 - contribution and disclosure policy: `CONTRIBUTING.md`, `SECURITY.md`
 
 ## License
