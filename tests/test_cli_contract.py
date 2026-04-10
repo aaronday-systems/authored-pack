@@ -9,6 +9,7 @@ import tempfile
 import tomllib
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from authored_pack import cli
 from authored_pack.pack import stamp_pack
@@ -91,22 +92,22 @@ class TestCliContract(unittest.TestCase):
         )
 
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
-        self.assertIn("authored-pack assemble --input /ABS/PATH/TO/DIR --out ./out --json", proc.stdout)
+        self.assertIn("python3 -m authored_pack assemble --input /ABS/PATH/TO/DIR --out ./out --json", proc.stdout)
         self.assertIn("consume-bin is subtractive", proc.stdout)
 
     def test_verify_json_emits_failure_envelope(self) -> None:
         rc, stdout, stderr = self._run_cli(["verify", "--pack", "/no/such/path", "--json"])
 
-        self.assertEqual(rc, 1)
+        self.assertEqual(rc, 2)
         self.assertEqual(stderr, "")
         payload = json.loads(stdout)
         self.assertEqual(payload["ok"], False)
         self.assertEqual(payload["command"], "verify")
-        self.assertEqual(payload["error"]["type"], "VerificationError")
+        self.assertEqual(payload["error"]["type"], "ValueError")
         self.assertTrue(payload["error"]["message"])
         self.assertEqual(payload["error"]["details"]["pack"], "/no/such/path")
-        self.assertIsInstance(payload["error"]["details"]["errors"], list)
-        self.assertEqual(payload["error"]["details"]["limits"]["max_manifest_mib"], 4)
+        self.assertEqual(payload["error"]["details"]["reason"], "unsupported pack path")
+        self.assertEqual(payload["error"]["details"]["supported_pack_types"], ["directory", "zip"])
 
     def test_inspect_json_emits_summary_for_pack_dir(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -170,6 +171,8 @@ class TestCliContract(unittest.TestCase):
         self.assertEqual(payload["command"], "inspect")
         self.assertEqual(payload["error"]["type"], "ValueError")
         self.assertIn("unsupported pack path", payload["error"]["message"])
+        self.assertEqual(payload["error"]["details"]["pack"], "/no/such/path")
+        self.assertEqual(payload["error"]["details"]["reason"], "unsupported pack path")
 
     def test_verify_json_failure_preserves_all_errors(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -234,6 +237,8 @@ class TestCliContract(unittest.TestCase):
         self.assertEqual(payload["command"], "stamp")
         self.assertEqual(payload["error"]["type"], "ValueError")
         self.assertIn("--json cannot be combined", payload["error"]["message"])
+        self.assertEqual(payload["error"]["details"]["flags"]["json"], True)
+        self.assertEqual(payload["error"]["details"]["flags"]["print_seed"], True)
 
     def test_stamp_json_rejects_write_seed_without_derive_seed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -262,6 +267,8 @@ class TestCliContract(unittest.TestCase):
             self.assertEqual(payload["command"], "stamp")
             self.assertEqual(payload["error"]["type"], "ValueError")
             self.assertIn("--write-seed requires --derive-seed", payload["error"]["message"])
+            self.assertEqual(payload["error"]["details"]["flags"]["write_seed"], True)
+            self.assertEqual(payload["error"]["details"]["flags"]["derive_seed"], False)
 
     def test_stamp_print_seed_without_derive_seed_fails_fast(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -409,6 +416,37 @@ class TestCliContract(unittest.TestCase):
 
         self.assertEqual(Path(ns.source_bin), cli.DEFAULT_SOURCE_BIN)
         self.assertEqual(Path(ns.out), cli.DEFAULT_AUTHORED_OUT)
+
+    def test_consume_bin_help_marks_defaults_as_repo_clone_only(self) -> None:
+        proc = subprocess.run(
+            [sys.executable, "-m", "authored_pack", "consume-bin", "--help"],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+        self.assertIn("default in repo clone", proc.stdout)
+        self.assertIn("otherwise pass explicit path", proc.stdout)
+
+    def test_consume_bin_defaults_fail_fast_when_repo_clone_bins_are_unavailable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            missing_source = tmp_path / "missing_source_bin"
+            missing_out = tmp_path / "missing_authored_out"
+            with mock.patch.object(cli, "DEFAULT_SOURCE_BIN", missing_source), mock.patch.object(cli, "DEFAULT_AUTHORED_OUT", missing_out):
+                rc, stdout, stderr = self._run_cli(["consume-bin", "--json"])
+
+        self.assertEqual(rc, 2)
+        self.assertEqual(stderr, "")
+        payload = json.loads(stdout)
+        self.assertEqual(payload["ok"], False)
+        self.assertEqual(payload["command"], "consume-bin")
+        self.assertEqual(payload["error"]["type"], "ValueError")
+        self.assertIn("repo-local consume-bin defaults are unavailable here", payload["error"]["message"])
+        self.assertEqual(payload["error"]["details"]["reason"], "repo-local defaults unavailable")
+        self.assertTrue(payload["error"]["details"]["requires_explicit_paths"])
 
     def test_human_stamp_bin_output_includes_zip_and_evidence_paths_when_present(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -1,11 +1,11 @@
-# Authored Pack v1.0.0 Release Notes
+# Authored Pack v0.2.1 Release Notes
 
-Date: 2026-04-09
+Date: 2026-04-10
 Status: released
 
 ## Release Summary
 
-Authored Pack `v1.0.0` is the public deterministic core:
+Authored Pack `v0.2.1` is the current public deterministic core:
 - `assemble`
 - `verify`
 - `inspect`
@@ -42,9 +42,9 @@ Primary public identities:
 
 Backward compatibility:
 - verification still accepts legacy `entropy.pack.v1` packs that carry `entropy_root_sha256.txt`
-- new v1.0.0 packs emit only the primary root and derived-seed names
+- new `v0.2.1` packs emit only the primary root and derived-seed names
 
-Stable public artifacts in V1:
+Stable public artifacts in the current public release:
 - `manifest.json` (`authored.pack.v1`)
 - `receipt.json` (`authored.receipt.v1`)
 - public zip projection with final receipt state
@@ -59,9 +59,6 @@ Stable public artifacts in V1:
 
 ## Release Verification
 
-Release verification used for `v1.0.0`:
-- `pytest -q`
-- `python3 -m pytest -q`
-- `python3 -m authored_pack --help`
-- one real assemble/verify smoke run from the README commands
-- clean public-safe tracked file set
+Release verification used for `v0.2.1`:
+- clean tracked worktree
+- `bash scripts/release_check.sh`

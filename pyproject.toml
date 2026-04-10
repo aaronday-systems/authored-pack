@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "authored-pack"
-version = "1.0.0"
+version = "0.2.1"
 description = "Authored Pack is a deterministic pack/verify tool for humans and agents."
 readme = "README.md"
 license = { file = "LICENSE" }

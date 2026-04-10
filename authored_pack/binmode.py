@@ -203,7 +203,7 @@ def stamp_from_source_bin(
             except Exception:
                 preserved_path = stage_dir
         raise BinRecoveryError(
-            f"stamp failed; preserved staged files at {preserved_path}: {exc}"
+            f"consume-bin failed; preserved staged files at {preserved_path}: {exc}"
         ) from exc
     finally:
         if cleanup_stage_dir:

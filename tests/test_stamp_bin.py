@@ -115,6 +115,7 @@ class TestStampBin(unittest.TestCase):
                             evidence_bundle=False,
                         )
 
+            self.assertIn("consume-bin failed", str(cm.exception))
             self.assertIn(".authored_pack_failed", str(cm.exception))
             failed_root = source_bin / ".authored_pack_failed"
             failed_dirs = [p for p in failed_root.iterdir() if p.is_dir()]

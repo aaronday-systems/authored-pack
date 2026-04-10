@@ -1,8 +1,8 @@
 # Authored Pack
 
-Authored Pack is a small deterministic tool for assembling, verifying, inspecting, and exporting bounded artifact sets.
+Authored Pack is a small deterministic tool for assembling, verifying, inspecting, and optionally zipping bounded artifact sets.
 
-Current state: public v1 is the honest pack/verify core.
+Current state: the current public release is the honest pack/verify core.
 
 It assembles a directory into a content-addressed pack with:
 - `manifest.json`
@@ -44,7 +44,7 @@ python3 -m authored_pack inspect --pack ./out/<pack_root_sha256> --json
 python3 -m authored_pack verify --pack ./out/<pack_root_sha256> --json
 ```
 
-Public support target for v1 is repo-local execution from a clone with system Python 3.11+.
+Public support target for the current release is repo-local execution from a clone with system Python 3.11+.
 Installed-CLI packaging flows are intentionally not the primary release contract.
 
 ## What You Provide
@@ -189,10 +189,10 @@ For `inspect`, the `result` object includes pack roots, schema summary, verifica
 
 ## Public Release Boundary
 
-Current release: `v1.0.0`.
-Sealed mode is not implemented in V1.
+Current release: `v0.2.1`.
+Sealed mode is not implemented in the current public release.
 
-Public v1 is the deterministic pack/verify core:
+Current public release is the deterministic pack/verify core:
 - `assemble`
 - `verify`
 - `inspect`
@@ -208,7 +208,7 @@ It is not OSI open source.
 
 - canonical demo: `docs/CANONICAL_DEMO.md`
 - public copy assets: `docs/PUBLIC_COPY_ASSETS.md`
-- release notes: `docs/RELEASE_NOTES_v1.0.0.md`
+- release notes: `docs/RELEASE_NOTES_v0.2.1.md`
 - contribution and disclosure policy: `CONTRIBUTING.md`, `SECURITY.md`
 
 ## License

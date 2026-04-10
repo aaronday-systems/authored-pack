@@ -1,6 +1,6 @@
 # Canonical Demo
 
-This is the one short honest demo for Authored Pack `v1.0.0`.
+This is the one short honest demo for Authored Pack `v0.2.1`.
 
 ## What the demo shows
 

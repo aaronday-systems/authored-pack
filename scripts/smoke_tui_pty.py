@@ -136,6 +136,18 @@ def main() -> int:
                 },
             ),
             (
+                "calm-sources-dropzone-quit",
+                {
+                    "argv": list(BASE_CMD),
+                    "actions": [(0.35, b"j"), (0.2, b"j"), (0.35, b"q")],
+                    "required_substrings": [
+                        "authored sources // stage items for next assemble",
+                        "drop zone // drop files and folders",
+                        "drop files / folders here",
+                    ],
+                },
+            ),
+            (
                 "calm-stamp-review-open-close-quit",
                 {
                     "argv": list(BASE_CMD),

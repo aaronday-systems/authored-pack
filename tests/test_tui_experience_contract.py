@@ -96,7 +96,12 @@ class TestTuiExperienceContract(unittest.TestCase):
         self.assertIn("Space = tap keys         -> stage tap source", joined)
         self.assertIn("P = import files/folders -> stage photo/text sources", joined)
         self.assertNotIn("A = add photo", joined)
+        self.assertIn("DROP ZONE // drop files and folders without typing paths", joined)
+        self.assertIn("Watch folder:", joined)
+        self.assertIn("Folder now has 0 item(s). Imported this run: 0.", joined)
+        self.assertIn("DROP FILES / FOLDERS HERE", joined)
         self.assertIn("RESULT: nothing is written yet.", joined)
+        self.assertIn("ENTER: while empty, Enter opens import", joined)
         self.assertIn("ALT: skip this screen", joined)
         self.assertNotIn("ready 0/7", joined.lower())
         self.assertNotIn("lockdown", joined.lower())
@@ -115,7 +120,19 @@ class TestTuiExperienceContract(unittest.TestCase):
 
         self.assertIn("STAGED: 3 sources for next assemble", joined)
         self.assertIn("KINDS : photo 1  text 1  tap 1", joined)
+        self.assertIn("DROP: P imports now |", joined)
         self.assertTrue(all(ord(ch) < 128 for ch in summary_line))
+
+    def test_sources_enter_opens_import_when_empty(self) -> None:
+        m = self.m
+        state = self._state()
+        state.selected = state.menu.index("Sources")
+
+        with mock.patch.object(m, "_action_sources_import_paths") as import_paths:
+            keep_running = m.handle_key(DummyStdScr(), state, m.curses.KEY_ENTER)
+
+        self.assertTrue(keep_running)
+        import_paths.assert_called_once()
 
     def test_stamp_card_summarizes_review_before_advanced_prompts(self) -> None:
         joined = self._preview("Stamp")

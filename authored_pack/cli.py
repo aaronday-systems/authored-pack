@@ -21,16 +21,16 @@ DEFAULT_AUTHORED_OUT = REPO_ROOT / "bins" / "authored_out"
 
 CLI_EPILOG = """\
 First clean success:
-  authored-pack assemble --input /ABS/PATH/TO/DIR --out ./out --zip
-  authored-pack verify --pack ./out/<pack_root_sha256>
+  python3 -m authored_pack assemble --input /ABS/PATH/TO/DIR --out ./out --zip
+  python3 -m authored_pack verify --pack ./out/<pack_root_sha256>
 
 Human path:
   python3 -B bin/authored_pack.py
   stage sources if you need them, then assemble and verify
 
 Machine path:
-  authored-pack assemble --input /ABS/PATH/TO/DIR --out ./out --json
-  consume-bin is subtractive; pass explicit paths outside the repo
+  python3 -m authored_pack assemble --input /ABS/PATH/TO/DIR --out ./out --json
+  consume-bin is subtractive; repo-local defaults only work in a repo clone
 
 Trust boundary:
   use OS randomness for ordinary secret generation
@@ -62,6 +62,10 @@ class CliCommandError(RuntimeError):
 class EPSArgumentParser(argparse.ArgumentParser):
     def error(self, message: str) -> None:
         raise CliUsageError(message)
+
+
+def _value_error(message: str, *, details: Optional[Dict[str, object]] = None) -> CliCommandError:
+    return CliCommandError(message, error_type="ValueError", details=details, exit_code=2)
 
 
 def _json_success(command: str, result: object) -> str:
@@ -99,11 +103,20 @@ def _parse_dice(items: Sequence[str]) -> List[Tuple[str, int]]:
 
 def _validate_seed_flags(args: argparse.Namespace) -> None:
     if args.json and args.print_seed:
-        raise ValueError("--json cannot be combined with --print-seed")
+        raise _value_error(
+            "--json cannot be combined with --print-seed",
+            details={"flags": {"json": True, "print_seed": True, "derive_seed": bool(args.derive_seed)}},
+        )
     if args.write_seed and not args.derive_seed:
-        raise ValueError("--write-seed requires --derive-seed")
+        raise _value_error(
+            "--write-seed requires --derive-seed",
+            details={"flags": {"write_seed": True, "derive_seed": False}},
+        )
     if args.print_seed and not args.derive_seed:
-        raise ValueError("--print-seed requires --derive-seed")
+        raise _value_error(
+            "--print-seed requires --derive-seed",
+            details={"flags": {"print_seed": True, "derive_seed": False}},
+        )
 
 
 def _command_name_from_argv(argv_list: Sequence[str], *, default_command: str = "authored-pack") -> str:
@@ -123,6 +136,40 @@ def _prog_name_from_argv0(argv0: str) -> str:
     return "authored-pack"
 
 
+def _resolve_supported_pack_path(raw_pack: str) -> Path:
+    pack_path = Path(raw_pack).expanduser().resolve()
+    if pack_path.is_dir() or (pack_path.is_file() and pack_path.suffix.lower() == ".zip"):
+        return pack_path
+    raise _value_error(
+        f"unsupported pack path: {pack_path}",
+        details={
+            "pack": str(pack_path),
+            "reason": "unsupported pack path",
+            "supported_pack_types": ["directory", "zip"],
+        },
+    )
+
+
+def _ensure_repo_clone_consume_bin_defaults(source_bin: Path, out_dir: Path) -> None:
+    using_default_source = source_bin == DEFAULT_SOURCE_BIN.resolve()
+    using_default_out = out_dir == DEFAULT_AUTHORED_OUT.resolve()
+    if not (using_default_source or using_default_out):
+        return
+    if DEFAULT_SOURCE_BIN.is_dir() and DEFAULT_AUTHORED_OUT.is_dir():
+        return
+    raise _value_error(
+        "repo-local consume-bin defaults are unavailable here; pass explicit --source-bin and --out",
+        details={
+            "source_bin": str(source_bin),
+            "out": str(out_dir),
+            "reason": "repo-local defaults unavailable",
+            "requires_explicit_paths": True,
+            "repo_default_source_bin_exists": DEFAULT_SOURCE_BIN.is_dir(),
+            "repo_default_out_exists": DEFAULT_AUTHORED_OUT.is_dir(),
+        },
+    )
+
+
 def _stamp(args: argparse.Namespace) -> int:
     dice = None
     if args.dice:
@@ -132,7 +179,14 @@ def _stamp(args: argparse.Namespace) -> int:
     input_dir = Path(args.input)
     out_dir = Path(args.out)
     if _output_would_self_ingest_input(input_dir.expanduser().resolve(), out_dir.expanduser().resolve()):
-        raise ValueError("--input and --out must not overlap in either direction")
+        raise _value_error(
+            "--input and --out must not overlap in either direction",
+            details={
+                "input": str(input_dir.expanduser().resolve()),
+                "out": str(out_dir.expanduser().resolve()),
+                "reason": "paths overlap",
+            },
+        )
 
     res: StampResult = stamp_pack(
         input_dir=input_dir,
@@ -182,14 +236,15 @@ def _stamp(args: argparse.Namespace) -> int:
 
 def _verify(args: argparse.Namespace) -> int:
     max_manifest_bytes = int(args.max_manifest_mib) * 1024 * 1024
-    res = verify_pack(Path(args.pack), max_manifest_bytes=max_manifest_bytes)
+    pack_path = _resolve_supported_pack_path(args.pack)
+    res = verify_pack(pack_path, max_manifest_bytes=max_manifest_bytes)
     if not res.ok:
         msg = res.errors[0] if res.errors else "verification failed"
         raise CliCommandError(
             msg,
             error_type="VerificationError",
             details={
-                "pack": str(Path(args.pack)),
+                "pack": str(pack_path),
                 "errors": list(res.errors),
                 "limits": {"max_manifest_mib": int(args.max_manifest_mib)},
             },
@@ -218,8 +273,9 @@ def _verify(args: argparse.Namespace) -> int:
 
 def _inspect(args: argparse.Namespace) -> int:
     max_manifest_bytes = int(args.max_manifest_mib) * 1024 * 1024
+    pack_path = _resolve_supported_pack_path(args.pack)
     summary = inspect_pack(
-        Path(args.pack),
+        pack_path,
         max_manifest_bytes=max_manifest_bytes,
         artifact_preview_limit=int(args.artifact_preview),
     )
@@ -264,18 +320,42 @@ def _inspect(args: argparse.Namespace) -> int:
 
 
 def _stamp_bin(args: argparse.Namespace) -> int:
-    res = stamp_from_source_bin(
-        source_bin=Path(args.source_bin),
-        out_dir=Path(args.out),
-        count=int(args.count),
-        min_remaining=int(args.min_remaining),
-        allow_low_bin=bool(args.allow_low_bin),
-        recursive=bool(args.recursive),
-        include_hidden=bool(args.include_hidden),
-        zip_pack=bool(args.zip),
-        derive_seed=bool(args.derive_seed),
-        evidence_bundle=bool(args.evidence_bundle),
-    )
+    source_bin = Path(args.source_bin).expanduser().resolve()
+    out_dir = Path(args.out).expanduser().resolve()
+    _ensure_repo_clone_consume_bin_defaults(source_bin, out_dir)
+    try:
+        res = stamp_from_source_bin(
+            source_bin=source_bin,
+            out_dir=out_dir,
+            count=int(args.count),
+            min_remaining=int(args.min_remaining),
+            allow_low_bin=bool(args.allow_low_bin),
+            recursive=bool(args.recursive),
+            include_hidden=bool(args.include_hidden),
+            zip_pack=bool(args.zip),
+            derive_seed=bool(args.derive_seed),
+            evidence_bundle=bool(args.evidence_bundle),
+        )
+    except ValueError as exc:
+        msg = str(exc).strip() or "consume-bin failed"
+        details: Dict[str, object] = {
+            "source_bin": str(source_bin),
+            "out": str(out_dir),
+            "count": int(args.count),
+            "min_remaining": int(args.min_remaining),
+            "allow_low_bin": bool(args.allow_low_bin),
+        }
+        if "must not overlap" in msg:
+            details["reason"] = "paths overlap"
+        elif "low-watermark" in msg:
+            details["reason"] = "low-watermark"
+        elif "must be a directory" in msg:
+            details["reason"] = "missing source bin directory"
+        elif "need at least" in msg:
+            details["reason"] = "insufficient source files"
+        elif "must be > 0" in msg or "must be >= 0" in msg:
+            details["reason"] = "invalid numeric argument"
+        raise _value_error(msg, details=details) from exc
     projected_after = int(res.bin_files_before) - int(args.count)
     low_watermark_violation = projected_after < int(args.min_remaining)
     warnings: List[str] = []
@@ -402,12 +482,12 @@ def build_parser(*, prog: str = "authored-pack") -> argparse.ArgumentParser:
     consume_bin.add_argument(
         "--source-bin",
         default=str(DEFAULT_SOURCE_BIN),
-        help="Directory containing source files to consume (moved, not copied) (default: repo-root ./bins/source_bin)",
+        help="Directory containing source files to consume (moved, not copied) (default in repo clone: ./bins/source_bin; otherwise pass explicit path)",
     )
     consume_bin.add_argument(
         "--out",
         default=str(DEFAULT_AUTHORED_OUT),
-        help="Output directory for assembled pack (content-addressed) (default: repo-root ./bins/authored_out)",
+        help="Output directory for assembled pack (content-addressed) (default in repo clone: ./bins/authored_out; otherwise pass explicit path)",
     )
     consume_bin.add_argument("--count", type=int, default=7, help="How many files to consume and assemble (default: 7)")
     consume_bin.add_argument("--min-remaining", type=int, default=50, help="Refuse if remaining after consumption would be below this (default: 50)")

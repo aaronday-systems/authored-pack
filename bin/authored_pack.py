@@ -1404,6 +1404,40 @@ def _dropzone_preview(state: AppState, *, width: int, height: int) -> List[str]:
     return [ln[:width] for ln in lines[:height]]
 
 
+def _sources_dropzone_lines(state: AppState, *, width: int, detailed: bool) -> List[str]:
+    """
+    Compact drop-zone guidance for the Sources pane.
+    """
+    d = state.drop_dir
+    lines: List[str] = []
+    if detailed:
+        lines.append("DROP ZONE // drop files and folders without typing paths")
+        lines.append("P or Enter opens import; watched folder auto-imports new items.")
+        lines.append(f"Watch folder: {_display_path(d.resolve() if d.exists() else d, max_len=max(24, width - 14))}")
+        lines.append(f"Folder now has {state.drop_last_count} item(s). Imported this run: {state.drop_import_count}.")
+        lines.append("Folder -> Assemble input dir. Images/text -> staged sources.")
+        if state.drop_last_names:
+            sample = ", ".join(_shorten_middle(name, 18) for name in state.drop_last_names[:4])
+            lines.append(f"Recent drop items: {sample}")
+        box_w = max(22, min(max(22, width - 2), 44))
+        top = "+" + ("-" * (box_w - 2)) + "+"
+        msg = "IMPORTED" if state.drop_flash_ticks > 0 else "DROP FILES / FOLDERS HERE"
+        pad = max(0, (box_w - 2 - len(msg)) // 2)
+        msg_line = "|" + (" " * pad) + msg + (" " * max(0, box_w - 2 - pad - len(msg))) + "|"
+        lines.extend([top, msg_line, top])
+    else:
+        line = (
+            "DROP: P imports now | "
+            f"watch {_display_path(d.resolve() if d.exists() else d, max_len=max(18, width - 44))} | "
+            f"folder items {state.drop_last_count} | imported {state.drop_import_count}"
+        )
+        lines.append(line[: max(0, width)])
+    if state.drop_last_msgs and state.drop_last_msgs_ticks > 0:
+        for m in state.drop_last_msgs[:2]:
+            lines.append(f"- {m}")
+    return [ln[:width] for ln in lines]
+
+
 def _poll_drop_dir(state: AppState) -> None:
     """
     Best-effort "drag and drop" via a filesystem landing zone.
@@ -1870,7 +1904,7 @@ def _header_next_action(label: str, state: "AppState") -> str:
     if label == "Sources":
         if state.authored_sources:
             return "Enter uses staged sources"
-        return "T/Space/P stage sources"
+        return "Enter/P imports or stages sources"
     if label == "Stamp":
         if state.stamp_panel_draft is not None:
             return "Enter edits or runs assemble"
@@ -3286,9 +3320,12 @@ def _authored_sources_preview(state: AppState, *, width: int, height: int) -> Li
         lines.append("Space = tap keys         -> stage tap source")
         lines.append("P = import files/folders -> stage photo/text sources")
     lines.append("")
+    lines.extend(_sources_dropzone_lines(state, width=width, detailed=not state.authored_sources))
+    lines.append("")
     if not state.authored_sources:
         lines.append("RESULT: nothing is written yet. These items stage the next Assemble run.")
-        lines.append("NEXT: add 1+ item, then press Enter to use staged sources in Assemble.")
+        lines.append("NEXT: use T, Space, P, or the drop zone above to stage the first item.")
+        lines.append("ENTER: while empty, Enter opens import for dropped, pasted, or typed paths.")
         lines.append("ALT: skip this screen and assemble a normal folder from Start.")
         return lines[:height]
     lines.append("RESULT: Enter uses this staged source list as pack input.")
@@ -3366,7 +3403,7 @@ def _draw_footer(stdscr, state: AppState, rows: int, cols: int) -> None:
         elif state.authored_sources:
             legend = "Up/Down: menu  Enter: assemble  Tab: list  T/Space/P: add  M: mode  Q: quit"
         else:
-            legend = "Up/Down: menu  Tab: list  T/Space/P: add  M: mode  Q: quit"
+            legend = "Up/Down: menu  Enter/P: import  T/Space/P: add  M: mode  Q: quit"
     elif label == "Stamp":
         if state.stamp_panel_draft is not None:
             legend = "Up/Down: move  Enter: edit/save  Space: toggle  Esc: back"
@@ -4985,7 +5022,7 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
                 state.focus = "menu"
                 state.status = "Authored Sources selected. Review and assemble when ready."
             else:
-                state.status = "Compose from sources with T, Space, or P."
+                _action_sources_import_paths(state, stdscr)
             return True
 
     if label == "Stamp":

@@ -70,6 +70,7 @@ class TestCliBinmodeGuards(unittest.TestCase):
             self.assertEqual(payload["command"], "stamp")
             self.assertEqual(payload["error"]["type"], "ValueError")
             self.assertIn("must not overlap", payload["error"]["message"])
+            self.assertEqual(payload["error"]["details"]["reason"], "paths overlap")
             self.assertFalse(out_dir.exists())
 
     def test_stamp_rejects_input_nested_under_out(self) -> None:
@@ -122,6 +123,7 @@ class TestCliBinmodeGuards(unittest.TestCase):
             self.assertEqual(payload["command"], "stamp")
             self.assertEqual(payload["error"]["type"], "ValueError")
             self.assertIn("must not overlap", payload["error"]["message"])
+            self.assertEqual(payload["error"]["details"]["reason"], "paths overlap")
 
     def test_stamp_rejects_json_with_print_seed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -149,6 +151,7 @@ class TestCliBinmodeGuards(unittest.TestCase):
             self.assertEqual(payload["ok"], False)
             self.assertEqual(payload["command"], "stamp")
             self.assertIn("cannot be combined", payload["error"]["message"])
+            self.assertEqual(payload["error"]["details"]["flags"]["json"], True)
             self.assertEqual(stderr, "")
             self.assertFalse(out_dir.exists())
 
@@ -180,6 +183,7 @@ class TestCliBinmodeGuards(unittest.TestCase):
             self.assertEqual(payload["command"], "stamp")
             self.assertEqual(payload["error"]["type"], "ValueError")
             self.assertIn("--json cannot be combined", payload["error"]["message"])
+            self.assertEqual(payload["error"]["details"]["flags"]["print_seed"], True)
             self.assertFalse(out_dir.exists())
 
     def test_stamp_json_rejects_write_seed_without_derive_seed(self) -> None:
@@ -209,6 +213,7 @@ class TestCliBinmodeGuards(unittest.TestCase):
             self.assertEqual(payload["command"], "stamp")
             self.assertEqual(payload["error"]["type"], "ValueError")
             self.assertIn("--write-seed requires --derive-seed", payload["error"]["message"])
+            self.assertEqual(payload["error"]["details"]["flags"]["write_seed"], True)
             self.assertFalse(out_dir.exists())
 
     def test_stamp_print_seed_without_derive_seed_fails_fast(self) -> None:
@@ -311,6 +316,7 @@ class TestCliBinmodeGuards(unittest.TestCase):
             self.assertEqual(payload["command"], "stamp-bin")
             self.assertEqual(payload["error"]["type"], "ValueError")
             self.assertIn("must not overlap", payload["error"]["message"])
+            self.assertEqual(payload["error"]["details"]["reason"], "paths overlap")
             self.assertFalse(out_dir.exists())
             self.assertTrue((source_bin / "e_001.bin").is_file())
 
@@ -346,6 +352,7 @@ class TestCliBinmodeGuards(unittest.TestCase):
             self.assertEqual(payload["command"], "stamp-bin")
             self.assertEqual(payload["error"]["type"], "ValueError")
             self.assertIn("low-watermark", payload["error"]["message"])
+            self.assertEqual(payload["error"]["details"]["reason"], "low-watermark")
             self.assertTrue((source_bin / "e_001.bin").is_file())
             self.assertTrue((source_bin / "e_002.bin").is_file())
 

@@ -1,6 +1,6 @@
 # EPS v0.2.0 Release Notes
 
-Historical note: this is a pre-`Authored Pack v1.0.0` archive from the older `EPS` naming era.
+Historical note: this is an older EPS-era archive kept for historical reference only.
 It is not the current public contract and intentionally preserves legacy schema, artifact, and CLI terms for historical reference.
 
 Date: 2026-03-22

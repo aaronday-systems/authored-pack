@@ -10,7 +10,7 @@ Authored Pack packages a normal folder or deliberately staged authored sources i
 
 ## Website Copy Block
 
-Authored Pack is a small deterministic pack/verify tool. Give it a normal folder or deliberately staged authored sources and it gives you a legible pack with a manifest, receipt, stable pack root, and payload root. Verify it later, hand it off, or route it into another tool. Public v1 is deterministic pack/verify only. Sealed mode is future design work, not current runtime behavior.
+Authored Pack is a small deterministic pack/verify tool. Give it a normal folder or deliberately staged authored sources and it gives you a legible pack with a manifest, receipt, stable pack root, and payload root. Verify it later, hand it off, or share it for later verification. The current public release is deterministic pack/verify only. Sealed mode is future design work, not current runtime behavior.
 
 ## X / Twitter Draft
 
@@ -40,7 +40,7 @@ What it is not:
 - not signed provenance
 - not a trust platform
 
-Public v1 is deterministic pack/verify only. Sealed mode is still future design work.
+The current public release is deterministic pack/verify only. Sealed mode is still future design work.
 
 ## What It Is / What It Isn’t
 
@@ -53,7 +53,7 @@ What it is not:
 - not an RNG
 - not automatic secrecy
 - not signed provenance
-- not sealed break-glass storage in v1
+- not sealed break-glass storage in the current public release
 
 ## Screenshot / Demo Shot List
 
