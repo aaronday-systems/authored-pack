@@ -3,6 +3,26 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+resolve_python_bin() {
+  local candidate
+  for candidate in "${PYTHON_BIN:-}" python3.13 python3.12 python3.11 python3; do
+    [[ -n "$candidate" ]] || continue
+    if ! command -v "$candidate" >/dev/null 2>&1; then
+      continue
+    fi
+    if "$candidate" - <<'PY' >/dev/null 2>&1
+import sys
+raise SystemExit(0 if sys.version_info >= (3, 11) else 1)
+PY
+    then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  echo "release_check: python3.11+ is required" >&2
+  return 1
+}
+
 require_clean_tracked_tree() {
   (
     cd "$ROOT"
@@ -24,11 +44,13 @@ run_step() {
   )
 }
 
+python_bin="$(resolve_python_bin)"
+
 run_step "clean tracked tree" require_clean_tracked_tree
 run_step "pytest" pytest -q
-run_step "cli help" python3 -m authored_pack --help
-run_step "tui pty smoke" python3 scripts/smoke_tui_pty.py
-run_step "repo cli consumer smoke" bash scripts/smoke_install.sh
-run_step "demo smoke" bash scripts/demo_v1.sh
+run_step "cli help" "$python_bin" -m authored_pack --help
+run_step "tui pty smoke" "$python_bin" scripts/smoke_tui_pty.py
+run_step "repo cli consumer smoke" env PYTHON_BIN="$python_bin" bash scripts/smoke_install.sh
+run_step "demo smoke" env PYTHON_BIN="$python_bin" bash scripts/demo_v1.sh
 
 printf '\nrelease_check: ok\n'
