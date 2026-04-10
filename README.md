@@ -19,22 +19,29 @@ Governed attestation belongs to `Attestation Engine`.
 
 ## Quick Start
 
-Run the honest end-to-end demo first:
+Use the canonical noun first:
+
+```bash
+python3 -m authored_pack --help
+```
+
+First clean success:
 
 ```bash
 bash scripts/demo_v1.sh
 ```
 
-Or start the interactive path:
+Interactive path:
 
 ```bash
 python3 -B bin/authored_pack.py
 ```
 
-Or use the module entrypoint directly from the repo:
+Machine path:
 
 ```bash
-python3 -m authored_pack --help
+python3 -m authored_pack inspect --pack ./out/<pack_root_sha256> --json
+python3 -m authored_pack verify --pack ./out/<pack_root_sha256> --json
 ```
 
 Public support target for v1 is repo-local execution from a clone with system Python 3.11+.
