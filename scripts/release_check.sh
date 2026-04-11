@@ -47,7 +47,7 @@ run_step() {
 python_bin="$(resolve_python_bin)"
 
 run_step "clean tracked tree" require_clean_tracked_tree
-run_step "pytest" pytest -q
+run_step "pytest" "$python_bin" -m pytest -q
 run_step "cli help" "$python_bin" -m authored_pack --help
 run_step "tui pty smoke" "$python_bin" scripts/smoke_tui_pty.py
 run_step "repo cli consumer smoke" env PYTHON_BIN="$python_bin" bash scripts/smoke_install.sh
