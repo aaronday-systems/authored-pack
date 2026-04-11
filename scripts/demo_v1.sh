@@ -19,10 +19,30 @@ printf '\n[1/3] assemble\n'
 pack_dir="$(find "$out_dir" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
 zip_path="$pack_dir/authored_pack.zip"
 
-printf '\n[2/3] verify pack dir\n'
-"$python_bin" -m authored_pack verify --pack "$pack_dir"
-
-printf '\n[3/3] verify zip\n'
+printf '\n[2/3] verify zip\n'
 "$python_bin" -m authored_pack verify --pack "$zip_path"
 
-printf '\ninspect=%s\n' "$pack_dir"
+printf '\n[3/3] inspect zip summary\n'
+inspect_json="$("$python_bin" -m authored_pack inspect --pack "$zip_path" --json)"
+INSPECT_JSON="$inspect_json" "$python_bin" - <<'PY'
+import json
+import os
+
+payload = json.loads(os.environ["INSPECT_JSON"])
+result = payload["result"]
+print("pack_type:", result["pack_type"])
+print("pack_root_sha256:", result["pack_root_sha256"])
+print("payload_root_sha256:", result["payload_root_sha256"])
+print("artifact_count:", result["artifact_count"])
+print("artifact_preview:")
+for item in result.get("artifact_preview", [])[:3]:
+    path = item.get("path", "")
+    size = item.get("size_bytes")
+    if isinstance(size, int):
+        print(f"- {path} ({size} bytes)")
+    else:
+        print(f"- {path}")
+PY
+
+printf '\nNext on your own folder:\n'
+printf '  python3 -m authored_pack assemble --input /path/to/your-folder --out ./out --zip\n'

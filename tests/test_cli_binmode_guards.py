@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 
 from authored_pack import cli
-from authored_pack.binmode import stamp_from_source_bin
+from authored_pack.binmode import consume_from_source_bin
 
 
 class TestCliBinmodeGuards(unittest.TestCase):
@@ -269,7 +269,7 @@ class TestCliBinmodeGuards(unittest.TestCase):
             (source_bin / "e_001.bin").write_bytes(b"entropy")
 
             with self.assertRaises(ValueError):
-                stamp_from_source_bin(
+                consume_from_source_bin(
                     source_bin=source_bin,
                     out_dir=out_dir,
                     count=1,

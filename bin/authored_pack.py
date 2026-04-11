@@ -56,7 +56,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from authored_pack import __version__
-from authored_pack.pack import DEFAULT_MAX_MANIFEST_BYTES, stamp_pack, verify_pack
+from authored_pack.pack import AssembleResult, DEFAULT_MAX_MANIFEST_BYTES, assemble_pack, verify_pack
 
 
 APP_NAME = "AUTHORED PACK"
@@ -148,7 +148,7 @@ def _scan_artifacts_for_picker(input_dir: Path, *, include_hidden: bool) -> List
 
 def _artifact_exclude_picker(stdscr, state: "AppState", *, input_dir: Path, include_hidden: bool) -> Optional[Set[str]]:
     """
-    Overlay picker: select artifacts to exclude from the next stamp (non-destructive).
+    Overlay picker: select artifacts to exclude from the next assemble (non-destructive).
 
     Keys:
     - Up/Down: move
@@ -176,7 +176,7 @@ def _artifact_exclude_picker(stdscr, state: "AppState", *, input_dir: Path, incl
     stdscr.erase()
     attr_t = state.palette.header[0] if (state.insane and state.palette) else state.theme.header
     attr = state.palette.text if (state.insane and state.palette) else state.theme.normal
-    safe_addstr(stdscr, 0, 0, "ARTIFACTS // EXCLUDE FROM NEXT STAMP".ljust(cols), attr_t)
+    safe_addstr(stdscr, 0, 0, "ARTIFACTS // EXCLUDE FROM NEXT ASSEMBLE".ljust(cols), attr_t)
     safe_addstr(stdscr, 2, 0, f"Scanning {_display_path(input_dir, max_len=max(24, cols - 12))} ...".ljust(cols), attr)
     stdscr.refresh()
 
@@ -213,7 +213,7 @@ def _artifact_exclude_picker(stdscr, state: "AppState", *, input_dir: Path, incl
 
     while True:
         stdscr.erase()
-        title = "ARTIFACTS // EXCLUDE FROM NEXT STAMP"
+        title = "ARTIFACTS // EXCLUDE FROM NEXT ASSEMBLE"
         sub = f"input: {_display_path(Path(input_dir).resolve(), max_len=max(24, cols - 8))}"
         stats = f"total={total}  match={len(filtered)}  excluded={len(excludes)}  hidden={'on' if include_hidden else 'off'}"
         filt = f"filter: {query or '(none)'}   (press / to edit)"
@@ -574,7 +574,7 @@ class DropBatchRequest:
 
 
 @dataclass
-class StampConfig:
+class AssembleConfig:
     input_mode: str = "folder"  # "folder" | "sources"
     input_path: str = ""
     out_path: str = "./out"
@@ -593,7 +593,7 @@ class StampConfig:
 
 
 @dataclass
-class StampPanelRow:
+class AssemblePanelRow:
     key: str
     label: str
     value: str = ""
@@ -646,7 +646,7 @@ class AppState:
             "Help",
             "Start",
             "Sources",
-            "Stamp",
+            "Assemble",
             "Verify",
         ]
     )
@@ -654,10 +654,10 @@ class AppState:
     status: str = "Help: start here."
     log_lines: List[str] = field(default_factory=list)
     viewer: Optional[ViewerState] = None
-    stamp_config: StampConfig = field(default_factory=StampConfig)
-    stamp_panel_draft: Optional[StampConfig] = None
-    stamp_panel_selected: int = 0
-    stamp_panel_show_advanced: bool = False
+    assemble_config: AssembleConfig = field(default_factory=AssembleConfig)
+    assemble_panel_draft: Optional[AssembleConfig] = None
+    assemble_panel_selected: int = 0
+    assemble_panel_show_advanced: bool = False
     verify_config: VerifyConfig = field(default_factory=VerifyConfig)
 
 
@@ -1223,11 +1223,11 @@ def _apply_drop_actions_to_state(state: AppState, actions: Sequence[DropPrepared
             _prefer_sources_input_mode(state)
         if set_input_dir:
             _set_current_lane(state, "folder")
-            state.stamp_config.input_mode = "folder"
-            state.stamp_config.input_path = str(state.last_input_dir or "")
-            if state.stamp_panel_draft is not None:
-                state.stamp_panel_draft.input_mode = "folder"
-                state.stamp_panel_draft.input_path = str(state.last_input_dir or "")
+            state.assemble_config.input_mode = "folder"
+            state.assemble_config.input_path = str(state.last_input_dir or "")
+            if state.assemble_panel_draft is not None:
+                state.assemble_panel_draft.input_mode = "folder"
+                state.assemble_panel_draft.input_path = str(state.last_input_dir or "")
         if added_sources and _mix_ready_crossed(state, before=eligible_before):
             state.reward_ticks = max(state.reward_ticks, 18)
             msgs.append(f"Sources ready for seed: {len(_lockdown_eligible_sources(state.authored_sources))}/{state.entropy_min_sources}.")
@@ -1840,8 +1840,8 @@ def _ui_profile_name(state: AppState) -> str:
     return "Noisy" if state.insane else "Calm"
 
 
-def _effective_stamp_input(state: AppState, cfg: Optional[StampConfig] = None) -> str:
-    cfg = cfg or state.stamp_config
+def _effective_assemble_input(state: AppState, cfg: Optional[AssembleConfig] = None) -> str:
+    cfg = cfg or state.assemble_config
     if cfg.input_mode == "sources":
         return "@sources"
     val = str(cfg.input_path or "").strip()
@@ -1854,15 +1854,15 @@ def _effective_stamp_input(state: AppState, cfg: Optional[StampConfig] = None) -
 
 def _prefer_sources_input_mode(state: AppState) -> None:
     _set_current_lane(state, "authored")
-    state.stamp_config.input_mode = "sources"
-    state.stamp_config.input_path = ""
-    if state.stamp_panel_draft is not None:
-        state.stamp_panel_draft.input_mode = "sources"
-        state.stamp_panel_draft.input_path = ""
+    state.assemble_config.input_mode = "sources"
+    state.assemble_config.input_path = ""
+    if state.assemble_panel_draft is not None:
+        state.assemble_panel_draft.input_mode = "sources"
+        state.assemble_panel_draft.input_path = ""
 
 
-def _effective_stamp_output(state: AppState, cfg: Optional[StampConfig] = None) -> str:
-    cfg = cfg or state.stamp_config
+def _effective_assemble_output(state: AppState, cfg: Optional[AssembleConfig] = None) -> str:
+    cfg = cfg or state.assemble_config
     val = str(cfg.out_path or "").strip()
     if val:
         return val
@@ -1886,7 +1886,7 @@ def _header_action_for_label(label: str) -> str:
     actions = {
         "Start": "start",
         "Sources": "sources",
-        "Stamp": "assemble",
+        "Assemble": "assemble",
         "Verify": "verify",
         "Help": "help",
     }
@@ -1905,8 +1905,8 @@ def _header_next_action(label: str, state: "AppState") -> str:
         if state.authored_sources:
             return "Enter uses staged sources"
         return "Enter/P imports or stages sources"
-    if label == "Stamp":
-        if state.stamp_panel_draft is not None:
+    if label == "Assemble":
+        if state.assemble_panel_draft is not None:
             return "Enter edits or runs assemble"
         return "Enter reviews assemble plan"
     if label == "Verify":
@@ -1917,8 +1917,6 @@ def _header_next_action(label: str, state: "AppState") -> str:
 
 
 def _display_menu_label(label: str) -> str:
-    if label == "Stamp":
-        return "Assemble"
     return label
 
 
@@ -1945,35 +1943,35 @@ def _quickstart_lines() -> List[str]:
     ]
 
 
-def _stamp_panel_rows(state: AppState) -> List[StampPanelRow]:
-    cfg = state.stamp_panel_draft or state.stamp_config
+def _assemble_panel_rows(state: AppState) -> List[AssemblePanelRow]:
+    cfg = state.assemble_panel_draft or state.assemble_config
     if cfg.input_mode == "sources":
         input_label = f"Authored Sources ({len(state.authored_sources)})"
     else:
-        input_label = _display_path(_effective_stamp_input(state, cfg) or "not set", max_len=28)
+        input_label = _display_path(_effective_assemble_input(state, cfg) or "not set", max_len=28)
     rows = [
-        StampPanelRow("input", "Input", input_label),
-        StampPanelRow("output", "Output folder", _display_path(_effective_stamp_output(state, cfg), max_len=28)),
-        StampPanelRow("zip_pack", "Zip copy", "on" if cfg.zip_pack else "off", "toggle"),
-        StampPanelRow("derive_seed", "Create reproducible seed material", "on" if cfg.derive_seed else "off", "toggle"),
-        StampPanelRow("evidence_bundle", "Write audit bundle zip", "on" if cfg.evidence_bundle else "off", "toggle"),
-        StampPanelRow("advanced", "More options", "shown" if state.stamp_panel_show_advanced else "hidden", "action"),
+        AssemblePanelRow("input", "Input", input_label),
+        AssemblePanelRow("output", "Output folder", _display_path(_effective_assemble_output(state, cfg), max_len=28)),
+        AssemblePanelRow("zip_pack", "Zip copy", "on" if cfg.zip_pack else "off", "toggle"),
+        AssemblePanelRow("derive_seed", "Create reproducible seed material", "on" if cfg.derive_seed else "off", "toggle"),
+        AssemblePanelRow("evidence_bundle", "Write audit bundle zip", "on" if cfg.evidence_bundle else "off", "toggle"),
+        AssemblePanelRow("advanced", "More options", "shown" if state.assemble_panel_show_advanced else "hidden", "action"),
     ]
-    if state.stamp_panel_show_advanced:
+    if state.assemble_panel_show_advanced:
         rows.extend(
             [
-                StampPanelRow("pack_id", "Label", _shorten_middle(cfg.pack_id or "-", 28)),
-                StampPanelRow("notes", "Note", _shorten_middle(cfg.notes or "-", 28)),
-                StampPanelRow("created_at_utc", "Timestamp", _shorten_middle(cfg.created_at_utc or "auto", 28)),
-                StampPanelRow("include_hidden", "Hidden files", "on" if cfg.include_hidden else "off", "toggle"),
+                AssemblePanelRow("pack_id", "Label", _shorten_middle(cfg.pack_id or "-", 28)),
+                AssemblePanelRow("notes", "Note", _shorten_middle(cfg.notes or "-", 28)),
+                AssemblePanelRow("created_at_utc", "Timestamp", _shorten_middle(cfg.created_at_utc or "auto", 28)),
+                AssemblePanelRow("include_hidden", "Hidden files", "on" if cfg.include_hidden else "off", "toggle"),
             ]
         )
         if cfg.input_mode != "sources":
-            rows.append(StampPanelRow("exclude_picker", "Exclude picker", "on" if cfg.exclude_picker else "off", "toggle"))
+            rows.append(AssemblePanelRow("exclude_picker", "Exclude picker", "on" if cfg.exclude_picker else "off", "toggle"))
         if cfg.derive_seed and state.authored_sources:
             eligible = len(_lockdown_eligible_sources(state.authored_sources))
             rows.append(
-                StampPanelRow(
+                AssemblePanelRow(
                     "mix_sources",
                     "Use collected sources in seed",
                     f"{'on' if cfg.mix_sources else 'off'}  Ready for seed {eligible}/{state.entropy_min_sources}",
@@ -1983,25 +1981,25 @@ def _stamp_panel_rows(state: AppState) -> List[StampPanelRow]:
         if cfg.derive_seed:
             rows.extend(
                 [
-                    StampPanelRow("write_seed", "Write seed files", "on" if cfg.write_seed else "off", "toggle"),
-                    StampPanelRow("show_seed", "Reveal seed in UI", "on" if cfg.show_seed else "off", "toggle"),
-                    StampPanelRow("write_sources", "Include source record in pack", "on" if cfg.write_sources else "off", "toggle"),
+                    AssemblePanelRow("write_seed", "Write seed files", "on" if cfg.write_seed else "off", "toggle"),
+                    AssemblePanelRow("show_seed", "Reveal seed in UI", "on" if cfg.show_seed else "off", "toggle"),
+                    AssemblePanelRow("write_sources", "Include source record in pack", "on" if cfg.write_sources else "off", "toggle"),
                 ]
             )
-    rows.append(StampPanelRow("confirm", "Assemble now", "write pack to output folder", "action"))
+    rows.append(AssemblePanelRow("confirm", "Assemble now", "write pack to output folder", "action"))
     return rows
 
 
-def _stamp_panel_lines(state: AppState, *, width: int, height: int) -> List[str]:
-    rows = _stamp_panel_rows(state)
+def _assemble_panel_lines(state: AppState, *, width: int, height: int) -> List[str]:
+    rows = _assemble_panel_rows(state)
     if not rows:
         return []
-    state.stamp_panel_selected = max(0, min(int(state.stamp_panel_selected), len(rows) - 1))
+    state.assemble_panel_selected = max(0, min(int(state.assemble_panel_selected), len(rows) - 1))
     lines = [
         "ASSEMBLE REVIEW // confirm what will be written",
         "Up/Down move  Enter edit  Space toggle  Esc back",
     ]
-    cfg = state.stamp_panel_draft or state.stamp_config
+    cfg = state.assemble_panel_draft or state.assemble_config
     input_mode = "staged sources" if cfg.input_mode == "sources" else "folder"
     result_bits = ["pack folder"]
     if cfg.zip_pack:
@@ -2015,13 +2013,13 @@ def _stamp_panel_lines(state: AppState, *, width: int, height: int) -> List[str]
             "",
             "READY",
             f"- input: {input_mode}",
-            f"- output: {_display_path(_effective_stamp_output(state, cfg), max_len=max(20, width - 12))}",
+            f"- output: {_display_path(_effective_assemble_output(state, cfg), max_len=max(20, width - 12))}",
             f"- result: {', '.join(result_bits)}",
             "",
         ]
     )
     for idx, row in enumerate(rows):
-        prefix = "> " if idx == state.stamp_panel_selected else "  "
+        prefix = "> " if idx == state.assemble_panel_selected else "  "
         if row.kind == "action":
             line = f"{prefix}{row.label}: {row.value}"
         else:
@@ -2044,13 +2042,13 @@ def _stamp_panel_lines(state: AppState, *, width: int, height: int) -> List[str]
     return [ln[:width] for ln in lines[:height]]
 
 
-def _stamp_preview_lines(state: AppState, *, width: int, height: int) -> List[str]:
-    if state.stamp_panel_draft is not None:
-        return _stamp_panel_lines(state, width=width, height=height)
-    cfg = state.stamp_config
-    input_path = _effective_stamp_input(state, cfg) or "not set"
+def _assemble_preview_lines(state: AppState, *, width: int, height: int) -> List[str]:
+    if state.assemble_panel_draft is not None:
+        return _assemble_panel_lines(state, width=width, height=height)
+    cfg = state.assemble_config
+    input_path = _effective_assemble_input(state, cfg) or "not set"
     input_label = "Authored Sources" if cfg.input_mode == "sources" else _display_path(Path(input_path).expanduser() if input_path not in ("", "@sources") else input_path, max_len=44) if input_path not in ("", "@sources") else input_path
-    output_label = _display_path(Path(_effective_stamp_output(state, cfg)).expanduser(), max_len=44)
+    output_label = _display_path(Path(_effective_assemble_output(state, cfg)).expanduser(), max_len=44)
     lines = [
         "ASSEMBLE // choose input and expected result",
         "",
@@ -2231,8 +2229,8 @@ def _selection_preview(state: AppState, label: str, *, width: int, height: int) 
         preview = _quickstart_lines()
     elif label == "Sources":
         preview = _authored_sources_preview(state, width=width, height=height)
-    elif label == "Stamp":
-        preview = _stamp_preview_lines(state, width=width, height=height)
+    elif label == "Assemble":
+        preview = _assemble_preview_lines(state, width=width, height=height)
     elif label == "Verify":
         preview = _verify_preview_lines(state)
     elif label == "Help":
@@ -2241,26 +2239,26 @@ def _selection_preview(state: AppState, label: str, *, width: int, height: int) 
         preview = []
 
     show_result_log = state.status in ("Done.", "Failed.")
-    if state.log_lines and show_result_log and (label == "Verify" or (label == "Stamp" and state.stamp_panel_draft is None)):
+    if state.log_lines and show_result_log and (label == "Verify" or (label == "Assemble" and state.assemble_panel_draft is None)):
         preview = state.log_lines[-max(1, height) :]
     return [ln[:width] for ln in preview[:height]]
 
 
-def _stamp_failure_alarm_active(state: AppState) -> bool:
+def _assemble_failure_alarm_active(state: AppState) -> bool:
     if not state.insane:
         return False
     label = state.menu[state.selected] if 0 <= state.selected < len(state.menu) else ""
-    if label != "Stamp":
+    if label != "Assemble":
         return False
     if state.status != "Failed.":
         return False
-    if state.stamp_panel_draft is not None:
+    if state.assemble_panel_draft is not None:
         return False
     return bool(state.log_lines and any("assemble failed" in str(line).lower() for line in state.log_lines[:2]))
 
 
 def _current_insane_palette(state: AppState) -> Optional[InsanePalette]:
-    if _stamp_failure_alarm_active(state) and state.failure_palette is not None:
+    if _assemble_failure_alarm_active(state) and state.failure_palette is not None:
         return state.failure_palette
     return state.palette
 
@@ -2741,7 +2739,7 @@ def _start_supernova_sfx_best_effort(*, duration_s: float = 5.0) -> None:
     t.start()
 
 
-def _write_stamp_failure_cascade_wav(
+def _write_assemble_failure_cascade_wav(
     wav_path: Path,
     *,
     duration_s: float = 2.2,
@@ -2794,17 +2792,17 @@ def _write_stamp_failure_cascade_wav(
         wf.writeframes(out)
 
 
-def _start_stamp_failure_sfx_best_effort(*, duration_s: float = 2.2) -> None:
-    if not _audio_player_command(Path("eps_stamp_failure.wav")):
+def _start_assemble_failure_sfx_best_effort(*, duration_s: float = 2.2) -> None:
+    if not _audio_player_command(Path("authored_pack_assemble_failure.wav")):
         return
 
     tmp_dir = Path(tempfile.gettempdir())
-    wav_path = tmp_dir / f"eps_stamp_failure_{os.getpid()}_{int(time.time() * 1000)}.wav"
+    wav_path = tmp_dir / f"authored_pack_assemble_failure_{os.getpid()}_{int(time.time() * 1000)}.wav"
     dur = max(0.5, min(float(duration_s), 6.0))
 
     def _worker() -> None:
         try:
-            _write_stamp_failure_cascade_wav(wav_path, duration_s=dur)
+            _write_assemble_failure_cascade_wav(wav_path, duration_s=dur)
             cmd = _audio_player_command(wav_path)
             if not cmd:
                 return
@@ -2834,11 +2832,11 @@ def _start_stamp_failure_sfx_best_effort(*, duration_s: float = 2.2) -> None:
             except Exception:
                 pass
 
-    t = threading.Thread(target=_worker, name="eps_stamp_failure_sfx", daemon=True)
+    t = threading.Thread(target=_worker, name="authored_pack_assemble_failure_sfx", daemon=True)
     t.start()
 
 
-def _fx_stamp_failure(stdscr, state: AppState, *, duration_s: float = 2.2, fps: int = 25) -> None:
+def _fx_assemble_failure(stdscr, state: AppState, *, duration_s: float = 2.2, fps: int = 25) -> None:
     if not state.insane:
         return
 
@@ -2846,10 +2844,10 @@ def _fx_stamp_failure(stdscr, state: AppState, *, duration_s: float = 2.2, fps: 
     rows, cols = stdscr.getmaxyx()
     frames = max(1, int(round(float(duration_s) * int(fps))))
     band_h = max(1, rows // 9)
-    title = "STAMP FAILED"
+    title = "ASSEMBLE FAILED"
     subtitle = "Review the error, fix the target, and try again."
 
-    _start_stamp_failure_sfx_best_effort(duration_s=float(duration_s))
+    _start_assemble_failure_sfx_best_effort(duration_s=float(duration_s))
     try:
         stdscr.nodelay(True)
         stdscr.timeout(0)
@@ -2925,7 +2923,7 @@ def _fx_no_entropy(stdscr, state: AppState, *, duration_s: float = 5.0, fps: int
         r" \\/           \\/ ",
         r" /\\           /\\ ",
     ]
-    msg1 = "NO STAMPING WITHOUT SOURCES"
+    msg1 = "NO SEED MIX WITHOUT SOURCES"
     msg2 = "Add authored sources first (photos/text/tap or imported paths)."
 
     frames = max(1, int(round(float(duration_s) * int(fps))))
@@ -3079,20 +3077,20 @@ def _fx_kaleidoscope(
 
 def _fx_supernova(stdscr, state: AppState, *, duration_s: float = 3.0, fps: int = 25) -> None:
     """
-    Stamp-complete visual: psychedelic kaleidoscopic supernova.
+    Assemble-complete visual: psychedelic kaleidoscopic supernova.
 
     Intentional baseline violation; only runs in insane mode.
     """
     if not state.insane or state.palette is None:
         return
     _start_supernova_sfx_best_effort(duration_s=float(duration_s))
-    _fx_kaleidoscope(stdscr, state, center_text="STAMPING ENTROPY", duration_s=float(duration_s), fps=int(fps))
+    _fx_kaleidoscope(stdscr, state, center_text="ASSEMBLING PACK", duration_s=float(duration_s), fps=int(fps))
 
 
-def _stamp_with_insane_fx(stdscr, state: AppState, fn, *, min_stamping_s: float = 6.0, created_s: float = 5.0) -> object:
+def _assemble_with_insane_fx(stdscr, state: AppState, fn, *, min_assembling_s: float = 6.0, created_s: float = 5.0) -> object:
     """
-    Run fn() (stamp) while showing a minimum-duration "STAMPING ENTROPY" kaleidoscope,
-    then show a fixed-duration "ENTROPY PACK CREATED" end burst.
+    Run fn() (assemble) while showing a minimum-duration "ASSEMBLING PACK" kaleidoscope,
+    then show a fixed-duration "PACK CREATED" end burst.
     """
     holder: Dict[str, object] = {"res": None, "exc": None}
 
@@ -3103,11 +3101,11 @@ def _stamp_with_insane_fx(stdscr, state: AppState, fn, *, min_stamping_s: float 
             holder["exc"] = exc
 
     t0 = time.monotonic()
-    th = threading.Thread(target=_worker, name="eps_stamp_worker", daemon=True)
+    th = threading.Thread(target=_worker, name="authored_pack_assemble_worker", daemon=True)
     th.start()
 
-    # Phase 1: animate for a fixed minimum time. (Stamp may complete sooner or later.)
-    _start_supernova_sfx_best_effort(duration_s=float(min_stamping_s))
+    # Phase 1: animate for a fixed minimum time. (Assemble may complete sooner or later.)
+    _start_supernova_sfx_best_effort(duration_s=float(min_assembling_s))
     if state.palette is not None:
         rows, cols = stdscr.getmaxyx()
         rng = random.SystemRandom()
@@ -3127,14 +3125,14 @@ def _stamp_with_insane_fx(stdscr, state: AppState, fn, *, min_stamping_s: float 
 
         fps_i = 25
         cycle_s = 1.25
-        phase1_end = t0 + float(min_stamping_s)
+        phase1_end = t0 + float(min_assembling_s)
         frame = 0
         while True:
             now = time.monotonic()
             elapsed = max(0.0, now - t0)
             if now >= phase1_end:
                 break
-            # Looping burst: expand to max repeatedly while stamping runs.
+            # Looping burst: expand to max repeatedly while assemble runs.
             t_cycle = (elapsed % cycle_s) / cycle_s
             e = (t_cycle * t_cycle) * (3.0 - 2.0 * t_cycle)
             r = int(e * max_r)
@@ -3177,7 +3175,7 @@ def _stamp_with_insane_fx(stdscr, state: AppState, fn, *, min_stamping_s: float 
                         safe_addstr(stdscr, y, x, ch[: max(0, cols - x)], attr)
 
             core_attr = colors[(frame * 5) % len(colors)] | curses.A_BOLD
-            safe_addstr(stdscr, cy, max(0, cx - len("STAMPING ENTROPY") // 2), "STAMPING ENTROPY"[:cols], core_attr)
+            safe_addstr(stdscr, cy, max(0, cx - len("ASSEMBLING PACK") // 2), "ASSEMBLING PACK"[:cols], core_attr)
             stdscr.refresh()
 
             if not th.is_alive() and holder.get("exc") is not None:
@@ -3192,14 +3190,14 @@ def _stamp_with_insane_fx(stdscr, state: AppState, fn, *, min_stamping_s: float 
         except curses.error:
             pass
 
-    # If stamping is still running after the fixed burst, show a calmer hold screen until completion.
+    # If assemble is still running after the fixed burst, show a calmer hold screen until completion.
     if th.is_alive():
         hold_frame = 0
         while th.is_alive():
             rows, cols = stdscr.getmaxyx()
             stdscr.erase()
             # Minimal but still loud.
-            msg = "STAMPING... (working)"
+            msg = "ASSEMBLING... (working)"
             dots = "." * ((hold_frame // 5) % 4)
             line = (msg + dots).strip()
             attr = state.palette.warn if state.palette is not None else curses.A_REVERSE
@@ -3211,11 +3209,11 @@ def _stamp_with_insane_fx(stdscr, state: AppState, fn, *, min_stamping_s: float 
 
     th.join()
     if holder.get("exc") is not None:
-        _fx_stamp_failure(stdscr, state, duration_s=2.2, fps=25)
+        _fx_assemble_failure(stdscr, state, duration_s=2.2, fps=25)
         raise holder["exc"]  # type: ignore[misc]
 
     # Phase 2: end burst.
-    _fx_kaleidoscope(stdscr, state, center_text="ENTROPY PACK CREATED", duration_s=float(created_s), fps=25, allow_skip=True)
+    _fx_kaleidoscope(stdscr, state, center_text="PACK CREATED", duration_s=float(created_s), fps=25, allow_skip=True)
 
     return holder["res"]
 
@@ -3382,7 +3380,7 @@ def _draw_insane_right_pane(stdscr, state: AppState, top: int, left_w: int, cols
 
 
 def _draw_footer(stdscr, state: AppState, rows: int, cols: int) -> None:
-    failure_pal = _current_insane_palette(state) if _stamp_failure_alarm_active(state) else None
+    failure_pal = _current_insane_palette(state) if _assemble_failure_alarm_active(state) else None
     if state.viewer is not None:
         legend = "Up/Down/PgUp/PgDn: scroll  Esc/q/b: back"
         msg = state.status.strip() if state.status else ""
@@ -3404,8 +3402,8 @@ def _draw_footer(stdscr, state: AppState, rows: int, cols: int) -> None:
             legend = "Up/Down: menu  Enter: assemble  Tab: list  T/Space/P: add  M: mode  Q: quit"
         else:
             legend = "Up/Down: menu  Enter/P: import  T/Space/P: add  M: mode  Q: quit"
-    elif label == "Stamp":
-        if state.stamp_panel_draft is not None:
+    elif label == "Assemble":
+        if state.assemble_panel_draft is not None:
             legend = "Up/Down: move  Enter: edit/save  Space: toggle  Esc: back"
         else:
             legend = "Enter: review  I/O: choose paths  U/D/Z/E: toggle  X: more  M: mode"
@@ -3916,9 +3914,9 @@ def _action_entropy_clear(state: AppState) -> None:
     state.authored_sources.clear()
     state.entropy_selected = 0
     state.focus = "menu"
-    state.stamp_config.mix_sources = False
-    if state.stamp_panel_draft is not None:
-        state.stamp_panel_draft.mix_sources = False
+    state.assemble_config.mix_sources = False
+    if state.assemble_panel_draft is not None:
+        state.assemble_panel_draft.mix_sources = False
     state.status = "Done."
     state.log_lines = [f"Cleared {n} source(s)."]
 
@@ -4115,20 +4113,20 @@ def _write_authored_sources_into_pack(pack_dir: Path, sources: Sequence[Authored
                 pass
 
 
-def _stamp_panel_index(state: AppState, key: str) -> int:
-    rows = _stamp_panel_rows(state)
+def _assemble_panel_index(state: AppState, key: str) -> int:
+    rows = _assemble_panel_rows(state)
     for idx, row in enumerate(rows):
         if row.key == key:
             return idx
     return 0
 
 
-def _open_stamp_panel(state: AppState, selected_key: Optional[str] = None, *, show_advanced: bool = False) -> None:
-    state.stamp_panel_draft = replace(state.stamp_config)
-    state.stamp_panel_show_advanced = bool(show_advanced)
-    state.stamp_panel_selected = 0
+def _open_assemble_panel(state: AppState, selected_key: Optional[str] = None, *, show_advanced: bool = False) -> None:
+    state.assemble_panel_draft = replace(state.assemble_config)
+    state.assemble_panel_show_advanced = bool(show_advanced)
+    state.assemble_panel_selected = 0
     if selected_key is not None:
-        state.stamp_panel_selected = _stamp_panel_index(state, selected_key)
+        state.assemble_panel_selected = _assemble_panel_index(state, selected_key)
     state.log_lines = []
     if selected_key is None:
         state.status = "Review open."
@@ -4136,19 +4134,19 @@ def _open_stamp_panel(state: AppState, selected_key: Optional[str] = None, *, sh
         state.status = f"Editing {selected_key.replace('_', ' ')}."
 
 
-def _close_stamp_panel(state: AppState) -> None:
-    state.stamp_panel_draft = None
-    state.stamp_panel_selected = 0
-    state.stamp_panel_show_advanced = False
+def _close_assemble_panel(state: AppState) -> None:
+    state.assemble_panel_draft = None
+    state.assemble_panel_selected = 0
+    state.assemble_panel_show_advanced = False
     state.status = "Ready."
 
 
-def _stamp_panel_cfg(state: AppState) -> StampConfig:
-    return state.stamp_panel_draft if state.stamp_panel_draft is not None else state.stamp_config
+def _assemble_panel_cfg(state: AppState) -> AssembleConfig:
+    return state.assemble_panel_draft if state.assemble_panel_draft is not None else state.assemble_config
 
 
-def _edit_stamp_text_row(state: AppState, stdscr, key: str) -> None:
-    cfg = _stamp_panel_cfg(state)
+def _edit_assemble_text_row(state: AppState, stdscr, key: str) -> None:
+    cfg = _assemble_panel_cfg(state)
     prompts = {
         "pack_id": "(Authored Pack) label (optional)",
         "notes": "(Authored Pack) note (optional)",
@@ -4171,8 +4169,8 @@ def _edit_stamp_text_row(state: AppState, stdscr, key: str) -> None:
     state.status = "Assemble field updated."
 
 
-def _toggle_stamp_panel_value(state: AppState, key: str) -> None:
-    cfg = _stamp_panel_cfg(state)
+def _toggle_assemble_panel_value(state: AppState, key: str) -> None:
+    cfg = _assemble_panel_cfg(state)
     if key == "zip_pack":
         cfg.zip_pack = not cfg.zip_pack
         state.status = f"Zip pack: {'on' if cfg.zip_pack else 'off'}."
@@ -4207,34 +4205,34 @@ def _toggle_stamp_panel_value(state: AppState, key: str) -> None:
         state.status = f"Save source record: {'on' if cfg.write_sources else 'off'}."
 
 
-def _activate_stamp_panel_row(state: AppState, stdscr) -> None:
-    if state.stamp_panel_draft is None:
+def _activate_assemble_panel_row(state: AppState, stdscr) -> None:
+    if state.assemble_panel_draft is None:
         return
-    rows = _stamp_panel_rows(state)
+    rows = _assemble_panel_rows(state)
     if not rows:
         return
-    state.stamp_panel_selected = max(0, min(int(state.stamp_panel_selected), len(rows) - 1))
-    row = rows[state.stamp_panel_selected]
-    cfg = state.stamp_panel_draft
+    state.assemble_panel_selected = max(0, min(int(state.assemble_panel_selected), len(rows) - 1))
+    row = rows[state.assemble_panel_selected]
+    cfg = state.assemble_panel_draft
     if row.key == "input":
-        _edit_stamp_input(state, stdscr, cfg)
+        _edit_assemble_input(state, stdscr, cfg)
     elif row.key == "output":
-        _edit_stamp_output(state, stdscr, cfg)
+        _edit_assemble_output(state, stdscr, cfg)
     elif row.key in ("pack_id", "notes", "created_at_utc"):
-        _edit_stamp_text_row(state, stdscr, row.key)
+        _edit_assemble_text_row(state, stdscr, row.key)
     elif row.key == "advanced":
-        state.stamp_panel_show_advanced = not state.stamp_panel_show_advanced
-        state.status = f"Advanced rows: {'shown' if state.stamp_panel_show_advanced else 'hidden'}."
+        state.assemble_panel_show_advanced = not state.assemble_panel_show_advanced
+        state.status = f"Advanced rows: {'shown' if state.assemble_panel_show_advanced else 'hidden'}."
     elif row.key == "confirm":
-        state.stamp_config = replace(cfg)
-        state.stamp_panel_draft = None
-        state.stamp_panel_selected = 0
-        state.stamp_panel_show_advanced = False
-        _run_stamp_from_config(state, stdscr)
+        state.assemble_config = replace(cfg)
+        state.assemble_panel_draft = None
+        state.assemble_panel_selected = 0
+        state.assemble_panel_show_advanced = False
+        _run_assemble_from_config(state, stdscr)
         return
     elif row.kind == "toggle":
-        _toggle_stamp_panel_value(state, row.key)
-    state.stamp_panel_selected = max(0, min(int(state.stamp_panel_selected), len(_stamp_panel_rows(state)) - 1))
+        _toggle_assemble_panel_value(state, row.key)
+    state.assemble_panel_selected = max(0, min(int(state.assemble_panel_selected), len(_assemble_panel_rows(state)) - 1))
 
 
 def _action_sources_import_paths(state: AppState, stdscr) -> None:
@@ -4260,13 +4258,13 @@ def _action_sources_import_paths(state: AppState, stdscr) -> None:
     state.log_lines = list(msgs[:6])
 
 
-def _edit_stamp_input(state: AppState, stdscr, cfg: Optional[StampConfig] = None, *, allow_sources: bool = True) -> bool:
-    cfg = cfg or state.stamp_config
+def _edit_assemble_input(state: AppState, stdscr, cfg: Optional[AssembleConfig] = None, *, allow_sources: bool = True) -> bool:
+    cfg = cfg or state.assemble_config
     if allow_sources:
-        default = "Authored Sources" if cfg.input_mode == "sources" else (_effective_stamp_input(state, cfg) or ".")
+        default = "Authored Sources" if cfg.input_mode == "sources" else (_effective_assemble_input(state, cfg) or ".")
         prompt = "(Authored Pack) choose folder to pack or Authored Sources"
     else:
-        default = _effective_stamp_input(state, cfg) or "."
+        default = _effective_assemble_input(state, cfg) or "."
         prompt = "(Authored Pack) choose folder to pack"
     raw = _prompt_str_curses(stdscr, prompt, default=default)
     if raw is None:
@@ -4286,9 +4284,9 @@ def _edit_stamp_input(state: AppState, stdscr, cfg: Optional[StampConfig] = None
     return True
 
 
-def _edit_stamp_output(state: AppState, stdscr, cfg: Optional[StampConfig] = None) -> bool:
-    cfg = cfg or state.stamp_config
-    raw = _prompt_str_curses(stdscr, "(Authored Pack) choose output folder", default=_effective_stamp_output(state, cfg))
+def _edit_assemble_output(state: AppState, stdscr, cfg: Optional[AssembleConfig] = None) -> bool:
+    cfg = cfg or state.assemble_config
+    raw = _prompt_str_curses(stdscr, "(Authored Pack) choose output folder", default=_effective_assemble_output(state, cfg))
     if raw is None:
         state.status = "Ready."
         return False
@@ -4298,8 +4296,8 @@ def _edit_stamp_output(state: AppState, stdscr, cfg: Optional[StampConfig] = Non
     return True
 
 
-def _edit_stamp_advanced(state: AppState, stdscr, cfg: Optional[StampConfig] = None) -> None:
-    cfg = cfg or state.stamp_config
+def _edit_assemble_advanced(state: AppState, stdscr, cfg: Optional[AssembleConfig] = None) -> None:
+    cfg = cfg or state.assemble_config
     pack_id = _prompt_str_curses(stdscr, "(Authored Pack) label (optional)", default=cfg.pack_id)
     if pack_id is None:
         state.status = "Ready."
@@ -4375,7 +4373,7 @@ def _edit_verify_path(state: AppState, stdscr) -> bool:
     return True
 
 
-def _run_stamp_plan(
+def _run_assemble_plan(
     state: AppState,
     stdscr,
     *,
@@ -4425,13 +4423,13 @@ def _run_stamp_plan(
             input_dir = _build_sources_payload_dir(state.authored_sources)
             tmp_payload_dir = input_dir
             _set_current_lane(state, "authored")
-            state.stamp_config.input_mode = "sources"
-            state.stamp_config.input_path = ""
+            state.assemble_config.input_mode = "sources"
+            state.assemble_config.input_path = ""
         else:
             input_dir = Path(input_choice).expanduser()
             _set_current_lane(state, "folder")
-            state.stamp_config.input_mode = "folder"
-            state.stamp_config.input_path = input_choice
+            state.assemble_config.input_mode = "folder"
+            state.assemble_config.input_path = input_choice
             state.last_input_dir = input_dir.resolve()
             if exclude_picker:
                 picked = _artifact_exclude_picker(stdscr, state, input_dir=input_dir, include_hidden=bool(include_hidden))
@@ -4511,8 +4509,8 @@ def _run_stamp_plan(
             )
             return fields
 
-        def _do_stamp() -> StampResult:
-            return stamp_pack(
+        def _do_assemble() -> AssembleResult:
+            return assemble_pack(
                 input_dir=input_dir,
                 out_dir=out_dir,
                 pack_id=pack_id,
@@ -4530,12 +4528,12 @@ def _run_stamp_plan(
             )
 
         if state.insane:
-            res = _stamp_with_insane_fx(stdscr, state, _do_stamp, min_stamping_s=5.0, created_s=5.0)
+            res = _assemble_with_insane_fx(stdscr, state, _do_assemble, min_assembling_s=5.0, created_s=5.0)
         else:
             state.status = "Assembling..."
             state.log_lines = ["Building pack..."]
             draw(stdscr, state)
-            res = _do_stamp()
+            res = _do_assemble()
     except Exception as exc:
         state.log_lines = [
             "ASSEMBLE RESULT // failed",
@@ -4607,17 +4605,17 @@ def _run_stamp_plan(
     state.status = "Done."
 
 
-def _run_stamp_from_config(state: AppState, stdscr) -> None:
-    cfg = state.stamp_config
+def _run_assemble_from_config(state: AppState, stdscr) -> None:
+    cfg = state.assemble_config
     if cfg.input_mode == "sources":
         input_s = "@sources"
     else:
-        input_s = _effective_stamp_input(state)
+        input_s = _effective_assemble_input(state)
         if not input_s:
             state.status = "Set an input folder or switch to Authored Sources before assembling."
             return
-    out_s = _effective_stamp_output(state)
-    _run_stamp_plan(
+    out_s = _effective_assemble_output(state)
+    _run_assemble_plan(
         state,
         stdscr,
         input_s=input_s,
@@ -4637,7 +4635,7 @@ def _run_stamp_from_config(state: AppState, stdscr) -> None:
     )
 
 
-def _action_stamp(state: AppState, stdscr) -> None:
+def _action_assemble(state: AppState, stdscr) -> None:
     # In-curses prompt sequence (no dropping out of the UI).
     state.status = "Assemble: configure..."
     state.log_lines = []
@@ -4646,9 +4644,9 @@ def _action_stamp(state: AppState, stdscr) -> None:
     stdscr.clrtoeol()
     stdscr.refresh()
 
-    cfg = state.stamp_config
-    default_out = _effective_stamp_output(state)
-    default_in = "Authored Sources" if cfg.input_mode == "sources" else (_effective_stamp_input(state) or ".")
+    cfg = state.assemble_config
+    default_out = _effective_assemble_output(state)
+    default_in = "Authored Sources" if cfg.input_mode == "sources" else (_effective_assemble_input(state) or ".")
     input_s = _prompt_str_curses(stdscr, "(Authored Pack) input folder or Authored Sources", default=default_in)
     if input_s is None:
         state.status = "Ready."
@@ -4755,7 +4753,7 @@ def _action_stamp(state: AppState, stdscr) -> None:
     cfg.write_sources = bool(write_sources) if derive_seed else False
     cfg.evidence_bundle = bool(evidence_bundle)
 
-    _run_stamp_plan(
+    _run_assemble_plan(
         state,
         stdscr,
         input_s=input_s,
@@ -4936,8 +4934,8 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
 
     label = state.menu[state.selected] if 0 <= state.selected < len(state.menu) else ""
     if ch == 27:
-        if label == "Stamp" and state.stamp_panel_draft is not None:
-            _close_stamp_panel(state)
+        if label == "Assemble" and state.assemble_panel_draft is not None:
+            _close_assemble_panel(state)
             state.status = "Assemble review closed."
             return True
         if state.focus != "menu":
@@ -4965,13 +4963,13 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
         if ch in (ord("s"), ord("S")):
             _set_current_lane(state, "authored")
             state.selected = state.menu.index("Sources")
-            _close_stamp_panel(state)
+            _close_assemble_panel(state)
             state.focus = "menu"
             state.status = "Ready."
             return True
         if ch in (ord("v"), ord("V")):
             state.selected = state.menu.index("Verify")
-            _close_stamp_panel(state)
+            _close_assemble_panel(state)
             state.focus = "menu"
             state.status = "Ready."
             return True
@@ -4979,9 +4977,9 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
             if state.insane:
                 _start_ui_select_sfx_best_effort()
             _set_current_lane(state, "folder")
-            state.stamp_config.input_mode = "folder"
-            if _edit_stamp_input(state, stdscr, state.stamp_config, allow_sources=False):
-                state.selected = state.menu.index("Stamp")
+            state.assemble_config.input_mode = "folder"
+            if _edit_assemble_input(state, stdscr, state.assemble_config, allow_sources=False):
+                state.selected = state.menu.index("Assemble")
                 state.focus = "menu"
                 state.status = "Folder chosen. Review and assemble when ready."
             return True
@@ -5018,45 +5016,45 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
             return True
         if ch in (curses.KEY_ENTER, 10, 13) and state.focus == "menu":
             if state.authored_sources:
-                state.selected = state.menu.index("Stamp")
+                state.selected = state.menu.index("Assemble")
                 state.focus = "menu"
                 state.status = "Authored Sources selected. Review and assemble when ready."
             else:
                 _action_sources_import_paths(state, stdscr)
             return True
 
-    if label == "Stamp":
-        cfg = state.stamp_config
-        if state.stamp_panel_draft is not None:
-            rows = _stamp_panel_rows(state)
+    if label == "Assemble":
+        cfg = state.assemble_config
+        if state.assemble_panel_draft is not None:
+            rows = _assemble_panel_rows(state)
             if ch in (curses.KEY_UP, ord("k")):
-                state.stamp_panel_selected = max(0, state.stamp_panel_selected - 1)
+                state.assemble_panel_selected = max(0, state.assemble_panel_selected - 1)
                 state.status = "Assemble review."
                 return True
             if ch in (curses.KEY_DOWN, ord("j")):
-                state.stamp_panel_selected = min(max(0, len(rows) - 1), state.stamp_panel_selected + 1)
+                state.assemble_panel_selected = min(max(0, len(rows) - 1), state.assemble_panel_selected + 1)
                 state.status = "Assemble review."
                 return True
             if ch == ord(" "):
-                row = rows[max(0, min(int(state.stamp_panel_selected), len(rows) - 1))]
+                row = rows[max(0, min(int(state.assemble_panel_selected), len(rows) - 1))]
                 if row.kind == "toggle":
-                    _toggle_stamp_panel_value(state, row.key)
-                    state.stamp_panel_selected = max(0, min(int(state.stamp_panel_selected), len(_stamp_panel_rows(state)) - 1))
+                    _toggle_assemble_panel_value(state, row.key)
+                    state.assemble_panel_selected = max(0, min(int(state.assemble_panel_selected), len(_assemble_panel_rows(state)) - 1))
                     return True
             if ch in (curses.KEY_ENTER, 10, 13):
                 if state.insane:
                     _start_ui_select_sfx_best_effort()
-                _activate_stamp_panel_row(state, stdscr)
+                _activate_assemble_panel_row(state, stdscr)
                 return True
             return True
         if ch in (ord("i"), ord("I")):
-            _open_stamp_panel(state, "input")
+            _open_assemble_panel(state, "input")
             return True
         if ch in (ord("o"), ord("O")):
-            _open_stamp_panel(state, "output")
+            _open_assemble_panel(state, "output")
             return True
         if ch in (ord("x"), ord("X")):
-            _open_stamp_panel(state, "advanced", show_advanced=True)
+            _open_assemble_panel(state, "advanced", show_advanced=True)
             state.status = "More options shown."
             return True
         if ch in (ord("u"), ord("U")):
@@ -5093,7 +5091,7 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
         if ch in (curses.KEY_ENTER, 10, 13):
             if state.insane:
                 _start_ui_select_sfx_best_effort()
-            _open_stamp_panel(state)
+            _open_assemble_panel(state)
             return True
 
     if label == "Verify":
@@ -5126,8 +5124,8 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
         state.selected = max(0, state.selected - 1)
         if state.selected != old and state.insane:
             _start_ui_move_sfx_best_effort()
-        if state.menu[state.selected] != "Stamp":
-            _close_stamp_panel(state)
+        if state.menu[state.selected] != "Assemble":
+            _close_assemble_panel(state)
         state.focus = "menu"
         state.status = "Ready."
         state.log_lines = []
@@ -5137,8 +5135,8 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
         state.selected = min(len(state.menu) - 1, state.selected + 1)
         if state.selected != old and state.insane:
             _start_ui_move_sfx_best_effort()
-        if state.menu[state.selected] != "Stamp":
-            _close_stamp_panel(state)
+        if state.menu[state.selected] != "Assemble":
+            _close_assemble_panel(state)
         state.focus = "menu"
         state.status = "Ready."
         state.log_lines = []

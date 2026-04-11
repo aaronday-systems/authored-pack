@@ -183,8 +183,8 @@ class TestTuiAuditQuickWins(unittest.TestCase):
 
             self.assertEqual(state.status, "Done.")
             self.assertEqual(len(state.authored_sources), 7)
-            self.assertEqual(state.stamp_config.input_mode, "sources")
-            self.assertEqual(state.stamp_config.input_path, "")
+            self.assertEqual(state.assemble_config.input_mode, "sources")
+            self.assertEqual(state.assemble_config.input_path, "")
             self.assertTrue(any("sampled from 10 image(s)" in line for line in state.log_lines))
 
     def test_apply_drop_paths_samples_photo_directory_into_sources_mode(self) -> None:
@@ -202,8 +202,8 @@ class TestTuiAuditQuickWins(unittest.TestCase):
 
             self.assertTrue(any("Photo folder sampled:" in msg for msg in msgs))
             self.assertEqual(len(state.authored_sources), 7)
-            self.assertEqual(state.stamp_config.input_mode, "sources")
-            self.assertEqual(state.stamp_config.input_path, "")
+            self.assertEqual(state.assemble_config.input_mode, "sources")
+            self.assertEqual(state.assemble_config.input_path, "")
             self.assertIsNone(state.last_input_dir)
 
     def test_prepare_drop_actions_in_folder_mode_sets_input_dir_not_sources(self) -> None:
@@ -220,37 +220,37 @@ class TestTuiAuditQuickWins(unittest.TestCase):
 
             self.assertTrue(any("Input dir set:" in msg for msg in msgs))
             self.assertEqual(state.authored_sources, [])
-            self.assertEqual(state.stamp_config.input_mode, "folder")
-            self.assertEqual(state.stamp_config.input_path, str(folder.resolve()))
+            self.assertEqual(state.assemble_config.input_mode, "folder")
+            self.assertEqual(state.assemble_config.input_path, str(folder.resolve()))
             self.assertEqual(state.last_input_dir, folder.resolve())
 
     def test_action_entropy_add_text_prefers_sources_mode(self) -> None:
         m = self.m
         state = self._state()
-        state.stamp_config.input_mode = "folder"
-        state.stamp_config.input_path = "/tmp/input"
+        state.assemble_config.input_mode = "folder"
+        state.assemble_config.input_path = "/tmp/input"
 
         with mock.patch.object(m, "_prompt_str_curses", side_effect=["note", "hello"]):
             m._action_entropy_add_text(state, RecordingStdScr())
 
         self.assertEqual(state.status, "Done.")
         self.assertEqual(len(state.authored_sources), 1)
-        self.assertEqual(state.stamp_config.input_mode, "sources")
-        self.assertEqual(state.stamp_config.input_path, "")
+        self.assertEqual(state.assemble_config.input_mode, "sources")
+        self.assertEqual(state.assemble_config.input_path, "")
 
     def test_action_entropy_tap_prefers_sources_mode(self) -> None:
         m = self.m
         state = self._state()
-        state.stamp_config.input_mode = "folder"
-        state.stamp_config.input_path = "/tmp/input"
+        state.assemble_config.input_mode = "folder"
+        state.assemble_config.input_path = "/tmp/input"
         stdscr = RecordingStdScr(inputs=[ord("x")] * 16 + [27])
 
         m._action_entropy_tap(state, stdscr)
 
         self.assertEqual(state.status, "Done.")
         self.assertEqual(len(state.authored_sources), 1)
-        self.assertEqual(state.stamp_config.input_mode, "sources")
-        self.assertEqual(state.stamp_config.input_path, "")
+        self.assertEqual(state.assemble_config.input_mode, "sources")
+        self.assertEqual(state.assemble_config.input_path, "")
 
     def test_deleting_last_source_returns_focus_to_menu(self) -> None:
         m = self.m
@@ -358,7 +358,7 @@ class TestTuiAuditQuickWins(unittest.TestCase):
         state.insane = True
         state.palette = m.InsanePalette(bg=[11], header=[12], menu_hot=[13], menu_dim=14, divider=15, text=16, ok=17, warn=18, info=19)
         state.failure_palette = m.InsanePalette(bg=[91, 92], header=[93], menu_hot=[94], menu_dim=95, divider=96, text=97, ok=98, warn=99, info=100)
-        state.selected = state.menu.index("Stamp")
+        state.selected = state.menu.index("Assemble")
         state.status = "Failed."
         state.log_lines = ["ASSEMBLE RESULT // failed", "RESULT: assemble failed."]
         stdscr = RecordingStdScr()
@@ -370,33 +370,33 @@ class TestTuiAuditQuickWins(unittest.TestCase):
         self.assertIn(96, attrs)
         self.assertIn(97, attrs)
 
-    def test_start_enter_moves_to_stamp_without_running(self) -> None:
+    def test_start_enter_moves_to_assemble_without_running(self) -> None:
         m = self.m
         state = self._state()
         state.selected = state.menu.index("Start")
 
-        with mock.patch.object(m, "_run_stamp_from_config", side_effect=AssertionError("should not stamp from Start")), mock.patch.object(
-            m, "_edit_stamp_input", return_value=True
+        with mock.patch.object(m, "_run_assemble_from_config", side_effect=AssertionError("should not assemble from Start")), mock.patch.object(
+            m, "_edit_assemble_input", return_value=True
         ) as edit_stamp_input:
             keep_running = m.handle_key(RecordingStdScr(), state, m.curses.KEY_ENTER)
 
         self.assertTrue(keep_running)
         edit_stamp_input.assert_called_once()
-        self.assertEqual(state.menu[state.selected], "Stamp")
-        self.assertIsNone(state.stamp_panel_draft)
+        self.assertEqual(state.menu[state.selected], "Assemble")
+        self.assertIsNone(state.assemble_panel_draft)
         self.assertEqual(state.current_lane, "folder")
-        self.assertEqual(state.stamp_config.input_mode, "folder")
+        self.assertEqual(state.assemble_config.input_mode, "folder")
 
     def test_stamp_requires_explicit_input_choice_before_running(self) -> None:
         m = self.m
         state = self._state()
 
-        m._run_stamp_from_config(state, RecordingStdScr())
+        m._run_assemble_from_config(state, RecordingStdScr())
 
         self.assertIn("Set an input folder", state.status)
         self.assertIsNone(state.last_pack_dir)
 
-    def test_sources_enter_with_collected_sources_moves_to_stamp(self) -> None:
+    def test_sources_enter_with_collected_sources_moves_to_assemble(self) -> None:
         m = self.m
         state = self._state()
         state.selected = state.menu.index("Sources")
@@ -405,7 +405,7 @@ class TestTuiAuditQuickWins(unittest.TestCase):
         keep_running = m.handle_key(RecordingStdScr(), state, m.curses.KEY_ENTER)
 
         self.assertTrue(keep_running)
-        self.assertEqual(state.menu[state.selected], "Stamp")
+        self.assertEqual(state.menu[state.selected], "Assemble")
         self.assertEqual(state.focus, "menu")
         self.assertIn("Authored Sources selected", state.status)
 
@@ -429,11 +429,11 @@ class TestTuiAuditQuickWins(unittest.TestCase):
     def test_stamp_preview_ignores_stale_failure_logs_when_not_in_result_state(self) -> None:
         m = self.m
         state = self._state()
-        state.selected = state.menu.index("Stamp")
+        state.selected = state.menu.index("Assemble")
         state.status = "Review open."
         state.log_lines = ["ASSEMBLE RESULT // failed", "RESULT: assemble failed."]
 
-        preview = "\n".join(m._selection_preview(state, "Stamp", width=120, height=30))
+        preview = "\n".join(m._selection_preview(state, "Assemble", width=120, height=30))
 
         self.assertIn("ASSEMBLE // choose input and expected result", preview)
         self.assertNotIn("RESULT: assemble failed.", preview)
@@ -441,15 +441,15 @@ class TestTuiAuditQuickWins(unittest.TestCase):
     def test_stamp_review_preview_stays_readable_on_narrow_terminal(self) -> None:
         m = self.m
         state = self._state()
-        state.selected = state.menu.index("Stamp")
-        state.stamp_config = m.StampConfig(
+        state.selected = state.menu.index("Assemble")
+        state.assemble_config = m.AssembleConfig(
             input_mode="folder",
             input_path=str(Path.home() / "Desktop" / "Authored Pack" / "very-long-input-folder-name"),
             out_path=str(Path.home() / "Desktop" / "Authored Pack" / "very-long-output-folder-name"),
         )
-        m._open_stamp_panel(state)
+        m._open_assemble_panel(state)
 
-        preview = m._selection_preview(state, "Stamp", width=64, height=20)
+        preview = m._selection_preview(state, "Assemble", width=64, height=20)
         joined = "\n".join(preview)
 
         self.assertTrue(all(len(line) <= 64 for line in preview))
@@ -471,14 +471,14 @@ class TestTuiAuditQuickWins(unittest.TestCase):
         m = self.m
         state = self._state()
         state.authored_sources.append(SimpleNamespace(kind="text", name="n", sha256="a" * 64, size_bytes=1, meta={}, text="x"))
-        state.stamp_config.derive_seed = True
-        state.stamp_config.mix_sources = True
-        state.stamp_panel_draft = m.StampConfig(derive_seed=True, mix_sources=True)
+        state.assemble_config.derive_seed = True
+        state.assemble_config.mix_sources = True
+        state.assemble_panel_draft = m.AssembleConfig(derive_seed=True, mix_sources=True)
 
         m._action_entropy_clear(state)
 
-        self.assertFalse(state.stamp_config.mix_sources)
-        self.assertFalse(state.stamp_panel_draft.mix_sources if state.stamp_panel_draft is not None else True)
+        self.assertFalse(state.assemble_config.mix_sources)
+        self.assertFalse(state.assemble_panel_draft.mix_sources if state.assemble_panel_draft is not None else True)
 
     def test_source_preview_uses_authored_source_title(self) -> None:
         m = self.m
@@ -501,14 +501,14 @@ class TestTuiAuditQuickWins(unittest.TestCase):
             (input_dir / "sample.bin").write_bytes(b"\x00\x01\x02")
 
             state = self._state()
-            state.stamp_config = m.StampConfig(
+            state.assemble_config = m.AssembleConfig(
                 input_mode="folder",
                 input_path=str(input_dir),
                 out_path=str(out_dir),
                 zip_pack=True,
             )
 
-            m._run_stamp_from_config(state, RecordingStdScr())
+            m._run_assemble_from_config(state, RecordingStdScr())
 
             self.assertEqual(state.status, "Done.")
             self.assertIsNotNone(state.last_pack_dir)

@@ -6,37 +6,29 @@ from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from . import __product_name__, __version__
-from .binmode import stamp_from_source_bin
+from .binmode import consume_from_source_bin
 from .manifest import DEFAULT_DERIVATION_VERSION, stable_dumps
-from .pack import StampResult, _output_would_self_ingest_input, inspect_pack, stamp_pack, verify_pack
+from .pack import AssembleResult, _output_would_self_ingest_input, inspect_pack, assemble_pack, verify_pack
 
 CLI_DESCRIPTION = (
-    f"{__product_name__} is a small deterministic assembly/verify tool for humans and agents. "
-    "It assembles a directory into a verifiable pack with a manifest and receipt, and can optionally "
-    "export authored_pack.zip or derive reproducible seed material from the pack root."
+    f"{__product_name__} assembles a folder into a deterministic pack you can verify or inspect later."
 )
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SOURCE_BIN = REPO_ROOT / "bins" / "source_bin"
 DEFAULT_AUTHORED_OUT = REPO_ROOT / "bins" / "authored_out"
 
 CLI_EPILOG = """\
-First clean success:
+Start here:
   python3 -m authored_pack assemble --input /ABS/PATH/TO/DIR --out ./out --zip
-  python3 -m authored_pack verify --pack ./out/<pack_root_sha256>
+  python3 -m authored_pack verify --pack ./out/<pack_root_sha256>/authored_pack.zip
+  python3 -m authored_pack inspect --pack ./out/<pack_root_sha256>/authored_pack.zip --json
 
-Human path:
+Alternative:
   python3 -B bin/authored_pack.py
-  stage sources if you need them, then assemble and verify
 
-Machine path:
-  python3 -m authored_pack assemble --input /ABS/PATH/TO/DIR --out ./out --json
-  consume-bin is subtractive; repo-local defaults only work in a repo clone
-
-Trust boundary:
-  use OS randomness for ordinary secret generation
-  Authored Pack is not an RNG, not automatic secrecy, not signed provenance,
-  and not sealed storage
-  governed attestation belongs to Attestation Engine
+More:
+  python3 -m authored_pack assemble --help
+  python3 -m authored_pack consume-bin --help
 """
 
 
@@ -62,6 +54,13 @@ class CliCommandError(RuntimeError):
 class EPSArgumentParser(argparse.ArgumentParser):
     def error(self, message: str) -> None:
         raise CliUsageError(message)
+
+
+def _hide_subcommand_aliases_in_help(subparsers: argparse._SubParsersAction) -> None:
+    for action in getattr(subparsers, "_choices_actions", []):
+        dest = getattr(action, "dest", None)
+        if isinstance(dest, str) and dest:
+            action.metavar = dest
 
 
 def _value_error(message: str, *, details: Optional[Dict[str, object]] = None) -> CliCommandError:
@@ -170,7 +169,7 @@ def _ensure_repo_clone_consume_bin_defaults(source_bin: Path, out_dir: Path) -> 
     )
 
 
-def _stamp(args: argparse.Namespace) -> int:
+def _assemble(args: argparse.Namespace) -> int:
     dice = None
     if args.dice:
         dice = _parse_dice(args.dice)
@@ -188,7 +187,7 @@ def _stamp(args: argparse.Namespace) -> int:
             },
         )
 
-    res: StampResult = stamp_pack(
+    res: AssembleResult = assemble_pack(
         input_dir=input_dir,
         out_dir=out_dir,
         pack_id=args.pack_id,
@@ -319,12 +318,12 @@ def _inspect(args: argparse.Namespace) -> int:
     return 0
 
 
-def _stamp_bin(args: argparse.Namespace) -> int:
+def _consume_bin(args: argparse.Namespace) -> int:
     source_bin = Path(args.source_bin).expanduser().resolve()
     out_dir = Path(args.out).expanduser().resolve()
     _ensure_repo_clone_consume_bin_defaults(source_bin, out_dir)
     try:
-        res = stamp_from_source_bin(
+        res = consume_from_source_bin(
             source_bin=source_bin,
             out_dir=out_dir,
             count=int(args.count),
@@ -388,17 +387,17 @@ def _stamp_bin(args: argparse.Namespace) -> int:
                 "projected_remaining_after_count": int(projected_after),
                 "would_violate_low_watermark": bool(low_watermark_violation),
             },
-            "pack_dir": str(res.stamp.pack_dir),
-            "pack_root_sha256": res.stamp.pack_root_sha256,
-            "payload_root_sha256": res.stamp.payload_root_sha256,
-            "receipt": res.stamp.receipt,
+            "pack_dir": str(res.assembled.pack_dir),
+            "pack_root_sha256": res.assembled.pack_root_sha256,
+            "payload_root_sha256": res.assembled.payload_root_sha256,
+            "receipt": res.assembled.receipt,
         }
-        if res.stamp.zip_path is not None:
-            payload["zip_path"] = str(res.stamp.zip_path)
-        if res.stamp.evidence_bundle_path is not None:
-            payload["evidence_bundle_path"] = str(res.stamp.evidence_bundle_path)
-        if res.stamp.evidence_bundle_sha256:
-            payload["evidence_bundle_sha256"] = res.stamp.evidence_bundle_sha256
+        if res.assembled.zip_path is not None:
+            payload["zip_path"] = str(res.assembled.zip_path)
+        if res.assembled.evidence_bundle_path is not None:
+            payload["evidence_bundle_path"] = str(res.assembled.evidence_bundle_path)
+        if res.assembled.evidence_bundle_sha256:
+            payload["evidence_bundle_sha256"] = res.assembled.evidence_bundle_sha256
         print(_json_success(str(getattr(args, "cmd", "consume-bin")), payload))
         return 0
 
@@ -413,18 +412,18 @@ def _stamp_bin(args: argparse.Namespace) -> int:
     print(f"bin_files_before: {res.bin_files_before}")
     print(f"bin_files_after: {res.bin_files_after}")
     print(f"consumed_count: {len(res.consumed)}")
-    print(f"pack_dir: {res.stamp.pack_dir}")
-    print(f"pack_root_sha256: {res.stamp.pack_root_sha256}")
-    print(f"payload_root_sha256: {res.stamp.payload_root_sha256}")
-    if res.stamp.zip_path is not None:
-        print(f"zip_path: {res.stamp.zip_path}")
-    fp = res.stamp.receipt.get("derived_seed_fingerprint_sha256")
+    print(f"pack_dir: {res.assembled.pack_dir}")
+    print(f"pack_root_sha256: {res.assembled.pack_root_sha256}")
+    print(f"payload_root_sha256: {res.assembled.payload_root_sha256}")
+    if res.assembled.zip_path is not None:
+        print(f"zip_path: {res.assembled.zip_path}")
+    fp = res.assembled.receipt.get("derived_seed_fingerprint_sha256")
     if isinstance(fp, str) and fp:
         print(f"derived_seed_fingerprint_sha256: {fp}")
-    if res.stamp.evidence_bundle_path is not None:
-        print(f"evidence_bundle_path: {res.stamp.evidence_bundle_path}")
-    if res.stamp.evidence_bundle_sha256:
-        print(f"evidence_bundle_sha256: {res.stamp.evidence_bundle_sha256}")
+    if res.assembled.evidence_bundle_path is not None:
+        print(f"evidence_bundle_path: {res.assembled.evidence_bundle_path}")
+    if res.assembled.evidence_bundle_sha256:
+        print(f"evidence_bundle_sha256: {res.assembled.evidence_bundle_sha256}")
     return 0
 
 
@@ -438,7 +437,7 @@ def build_parser(*, prog: str = "authored-pack") -> argparse.ArgumentParser:
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = p.add_subparsers(dest="cmd", required=True, metavar="{assemble,verify,inspect,consume-bin}")
 
-    assemble = sub.add_parser("assemble", aliases=["stamp"], help="Primary create path: assemble a deterministic verifiable pack")
+    assemble = sub.add_parser("assemble", aliases=["stamp"], help="Start here: assemble a folder into a deterministic pack")
     assemble.add_argument("--input", required=True, help="Directory of artifacts to include")
     assemble.add_argument("--out", required=True, help="Content-addressed output directory for the assembled pack")
     assemble.add_argument("--pack-id", default=None, help="Optional human label stored in manifest metadata (affects root)")
@@ -463,22 +462,22 @@ def build_parser(*, prog: str = "authored-pack") -> argparse.ArgumentParser:
     assemble.add_argument("--evidence-bundle", action="store_true", help="Write authored_evidence_<root>.zip + .sha256 (tamper-evident local audit bundle)")
 
     assemble.add_argument("--json", action="store_true", help="Emit JSON envelope to stdout")
-    assemble.set_defaults(func=_stamp)
+    assemble.set_defaults(func=_assemble)
 
-    verify = sub.add_parser("verify", help="Post-run audit: verify an assembled pack directory or .zip")
+    verify = sub.add_parser("verify", help="Strict check: verify a pack directory or zip")
     verify.add_argument("--pack", required=True, help="Path to pack dir or authored_pack.zip")
     verify.add_argument("--max-manifest-mib", type=int, default=4, help="Maximum manifest.json size to accept (default: 4)")
     verify.add_argument("--json", action="store_true", help="Emit JSON envelope to stdout")
     verify.set_defaults(func=_verify)
 
-    inspect = sub.add_parser("inspect", help="Summarize an assembled pack directory or .zip for machine or human review")
+    inspect = sub.add_parser("inspect", help="Preview: show pack contents and summary")
     inspect.add_argument("--pack", required=True, help="Path to pack dir or authored_pack.zip")
     inspect.add_argument("--max-manifest-mib", type=int, default=4, help="Maximum manifest.json size to accept while inspecting (default: 4)")
     inspect.add_argument("--artifact-preview", type=int, default=20, help="How many artifact entries to include in the summary preview (default: 20)")
     inspect.add_argument("--json", action="store_true", help="Emit JSON envelope to stdout")
     inspect.set_defaults(func=_inspect)
 
-    consume_bin = sub.add_parser("consume-bin", aliases=["stamp-bin"], help="Machine sidecar: subtractively consume source-bin files and assemble a pack")
+    consume_bin = sub.add_parser("consume-bin", aliases=["stamp-bin"], help="Advanced: move files from a source bin into a new pack")
     consume_bin.add_argument(
         "--source-bin",
         default=str(DEFAULT_SOURCE_BIN),
@@ -511,7 +510,9 @@ def build_parser(*, prog: str = "authored-pack") -> argparse.ArgumentParser:
         help="Write authored_evidence_<root>.zip + .sha256 (tamper-evident) (default: on)",
     )
     consume_bin.add_argument("--json", action="store_true", help="Emit JSON envelope to stdout")
-    consume_bin.set_defaults(func=_stamp_bin)
+    consume_bin.set_defaults(func=_consume_bin)
+
+    _hide_subcommand_aliases_in_help(sub)
 
     return p
 

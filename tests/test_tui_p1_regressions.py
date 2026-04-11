@@ -124,7 +124,7 @@ class TestTuiP1Regressions(unittest.TestCase):
                 m._prompt_bool_curses = fake_prompt_bool
                 m.tempfile.mkdtemp = recording_mkdtemp
                 m.shutil.copy2 = failing_copy2
-                m._action_stamp(state, DummyStdScr())
+                m._action_assemble(state, DummyStdScr())
             finally:
                 m._prompt_str_curses = orig_prompt_str
                 m._prompt_bool_curses = orig_prompt_bool
@@ -157,7 +157,7 @@ class TestTuiP1Regressions(unittest.TestCase):
 
             orig_prompt_str = m._prompt_str_curses
             orig_prompt_bool = m._prompt_bool_curses
-            orig_stamp_pack = m.stamp_pack
+            orig_assemble_pack = m.assemble_pack
 
             def fake_prompt_str(*_args, **_kwargs) -> str:
                 return next(prompts_s)
@@ -166,7 +166,7 @@ class TestTuiP1Regressions(unittest.TestCase):
                 bool_prompts.append(label)
                 return next(bool_answers)
 
-            def fake_stamp_pack(**_kwargs):
+            def fake_assemble_pack(**_kwargs):
                 pack_dir = out_dir / ("a" * 64)
                 pack_dir.mkdir(parents=True, exist_ok=True)
                 receipt = {"derived_seed_fingerprint_sha256": "f" * 64}
@@ -185,12 +185,12 @@ class TestTuiP1Regressions(unittest.TestCase):
             try:
                 m._prompt_str_curses = fake_prompt_str
                 m._prompt_bool_curses = fake_prompt_bool
-                m.stamp_pack = fake_stamp_pack
-                m._action_stamp(state, DummyStdScr())
+                m.assemble_pack = fake_assemble_pack
+                m._action_assemble(state, DummyStdScr())
             finally:
                 m._prompt_str_curses = orig_prompt_str
                 m._prompt_bool_curses = orig_prompt_bool
-                m.stamp_pack = orig_stamp_pack
+                m.assemble_pack = orig_assemble_pack
 
             self.assertIsNotNone(state.viewer)
             self.assertEqual(state.viewer.title if state.viewer is not None else None, "Derived Seed Material")
@@ -239,7 +239,7 @@ class TestTuiP1Regressions(unittest.TestCase):
 
             orig_prompt_str = m._prompt_str_curses
             orig_prompt_bool = m._prompt_bool_curses
-            orig_stamp_pack = m.stamp_pack
+            orig_assemble_pack = m.assemble_pack
             receipt_snapshots: list[dict[str, object]] = []
 
             def fake_prompt_str(*_args, **_kwargs) -> str:
@@ -248,7 +248,7 @@ class TestTuiP1Regressions(unittest.TestCase):
             def fake_prompt_bool(*_args, **_kwargs) -> bool:
                 return next(bool_answers)
 
-            def fake_stamp_pack(**_kwargs):
+            def fake_assemble_pack(**_kwargs):
                 pack_dir = tmp_path / "pack"
                 pack_dir.mkdir(parents=True, exist_ok=True)
                 before_finalize = _kwargs.get("before_finalize")
@@ -277,12 +277,12 @@ class TestTuiP1Regressions(unittest.TestCase):
             try:
                 m._prompt_str_curses = fake_prompt_str
                 m._prompt_bool_curses = fake_prompt_bool
-                m.stamp_pack = fake_stamp_pack
-                m._action_stamp(state, DummyStdScr())
+                m.assemble_pack = fake_assemble_pack
+                m._action_assemble(state, DummyStdScr())
             finally:
                 m._prompt_str_curses = orig_prompt_str
                 m._prompt_bool_curses = orig_prompt_bool
-                m.stamp_pack = orig_stamp_pack
+                m.assemble_pack = orig_assemble_pack
 
             receipt_path = tmp_path / "pack" / "receipt.json"
             self.assertTrue(receipt_path.is_file())
@@ -312,11 +312,11 @@ class TestTuiP1Regressions(unittest.TestCase):
             state.authored_sources.append(
                 m.AuthoredSource(kind="text", name="note", sha256=hashlib.sha256(b"hello").hexdigest(), size_bytes=5, text="hello")
             )
-            state.stamp_config.input_mode = "sources"
-            state.stamp_config.out_path = str(out_dir)
-            state.stamp_config.derive_seed = False
+            state.assemble_config.input_mode = "sources"
+            state.assemble_config.out_path = str(out_dir)
+            state.assemble_config.derive_seed = False
 
-            m._run_stamp_from_config(state, DummyStdScr())
+            m._run_assemble_from_config(state, DummyStdScr())
 
             self.assertEqual(state.status, "Done.")
             self.assertIsNotNone(state.last_pack_dir)
@@ -340,12 +340,12 @@ class TestTuiP1Regressions(unittest.TestCase):
                         text=f"note{idx}",
                     )
                 )
-            state.stamp_config.input_mode = "sources"
-            state.stamp_config.out_path = str(out_dir)
-            state.stamp_config.derive_seed = True
-            state.stamp_config.mix_sources = True
+            state.assemble_config.input_mode = "sources"
+            state.assemble_config.out_path = str(out_dir)
+            state.assemble_config.derive_seed = True
+            state.assemble_config.mix_sources = True
 
-            m._run_stamp_from_config(state, DummyStdScr())
+            m._run_assemble_from_config(state, DummyStdScr())
 
             self.assertEqual(state.status, "Failed.")
             self.assertEqual(state.log_lines[0], "Assemble blocked: staged sources are not ready to mix into the seed.")
@@ -453,11 +453,11 @@ class TestTuiP1Regressions(unittest.TestCase):
             (input_dir / "a.txt").write_text("hello", encoding="utf-8")
 
             state = m.AppState(theme=m.Theme(normal=0, reverse=0, header=0))
-            state.stamp_config.input_mode = "folder"
-            state.stamp_config.input_path = str(input_dir).replace(" ", "\\ ")
-            state.stamp_config.out_path = str(out_dir)
+            state.assemble_config.input_mode = "folder"
+            state.assemble_config.input_path = str(input_dir).replace(" ", "\\ ")
+            state.assemble_config.out_path = str(out_dir)
 
-            m._run_stamp_from_config(state, DummyStdScr())
+            m._run_assemble_from_config(state, DummyStdScr())
 
             self.assertEqual(state.status, "Done.")
             self.assertIsNotNone(state.last_pack_dir)
@@ -473,7 +473,7 @@ class TestTuiP1Regressions(unittest.TestCase):
 
         self.assertTrue(keep_running)
         self.assertEqual(state.focus, "menu")
-        self.assertEqual(state.menu[state.selected], "Stamp")
+        self.assertEqual(state.menu[state.selected], "Assemble")
 
     def test_tab_on_empty_authored_sources_keeps_menu_focus(self) -> None:
         m = self.m
@@ -605,13 +605,13 @@ class TestTuiP1Regressions(unittest.TestCase):
             (input_dir / "a.txt").write_text("hello", encoding="utf-8")
 
             state = m.AppState(theme=m.Theme(normal=0, reverse=0, header=0), insane=True)
-            state.stamp_config.input_mode = "folder"
-            state.stamp_config.input_path = str(input_dir)
-            state.stamp_config.out_path = str(out_dir)
-            orig_stamp_pack = m.stamp_pack
-            orig_stamp_with_fx = m._stamp_with_insane_fx
+            state.assemble_config.input_mode = "folder"
+            state.assemble_config.input_path = str(input_dir)
+            state.assemble_config.out_path = str(out_dir)
+            orig_assemble_pack = m.assemble_pack
+            orig_stamp_with_fx = m._assemble_with_insane_fx
 
-            def fake_stamp_pack(**_kwargs):
+            def fake_assemble_pack(**_kwargs):
                 pack_dir = out_dir / ("a" * 64)
                 pack_dir.mkdir(parents=True, exist_ok=True)
                 return SimpleNamespace(
@@ -626,33 +626,33 @@ class TestTuiP1Regressions(unittest.TestCase):
                     evidence_bundle_sha256=None,
                 )
 
-            def fake_stamp_with_fx(_stdscr, _state, do_stamp, **_kwargs):
-                return do_stamp()
+            def fake_assemble_with_fx(_stdscr, _state, do_assemble, **_kwargs):
+                return do_assemble()
 
             try:
-                m.stamp_pack = fake_stamp_pack
-                m._stamp_with_insane_fx = fake_stamp_with_fx
-                m._run_stamp_from_config(state, DummyStdScr())
+                m.assemble_pack = fake_assemble_pack
+                m._assemble_with_insane_fx = fake_assemble_with_fx
+                m._run_assemble_from_config(state, DummyStdScr())
             finally:
-                m.stamp_pack = orig_stamp_pack
-                m._stamp_with_insane_fx = orig_stamp_with_fx
+                m.assemble_pack = orig_assemble_pack
+                m._assemble_with_insane_fx = orig_stamp_with_fx
 
             self.assertEqual(state.status, "Done.")
             self.assertTrue(any(line == "RESULT: pack written successfully." for line in state.log_lines))
 
-    def test_noisy_stamp_failure_triggers_failure_fx(self) -> None:
+    def test_noisy_assemble_failure_triggers_failure_fx(self) -> None:
         m = self.m
         state = m.AppState(theme=m.Theme(normal=0, reverse=0, header=0), insane=True)
         state.palette = m.InsanePalette(bg=[0], header=[0], menu_hot=[0], menu_dim=0, divider=0, text=0, ok=0, warn=0, info=0)
 
-        def fail_stamp():
+        def fail_assemble():
             raise ValueError("boom")
 
         with mock.patch.object(m, "_start_supernova_sfx_best_effort"), mock.patch.object(m, "_fx_kaleidoscope"), mock.patch.object(
-            m, "_fx_stamp_failure"
+            m, "_fx_assemble_failure"
         ) as fx_fail:
             with self.assertRaisesRegex(ValueError, "boom"):
-                m._stamp_with_insane_fx(DummyStdScr(), state, fail_stamp, min_stamping_s=0.0, created_s=0.0)
+                m._assemble_with_insane_fx(DummyStdScr(), state, fail_assemble, min_assembling_s=0.0, created_s=0.0)
 
         fx_fail.assert_called_once()
 

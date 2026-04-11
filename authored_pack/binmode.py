@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Optional, Sequence, Tuple
 
-from .pack import StampResult, stamp_pack
+from .pack import AssembleResult, assemble_pack
 
 
 def _paths_overlap(a: Path, b: Path) -> bool:
@@ -36,12 +36,16 @@ class ConsumedItem:
 
 
 @dataclass(frozen=True)
-class BinStampResult:
-    stamp: StampResult
+class ConsumeBinResult:
+    assembled: AssembleResult
     source_bin: Path
     consumed: Tuple[ConsumedItem, ...]
     bin_files_before: int
     bin_files_after: int
+
+    @property
+    def stamp(self) -> AssembleResult:
+        return self.assembled
 
 
 class BinRecoveryError(RuntimeError):
@@ -84,12 +88,12 @@ def _iter_source_bin_files(
 
 
 def _unique_stage_name(stage_dir: Path, base_name: str) -> Path:
-    base = base_name.strip() or "entropy.bin"
+    base = base_name.strip() or "source.bin"
     base = base.replace("/", "_")
     dst = stage_dir / base
     if not dst.exists():
         return dst
-    stem = dst.stem or "entropy"
+    stem = dst.stem or "source"
     suf = dst.suffix
     for i in range(1, 10_000):
         cand = stage_dir / f"{stem}_{i}{suf}"
@@ -99,7 +103,7 @@ def _unique_stage_name(stage_dir: Path, base_name: str) -> Path:
     return stage_dir / f"{stem}_{secrets.token_hex(4)}{suf}"
 
 
-def stamp_from_source_bin(
+def consume_from_source_bin(
     *,
     source_bin: Path,
     out_dir: Path,
@@ -111,12 +115,12 @@ def stamp_from_source_bin(
     zip_pack: bool = True,
     derive_seed: bool = True,
     evidence_bundle: bool = True,
-) -> BinStampResult:
+) -> ConsumeBinResult:
     """
     One-shot "push button" mode:
     - Randomly select N files from source_bin
     - Move-consume them (subtractive)
-    - Stamp them as the payload of a new Authored Pack under out_dir
+    - Assemble them as the payload of a new Authored Pack under out_dir
 
     Low-watermark policy:
     - By default, refuse to run if remaining files after consumption would drop below min_remaining.
@@ -163,7 +167,7 @@ def stamp_from_source_bin(
     consumed: List[ConsumedItem] = []
     cleanup_stage_dir = True
     try:
-        # Move files into a staging input_dir. stamp_pack will copy them into payload/.
+        # Move files into a staging input_dir. assemble_pack will copy them into payload/.
         # After success we delete stage_dir, leaving only the pack copies (destructive/subtractive).
         for i, src in enumerate(chosen, start=1):
             dst = _unique_stage_name(stage_dir, f"{i:02d}__{src.name}")
@@ -171,8 +175,8 @@ def stamp_from_source_bin(
             shutil.move(str(src), str(dst))
             consumed.append(ConsumedItem(src_path=src, staged_path=dst))
 
-        # stamp_pack already enforces input_dir contains at least 1 artifact.
-        stamp = stamp_pack(
+        # assemble_pack already enforces input_dir contains at least 1 artifact.
+        assembled = assemble_pack(
             input_dir=stage_dir,
             out_dir=out_dir,
             include_hidden=bool(include_hidden),
@@ -218,10 +222,15 @@ def stamp_from_source_bin(
     except Exception:
         after_count = -1
 
-    return BinStampResult(
-        stamp=stamp,
+    return ConsumeBinResult(
+        assembled=assembled,
         source_bin=source_bin,
         consumed=tuple(consumed),
         bin_files_before=before,
         bin_files_after=after_count,
     )
+
+
+# Python compatibility aliases for older imports/tests.
+BinStampResult = ConsumeBinResult
+stamp_from_source_bin = consume_from_source_bin

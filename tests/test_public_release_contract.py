@@ -37,13 +37,17 @@ class TestPublicReleaseContract(unittest.TestCase):
     def test_readme_states_current_public_release_boundary(self) -> None:
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn("Current release: `v0.2.1`", readme)
-        self.assertIn("repo-local execution from a clone", readme)
-        self.assertIn("Installed-CLI packaging flows are intentionally not the primary release contract.", readme)
-        self.assertIn("python3 -m authored_pack --help", readme)
+        self.assertIn("git clone https://github.com/aaronday-systems/authored-pack.git", readme)
+        self.assertIn("bash scripts/demo_v1.sh", readme)
+        self.assertIn("python3 -m authored_pack assemble --input ./my_case --out ./out --zip", readme)
+        self.assertIn("Most first-time users can start with `python3 -m authored_pack`", readme)
         self.assertIn("source-available", readme)
         self.assertIn("not OSI open source", readme)
-        self.assertIn("Sealed mode is not implemented in the current public release", readme)
-        self.assertIn("optionally zipping bounded artifact sets", readme)
+        self.assertIn("deterministic pack you can verify later", readme)
+        self.assertIn("## Good Uses", readme)
+        self.assertIn("`Manual source bundle`", readme)
+        self.assertIn("`Bug repro bundle`", readme)
+        self.assertIn("`Session handoff bundle`", readme)
         self.assertIn("macOS terminals", readme)
         self.assertIn("Linux terminals", readme)
         self.assertIn("best-effort", readme)
@@ -53,7 +57,10 @@ class TestPublicReleaseContract(unittest.TestCase):
         self.assertNotIn("--insane", readme)
         self.assertNotIn("entropy_root_sha256", readme)
         self.assertNotIn("seed_fingerprint_sha256", readme)
+        self.assertNotIn("Use the canonical noun first", readme)
+        self.assertNotIn("entropy-pack-stamper idea", readme)
         self.assertNotIn("public v1 is", readme.lower())
+        self.assertNotIn("It does not create entropy.", readme)
         self.assertNotIn("assembling, verifying, inspecting, and exporting", readme)
         self.assertLess(readme.index("## Quick Start"), readme.index("## Trust Boundary"))
 
@@ -144,7 +151,13 @@ class TestPublicReleaseContract(unittest.TestCase):
         copy_assets = (ROOT / "docs" / "PUBLIC_COPY_ASSETS.md").read_text(encoding="utf-8")
         self.assertIn('python_bin="${PYTHON_BIN:-python3}"', demo_script)
         self.assertIn('"$python_bin" -m authored_pack assemble', demo_script)
+        self.assertIn('"$python_bin" -m authored_pack inspect --pack "$zip_path" --json', demo_script)
+        self.assertIn('INSPECT_JSON="$inspect_json"', demo_script)
+        self.assertIn('"$python_bin" -m authored_pack verify --pack "$zip_path"', demo_script)
+        self.assertIn("Next on your own folder:", demo_script)
         self.assertNotIn('"$python_bin" -m authored_pack stamp --input', demo_script)
+        self.assertNotIn('"$python_bin" -m authored_pack verify --pack "$pack_dir"', demo_script)
+        self.assertNotIn("inspect=%s", demo_script)
         self.assertIn("hello from Authored Pack", demo_script)
         self.assertNotIn("hello from EPS", demo_script)
         self.assertIn('repo_cli assemble --input "$input_dir" --out "$out_dir" --zip --json', install_smoke)
@@ -152,8 +165,14 @@ class TestPublicReleaseContract(unittest.TestCase):
         self.assertIn('assert result["pack_type"] == "zip"', install_smoke)
         self.assertIn('repo_cli_smoke_consumer=', install_smoke)
         self.assertNotIn('pip install "$ROOT"', install_smoke)
+        self.assertIn("Run this from repo root:", demo_doc)
+        self.assertIn("bash scripts/demo_v1.sh", demo_doc)
         self.assertIn("python3 -m authored_pack assemble", demo_doc)
+        self.assertIn("python3 -m authored_pack verify --pack /path/to/authored_pack.zip", demo_doc)
+        self.assertIn("python3 -m authored_pack inspect --pack /path/to/authored_pack.zip --json", demo_doc)
+        self.assertIn("Next on your own folder:", demo_doc)
         self.assertNotIn("python3 -m authored_pack stamp --input", demo_doc)
+        self.assertNotIn('find "$tmp/out" -mindepth 1 -maxdepth 1 -type d | head -n 1', demo_doc)
         self.assertIn("CLI assemble success", copy_assets)
         self.assertIn("Let `assemble` finish", copy_assets)
 
@@ -187,6 +206,8 @@ class TestPublicReleaseContract(unittest.TestCase):
             "docs/authored_pack_plan_2026-03-30.md",
             "docs/repo_architect_handoff_2026-03-30.md",
             "docs/dev_architect_handoff_2026-04-09.md",
+            "docs/claude_first_time_developer_review_2026-04-11.md",
+            "docs/claude_final_first_time_developer_review_2026-04-11.md",
         ):
             text = (ROOT / rel).read_text(encoding="utf-8")
             self.assertIn("Maintainer note:", text, msg=rel)

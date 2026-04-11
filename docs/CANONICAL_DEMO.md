@@ -2,21 +2,19 @@
 
 This is the one short honest demo for Authored Pack `v0.2.1`.
 
-## What the demo shows
-
-- what the user provides: a small folder of files
-- what Authored Pack does: packages them into a deterministic pack with a manifest and receipt
-- what comes out: a pack directory, pack root, payload root, and optional zip
-- how to verify it: run `verify` on the directory pack and the zip
-- why it matters: the pack is legible, auditable, and easy to hand off
-
-## Runnable path
+Run this from repo root:
 
 ```bash
 bash scripts/demo_v1.sh
 ```
 
-## Manual equivalent
+You should see:
+
+- assemble output with `pack_dir` and `zip_path`
+- one `verify` pass that prints `ok`
+- an inspect summary with the pack root, payload root, and a short file preview
+
+## Manual Equivalent
 
 ```bash
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/authored-pack-demo.XXXXXX")"
@@ -26,16 +24,13 @@ printf 'demo context bytes\n' > "$tmp/input/context.txt"
 printf '\x00\x01\x02' > "$tmp/input/sample.bin"
 
 python3 -m authored_pack assemble --input "$tmp/input" --out "$tmp/out" --zip
-pack_dir="$(find "$tmp/out" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
-python3 -m authored_pack verify --pack "$pack_dir"
-python3 -m authored_pack verify --pack "$pack_dir/authored_pack.zip"
+# use the printed zip_path from assemble in the next two commands
+python3 -m authored_pack verify --pack /path/to/authored_pack.zip
+python3 -m authored_pack inspect --pack /path/to/authored_pack.zip --json
 ```
 
-## Demo notes
+Next on your own folder:
 
-- Keep this demo in folder mode. Do not turn it into a secrecy story.
-- Do not use `--derive-seed` in the first public demo.
-- The simplest human explanation is:
-  - you provide a folder
-  - Authored Pack turns it into a verifiable pack
-  - someone else can verify the same pack later
+```bash
+python3 -m authored_pack assemble --input /path/to/your-folder --out ./out --zip
+```

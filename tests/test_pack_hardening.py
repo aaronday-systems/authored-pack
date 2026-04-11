@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from authored_pack import pack as pack_module
-from authored_pack.pack import stamp_pack, verify_pack, write_evidence_bundle, _write_zip
+from authored_pack.pack import assemble_pack, verify_pack, write_evidence_bundle, _write_zip
 
 
 class TestPackHardening(unittest.TestCase):
@@ -43,7 +43,7 @@ class TestPackHardening(unittest.TestCase):
             (input_dir / "a.txt").write_text("hello", encoding="utf-8")
 
             with self.assertRaises(ValueError):
-                stamp_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=False, derive_seed=False)
+                assemble_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=False, derive_seed=False)
 
     def test_stamp_pack_rejects_input_nested_under_out(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -55,7 +55,7 @@ class TestPackHardening(unittest.TestCase):
             (input_dir / "a.txt").write_text("hello", encoding="utf-8")
 
             with self.assertRaises(ValueError):
-                stamp_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=False, derive_seed=False)
+                assemble_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=False, derive_seed=False)
 
     def test_stamp_pack_refuses_to_reuse_corrupted_existing_pack(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -65,11 +65,11 @@ class TestPackHardening(unittest.TestCase):
             input_dir.mkdir()
             (input_dir / "a.txt").write_text("hello", encoding="utf-8")
 
-            first = stamp_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=True, derive_seed=False)
+            first = assemble_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=True, derive_seed=False)
             (first.pack_dir / "payload" / "a.txt").write_text("tampered", encoding="utf-8")
 
             with self.assertRaises(ValueError):
-                stamp_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=True, derive_seed=False)
+                assemble_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=True, derive_seed=False)
 
     def test_stamp_pack_reuse_is_read_only_when_existing_pack_verifies(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -79,7 +79,7 @@ class TestPackHardening(unittest.TestCase):
             input_dir.mkdir()
             (input_dir / "a.txt").write_text("hello", encoding="utf-8")
 
-            first = stamp_pack(
+            first = assemble_pack(
                 input_dir=input_dir,
                 out_dir=out_dir,
                 zip_pack=True,
@@ -99,7 +99,7 @@ class TestPackHardening(unittest.TestCase):
 
             time.sleep(0.01)
 
-            second = stamp_pack(
+            second = assemble_pack(
                 input_dir=input_dir,
                 out_dir=out_dir,
                 zip_pack=False,
@@ -137,7 +137,7 @@ class TestPackHardening(unittest.TestCase):
             input_dir.mkdir()
             (input_dir / "a.txt").write_text("hello", encoding="utf-8")
 
-            res = stamp_pack(
+            res = assemble_pack(
                 input_dir=input_dir,
                 out_dir=out_dir,
                 zip_pack=False,
@@ -165,7 +165,7 @@ class TestPackHardening(unittest.TestCase):
 
             with patch("authored_pack.pack.trusted_copy_with_sha256", side_effect=corrupting_copy):
                 with self.assertRaises(ValueError):
-                    stamp_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=False, derive_seed=False)
+                    assemble_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=False, derive_seed=False)
 
     def test_stamp_pack_rejects_symlink_source_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -182,7 +182,7 @@ class TestPackHardening(unittest.TestCase):
                 self.skipTest("symlinks not supported on this platform")
 
             with self.assertRaises(ValueError):
-                stamp_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=False, derive_seed=False)
+                assemble_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=False, derive_seed=False)
 
     def test_verify_pack_uses_trusted_sha256_for_artifact_hashing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -192,7 +192,7 @@ class TestPackHardening(unittest.TestCase):
             input_dir.mkdir()
             (input_dir / "a.txt").write_text("hello", encoding="utf-8")
 
-            res = stamp_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=False, derive_seed=False)
+            res = assemble_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=False, derive_seed=False)
 
             with patch("authored_pack.pack.trusted_sha256_hex", wraps=pack_module.trusted_sha256_hex) as mocked:
                 verified = verify_pack(res.pack_dir)
@@ -208,7 +208,7 @@ class TestPackHardening(unittest.TestCase):
             input_dir.mkdir()
             (input_dir / "a.txt").write_text("hello", encoding="utf-8")
 
-            res = stamp_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=False, derive_seed=False)
+            res = assemble_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=False, derive_seed=False)
             zip_path = res.pack_dir / "authored_pack.zip"
 
             with patch("authored_pack.pack.trusted_binary_reader", wraps=pack_module.trusted_binary_reader) as mocked:

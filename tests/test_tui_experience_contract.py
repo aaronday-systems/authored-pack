@@ -71,7 +71,7 @@ class TestTuiExperienceContract(unittest.TestCase):
 
     def test_main_nav_collapses_to_workflow_actions(self) -> None:
         state = self._state()
-        self.assertEqual(state.menu[:5], ["Help", "Start", "Sources", "Stamp", "Verify"])
+        self.assertEqual(state.menu[:5], ["Help", "Start", "Sources", "Assemble", "Verify"])
         self.assertEqual(state.menu[state.selected], "Help")
         self.assertNotIn("Experience Mode", state.menu)
         self.assertNotIn("View README", state.menu)
@@ -135,7 +135,7 @@ class TestTuiExperienceContract(unittest.TestCase):
         import_paths.assert_called_once()
 
     def test_stamp_card_summarizes_review_before_advanced_prompts(self) -> None:
-        joined = self._preview("Stamp")
+        joined = self._preview("Assemble")
         self.assertIn("ASSEMBLE // choose input and expected result", joined)
         self.assertIn("- Input: not set", joined)
         self.assertIn("- Output folder: out", joined)
@@ -186,47 +186,47 @@ class TestTuiExperienceContract(unittest.TestCase):
     def test_stamp_enter_opens_inline_review_panel_without_prompt_ladder(self) -> None:
         m = self.m
         state = self._state()
-        state.selected = state.menu.index("Stamp")
+        state.selected = state.menu.index("Assemble")
 
-        with mock.patch.object(m, "_prompt_str_curses", side_effect=AssertionError("stamp Enter should not prompt immediately")), mock.patch.object(
-            m, "_prompt_bool_curses", side_effect=AssertionError("stamp Enter should not prompt immediately")
-        ), mock.patch.object(m, "stamp_pack", side_effect=AssertionError("stamp Enter should not execute immediately")):
+        with mock.patch.object(m, "_prompt_str_curses", side_effect=AssertionError("assemble Enter should not prompt immediately")), mock.patch.object(
+            m, "_prompt_bool_curses", side_effect=AssertionError("assemble Enter should not prompt immediately")
+        ), mock.patch.object(m, "assemble_pack", side_effect=AssertionError("assemble Enter should not execute immediately")):
             keep_running = m.handle_key(DummyStdScr(), state, m.curses.KEY_ENTER)
 
         self.assertTrue(keep_running)
         self.assertIsNone(state.viewer)
-        self.assertIsNotNone(state.stamp_panel_draft)
+        self.assertIsNotNone(state.assemble_panel_draft)
         self.assertIn("review", state.status.lower())
         self.assertEqual(state.log_lines, [])
 
     def test_stamp_panel_shortcuts_stay_in_panel_without_prompt_ladder(self) -> None:
         m = self.m
         state = self._state()
-        state.selected = state.menu.index("Stamp")
+        state.selected = state.menu.index("Assemble")
 
         keep_running = m.handle_key(DummyStdScr(), state, ord("i"))
 
         self.assertTrue(keep_running)
         self.assertIsNone(state.viewer)
-        self.assertIsNotNone(state.stamp_panel_draft)
+        self.assertIsNotNone(state.assemble_panel_draft)
         self.assertIn("input", state.status.lower())
 
     def test_stamp_panel_confirm_runs_stamp_from_config(self) -> None:
         m = self.m
         state = self._state()
-        state.selected = state.menu.index("Stamp")
+        state.selected = state.menu.index("Assemble")
 
         keep_running = m.handle_key(DummyStdScr(), state, m.curses.KEY_ENTER)
         self.assertTrue(keep_running)
-        self.assertIsNotNone(state.stamp_panel_draft)
-        state.stamp_panel_selected = len(m._stamp_panel_rows(state)) - 1
+        self.assertIsNotNone(state.assemble_panel_draft)
+        state.assemble_panel_selected = len(m._assemble_panel_rows(state)) - 1
 
-        with mock.patch.object(m, "_run_stamp_from_config") as run_from_config:
+        with mock.patch.object(m, "_run_assemble_from_config") as run_from_config:
             keep_running = m.handle_key(DummyStdScr(), state, m.curses.KEY_ENTER)
 
         self.assertTrue(keep_running)
         run_from_config.assert_called_once()
-        self.assertIsNone(state.stamp_panel_draft)
+        self.assertIsNone(state.assemble_panel_draft)
 
     def test_audio_player_command_supports_linux_stub_backend_selection(self) -> None:
         m = self.m

@@ -7,12 +7,12 @@ from unittest.mock import patch
 
 import authored_pack.binmode as binmode_mod
 
-from authored_pack.binmode import BinRecoveryError, stamp_from_source_bin
+from authored_pack.binmode import BinRecoveryError, consume_from_source_bin
 from authored_pack.pack import verify_pack
 
 
-class TestStampBin(unittest.TestCase):
-    def test_stamp_from_source_bin_consumes_files(self) -> None:
+class TestConsumeBin(unittest.TestCase):
+    def test_consume_from_source_bin_consumes_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             source_bin = tmp_path / "source_bin"
@@ -23,7 +23,7 @@ class TestStampBin(unittest.TestCase):
             for i in range(60):
                 (source_bin / f"e_{i:03d}.bin").write_bytes(f"entropy-{i}".encode("utf-8"))
 
-            res = stamp_from_source_bin(
+            res = consume_from_source_bin(
                 source_bin=source_bin,
                 out_dir=out_dir,
                 count=7,
@@ -36,13 +36,13 @@ class TestStampBin(unittest.TestCase):
                 evidence_bundle=True,
             )
 
-            self.assertTrue(res.stamp.pack_dir.is_dir())
+            self.assertTrue(res.assembled.pack_dir.is_dir())
             self.assertEqual(len(res.consumed), 7)
 
             # Verify pack is valid.
-            vr = verify_pack(res.stamp.pack_dir)
+            vr = verify_pack(res.assembled.pack_dir)
             self.assertTrue(vr.ok, msg=f"errors: {vr.errors}")
-            self.assertEqual(vr.root_sha256, res.stamp.root_sha256)
+            self.assertEqual(vr.root_sha256, res.assembled.root_sha256)
 
             # Bin should have 53 files remaining (best-effort after_count is used).
             remaining = len([p for p in source_bin.iterdir() if p.is_file()])
@@ -60,7 +60,7 @@ class TestStampBin(unittest.TestCase):
                 (source_bin / f"e_{i:03d}.bin").write_bytes(b"x")
 
             with self.assertRaises(ValueError):
-                stamp_from_source_bin(
+                consume_from_source_bin(
                     source_bin=source_bin,
                     out_dir=out_dir,
                     count=7,
@@ -99,10 +99,10 @@ class TestStampBin(unittest.TestCase):
                     return orig_move(src, dst, *args, **kwargs)
                 return orig_move(src, dst, *args, **kwargs)
 
-            with patch("authored_pack.binmode.stamp_pack", side_effect=RuntimeError("stamp boom")):
+            with patch("authored_pack.binmode.assemble_pack", side_effect=RuntimeError("assemble boom")):
                 with patch("authored_pack.binmode.shutil.move", side_effect=fake_move):
                     with self.assertRaises(BinRecoveryError) as cm:
-                        stamp_from_source_bin(
+                        consume_from_source_bin(
                             source_bin=source_bin,
                             out_dir=out_dir,
                             count=2,
@@ -153,10 +153,10 @@ class TestStampBin(unittest.TestCase):
                     return orig_move(src, dst, *args, **kwargs)
                 return orig_move(src, dst, *args, **kwargs)
 
-            with patch("authored_pack.binmode.stamp_pack", side_effect=RuntimeError("stamp boom")):
+            with patch("authored_pack.binmode.assemble_pack", side_effect=RuntimeError("assemble boom")):
                 with patch("authored_pack.binmode.shutil.move", side_effect=fake_move):
                     with self.assertRaises(BinRecoveryError):
-                        stamp_from_source_bin(
+                        consume_from_source_bin(
                             source_bin=source_bin,
                             out_dir=out_dir,
                             count=3,

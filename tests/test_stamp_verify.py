@@ -10,7 +10,7 @@ import zipfile
 from pathlib import Path
 
 from authored_pack.manifest import manifest_root_sha256, stable_dumps
-from authored_pack.pack import stamp_pack, verify_pack
+from authored_pack.pack import assemble_pack, verify_pack
 
 
 def _write_current_pack_zip(pack_dir: Path, zip_path: Path) -> None:
@@ -24,8 +24,8 @@ def _write_current_pack_zip(pack_dir: Path, zip_path: Path) -> None:
             zf.write(src, arcname=rel)
 
 
-class TestStampVerify(unittest.TestCase):
-    def test_stamp_and_verify_dir_and_zip(self) -> None:
+class TestAssembleVerify(unittest.TestCase):
+    def test_assemble_and_verify_dir_and_zip(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             input_dir = tmp_path / "input"
@@ -35,7 +35,7 @@ class TestStampVerify(unittest.TestCase):
             (input_dir / "sub").mkdir()
             (input_dir / "sub" / "b.bin").write_bytes(b"\x00\x01\x02")
 
-            res = stamp_pack(
+            res = assemble_pack(
                 input_dir=input_dir,
                 out_dir=out_dir,
                 pack_id="test_pack",
@@ -78,8 +78,8 @@ class TestStampVerify(unittest.TestCase):
                 self.assertIn("evidence_manifest.json", names)
                 self.assertIn("evidence_manifest_sha256.txt", names)
 
-            # Idempotent re-stamp: same input should not fail.
-            res2 = stamp_pack(
+            # Idempotent re-assemble: same input should not fail.
+            res2 = assemble_pack(
                 input_dir=input_dir,
                 out_dir=out_dir,
                 pack_id="test_pack",
@@ -107,13 +107,13 @@ class TestStampVerify(unittest.TestCase):
             input_dir.mkdir()
             (input_dir / "a.txt").write_text("hello", encoding="utf-8")
 
-            root_only = stamp_pack(
+            root_only = assemble_pack(
                 input_dir=input_dir,
                 out_dir=out_dir,
                 zip_pack=False,
                 derive_seed=False,
             )
-            derived = stamp_pack(
+            derived = assemble_pack(
                 input_dir=input_dir,
                 out_dir=out_dir,
                 zip_pack=False,
@@ -130,7 +130,7 @@ class TestStampVerify(unittest.TestCase):
             (input_dir / "keep.txt").write_text("keep", encoding="utf-8")
             (input_dir / "drop.txt").write_text("drop", encoding="utf-8")
 
-            res = stamp_pack(
+            res = assemble_pack(
                 input_dir=input_dir,
                 out_dir=out_dir,
                 zip_pack=False,
@@ -152,7 +152,7 @@ class TestStampVerify(unittest.TestCase):
             input_dir.mkdir()
             (input_dir / "a.txt").write_text("hello", encoding="utf-8")
 
-            res1 = stamp_pack(
+            res1 = assemble_pack(
                 input_dir=input_dir,
                 out_dir=out_dir,
                 zip_pack=False,
@@ -164,7 +164,7 @@ class TestStampVerify(unittest.TestCase):
             )
             self.assertIsNotNone(res1.seed_master)
 
-            res2 = stamp_pack(
+            res2 = assemble_pack(
                 input_dir=input_dir,
                 out_dir=out_dir,
                 zip_pack=False,
@@ -279,7 +279,7 @@ class TestStampVerify(unittest.TestCase):
             input_dir.mkdir()
             (input_dir / "a.txt").write_text("hello", encoding="utf-8")
 
-            res = stamp_pack(
+            res = assemble_pack(
                 input_dir=input_dir,
                 out_dir=out_dir,
                 zip_pack=True,
@@ -310,7 +310,7 @@ class TestStampVerify(unittest.TestCase):
             input_dir.mkdir()
             (input_dir / "a.txt").write_text("hello", encoding="utf-8")
 
-            res = stamp_pack(
+            res = assemble_pack(
                 input_dir=input_dir,
                 out_dir=out_dir,
                 zip_pack=True,
@@ -345,7 +345,7 @@ class TestStampVerify(unittest.TestCase):
             input_dir.mkdir()
             (input_dir / "a.txt").write_text("hello", encoding="utf-8")
 
-            res = stamp_pack(
+            res = assemble_pack(
                 input_dir=input_dir,
                 out_dir=out_dir,
                 zip_pack=True,
@@ -379,14 +379,14 @@ class TestStampVerify(unittest.TestCase):
             input_dir.mkdir()
             (input_dir / "a.txt").write_text("hello", encoding="utf-8")
 
-            alpha = stamp_pack(
+            alpha = assemble_pack(
                 input_dir=input_dir,
                 out_dir=out_dir,
                 pack_id="alpha",
                 zip_pack=False,
                 derive_seed=False,
             )
-            beta = stamp_pack(
+            beta = assemble_pack(
                 input_dir=input_dir,
                 out_dir=out_dir,
                 pack_id="beta",
@@ -567,7 +567,7 @@ class TestStampVerify(unittest.TestCase):
             input_dir.mkdir()
             (input_dir / "a.txt").write_text("hello", encoding="utf-8")
 
-            res = stamp_pack(
+            res = assemble_pack(
                 input_dir=input_dir,
                 out_dir=out_dir,
                 zip_pack=False,
@@ -587,7 +587,7 @@ class TestStampVerify(unittest.TestCase):
             input_dir.mkdir()
             (input_dir / "a.txt").write_text("hello", encoding="utf-8")
 
-            res = stamp_pack(
+            res = assemble_pack(
                 input_dir=input_dir,
                 out_dir=out_dir,
                 zip_pack=True,
@@ -639,7 +639,7 @@ class TestStampVerify(unittest.TestCase):
             input_dir.mkdir()
             (input_dir / "a.txt").write_text("hello", encoding="utf-8")
 
-            res = stamp_pack(
+            res = assemble_pack(
                 input_dir=input_dir,
                 out_dir=out_dir,
                 zip_pack=True,
@@ -673,7 +673,7 @@ class TestStampVerify(unittest.TestCase):
             for field, (value, expected_error) in cases.items():
                 with self.subTest(field=field):
                     case_out_dir = tmp_path / f"out_{field}"
-                    res = stamp_pack(
+                    res = assemble_pack(
                         input_dir=input_dir,
                         out_dir=case_out_dir,
                         zip_pack=True,

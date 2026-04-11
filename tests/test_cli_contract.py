@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 from authored_pack import cli
-from authored_pack.pack import stamp_pack
+from authored_pack.pack import assemble_pack
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -92,8 +92,19 @@ class TestCliContract(unittest.TestCase):
         )
 
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
-        self.assertIn("python3 -m authored_pack assemble --input /ABS/PATH/TO/DIR --out ./out --json", proc.stdout)
-        self.assertIn("consume-bin is subtractive", proc.stdout)
+        self.assertIn("Start here:", proc.stdout)
+        self.assertIn("python3 -m authored_pack assemble --input /ABS/PATH/TO/DIR --out ./out --zip", proc.stdout)
+        self.assertIn("python3 -m authored_pack verify --pack ./out/<pack_root_sha256>/authored_pack.zip", proc.stdout)
+        self.assertIn("python3 -m authored_pack inspect --pack ./out/<pack_root_sha256>/authored_pack.zip --json", proc.stdout)
+        self.assertIn("Alternative:", proc.stdout)
+        self.assertIn("python3 -B bin/authored_pack.py", proc.stdout)
+        self.assertIn("More:", proc.stdout)
+        self.assertIn("python3 -m authored_pack assemble --help", proc.stdout)
+        self.assertIn("python3 -m authored_pack consume-bin --help", proc.stdout)
+        self.assertNotIn("assemble (stamp)", proc.stdout)
+        self.assertNotIn("consume-bin (stamp-bin)", proc.stdout)
+        self.assertNotIn("Compatibility aliases:", proc.stdout)
+        self.assertNotIn("consume-bin is subtractive", proc.stdout)
 
     def test_verify_json_emits_failure_envelope(self) -> None:
         rc, stdout, stderr = self._run_cli(["verify", "--pack", "/no/such/path", "--json"])
@@ -118,7 +129,7 @@ class TestCliContract(unittest.TestCase):
             (input_dir / "a.txt").write_text("hello", encoding="utf-8")
             (input_dir / "b.txt").write_text("world", encoding="utf-8")
 
-            stamped = stamp_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=True, derive_seed=True)
+            stamped = assemble_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=True, derive_seed=True)
 
             rc, stdout, stderr = self._run_cli(["inspect", "--pack", str(stamped.pack_dir), "--json"])
 
@@ -146,7 +157,7 @@ class TestCliContract(unittest.TestCase):
             input_dir.mkdir()
             (input_dir / "a.txt").write_text("hello", encoding="utf-8")
 
-            stamped = stamp_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=True, derive_seed=False)
+            stamped = assemble_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=True, derive_seed=False)
 
             rc, stdout, stderr = self._run_cli(["inspect", "--pack", str(stamped.zip_path), "--json"])
 
@@ -182,7 +193,7 @@ class TestCliContract(unittest.TestCase):
             input_dir.mkdir()
             (input_dir / "a.txt").write_text("hello", encoding="utf-8")
 
-            stamped = stamp_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=False, derive_seed=False)
+            stamped = assemble_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=False, derive_seed=False)
             (stamped.pack_dir / "pack_root_sha256.txt").write_text(("0" * 64) + "\n", encoding="utf-8")
             (stamped.pack_dir / "payload" / "extra.txt").write_text("extra", encoding="utf-8")
 
@@ -408,7 +419,8 @@ class TestCliContract(unittest.TestCase):
         self.assertEqual(rc, 2)
         self.assertEqual(stderr, "")
         self.assertIn("usage: authored-pack", stdout)
-        self.assertIn("First clean success", stdout)
+        self.assertIn("Start here:", stdout)
+        self.assertIn("Alternative:", stdout)
 
     def test_consume_bin_defaults_anchor_to_repo_root(self) -> None:
         parser = cli.build_parser()
@@ -498,7 +510,7 @@ class TestCliContract(unittest.TestCase):
         self.assertIn("usage: authored-pack", proc.stdout)
         self.assertIn("Authored Pack", proc.stdout)
         self.assertIn("python3 -B bin/authored_pack.py", proc.stdout)
-        self.assertIn("not automatic secrecy", proc.stdout)
+        self.assertIn("More:", proc.stdout)
         self.assertIn("inspect", proc.stdout)
         stamp_help = cli.build_parser()._subparsers._group_actions[0].choices["stamp"].format_help()
         self.assertIn("Emit JSON envelope to stdout", stamp_help)
@@ -511,7 +523,7 @@ class TestCliContract(unittest.TestCase):
             input_dir.mkdir()
             (input_dir / "a.txt").write_text("hello", encoding="utf-8")
 
-            stamped = stamp_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=False, derive_seed=False)
+            stamped = assemble_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=False, derive_seed=False)
             rc, stdout, stderr = self._run_cli(["verify", "--pack", str(stamped.pack_dir), "--json"])
 
             self.assertEqual(rc, 0)

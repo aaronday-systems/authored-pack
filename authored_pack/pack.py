@@ -741,7 +741,7 @@ def _validate_current_receipt(
 
 
 @dataclass(frozen=True)
-class StampResult:
+class AssembleResult:
     pack_dir: Path
     root_sha256: str
     payload_root_sha256: str
@@ -756,7 +756,7 @@ class StampResult:
         return self.root_sha256
 
 
-def stamp_pack(
+def assemble_pack(
     *,
     input_dir: Path,
     out_dir: Path,
@@ -773,7 +773,7 @@ def stamp_pack(
     write_seed_files: bool = False,
     print_seed: bool = False,
     before_finalize: Optional[Callable[[Path], Optional[Dict[str, object]]]] = None,
-) -> StampResult:
+) -> AssembleResult:
     input_dir = Path(input_dir).resolve()
     out_dir = Path(out_dir).resolve()
     if not input_dir.is_dir():
@@ -854,7 +854,7 @@ def stamp_pack(
                         shutil.rmtree(tmp_dir)
                     except Exception:
                         pass
-                    return StampResult(
+                    return AssembleResult(
                         pack_dir=pack_dir,
                         root_sha256=root_sha,
                         payload_root_sha256=payload_root,
@@ -909,7 +909,7 @@ def stamp_pack(
 
         zip_path = pack_dir / zip_path_tmp.name if zip_path_tmp is not None else None
         ev_path = pack_dir / ev_path_tmp.name if ev_path_tmp is not None else None
-        return StampResult(
+        return AssembleResult(
             pack_dir=pack_dir,
             root_sha256=root_sha,
             payload_root_sha256=payload_root,
@@ -925,6 +925,12 @@ def stamp_pack(
         except Exception:
             pass
         raise
+
+
+# Python compatibility aliases for older imports. Public CLI verbs already lead
+# with assemble/consume-bin; these aliases keep downstream Python callers stable.
+StampResult = AssembleResult
+stamp_pack = assemble_pack
 
 
 def _build_receipt(

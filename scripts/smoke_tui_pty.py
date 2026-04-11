@@ -148,7 +148,7 @@ def main() -> int:
                 },
             ),
             (
-                "calm-stamp-review-open-close-quit",
+                "calm-assemble-review-open-close-quit",
                 {
                     "argv": list(BASE_CMD),
                     "actions": [(0.35, b"jjj\n"), (0.25, b"\x1b"), (0.2, b"q")],

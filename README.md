@@ -1,10 +1,8 @@
 # Authored Pack
 
-Authored Pack is a small deterministic tool for assembling, verifying, inspecting, and optionally zipping bounded artifact sets.
+Authored Pack turns a folder of files into a deterministic pack you can verify later.
 
-Current state: the current public release is the honest pack/verify core.
-
-It assembles a directory into a content-addressed pack with:
+It writes:
 - `manifest.json`
 - `receipt.json`
 - `pack_root_sha256`
@@ -12,47 +10,40 @@ It assembles a directory into a content-addressed pack with:
 - optional `authored_pack.zip`
 - optional evidence bundle
 
-It does not create entropy. It records a deterministic contract over the bytes you provide and can optionally derive reproducible material from that rooted pack state.
-
-It is not a governed attestation system, a universal evidence runtime, or a proof product.
-Governed attestation belongs to `Attestation Engine`.
+It is not attestation, signed provenance, secrecy tech, or an RNG.
 
 ## Quick Start
 
-Use the canonical noun first:
+From a clone of this repo:
 
 ```bash
-python3 -m authored_pack --help
-```
-
-First clean success:
-
-```bash
+git clone https://github.com/aaronday-systems/authored-pack.git
+cd authored-pack
 bash scripts/demo_v1.sh
 ```
 
-Interactive path:
+If you want the raw commands:
 
 ```bash
-python3 -B bin/authored_pack.py
+python3 -m authored_pack assemble --input ./my_case --out ./out --zip
+python3 -m authored_pack verify --pack ./out/<pack_root_sha256>/authored_pack.zip
+python3 -m authored_pack inspect --pack ./out/<pack_root_sha256>/authored_pack.zip --json
 ```
 
-Machine path:
+Use system Python 3.11+ from a clone.
+Most first-time users can start with `python3 -m authored_pack` and ignore the TUI.
+If you want the TUI, run `python3 -B bin/authored_pack.py`.
 
-```bash
-python3 -m authored_pack inspect --pack ./out/<pack_root_sha256> --json
-python3 -m authored_pack verify --pack ./out/<pack_root_sha256> --json
-```
+## Good Uses
 
-Public support target for the current release is repo-local execution from a clone with system Python 3.11+.
-Installed-CLI packaging flows are intentionally not the primary release contract.
+- `Bug repro bundle`
+  Put a failing fixture, a short note, and any logs into one folder, then hand the pack or zip to another developer or agent.
+- `Session handoff bundle`
+  Freeze a debugging, design, or research session by packaging screenshots, notes, exports, and small fixture files into one deterministic pack.
+- `Manual source bundle`
+  Use the TUI to stage short notes, photos, or other simple manual inputs, then assemble one reviewed pack from them.
 
-## What You Provide
-
-- a normal folder of files
-- optionally, authored sources in the TUI if you want a more deliberate manual workflow
-
-## What Authored Pack Produces
+## What You Get
 
 An assembled pack under `--out/<pack_root_sha256>/` containing:
 - `manifest.json`
@@ -62,11 +53,12 @@ An assembled pack under `--out/<pack_root_sha256>/` containing:
 - optional `authored_pack.zip`
 - optional `authored_evidence_<root>.zip` plus `.sha256`
 
-Identity model:
-- `pack_root_sha256` is `sha256(canonical_manifest_json)`
-- `payload_root_sha256` is the payload-artifact identity, separate from pack-level metadata
-- `pack_root_sha256` is stable for the same manifest inputs
-- receipt timestamps do not change the pack root
+`pack_root_sha256` is the identity of the whole pack.
+`payload_root_sha256` is the identity of the payload bytes only.
+
+Concrete example:
+- change `--notes` and the pack root changes
+- keep the payload files the same and the payload root stays the same
 
 ## Verify
 
@@ -78,71 +70,22 @@ python3 -m authored_pack inspect --pack /path/to/pack_dir --json
 
 Verification checks self-consistency of the presented pack against its manifest.
 It does not establish authorship, timestamp truth, secrecy, or signed provenance.
-If you need governed attestation or proof of what happened, use `Attestation Engine`.
 
 ## Trust Boundary
 
-Authored Pack is:
-- deterministic packaging
-- hashing
-- verification
-- optional reproducible derivation from rooted pack state
+Authored Pack gives you deterministic packaging, hashing, and verification.
+It does not give you fresh randomness, secrecy, signed provenance, or sealed storage.
 
-Authored Pack is not:
-- an RNG
-- automatic secrecy
-- signed provenance
-- sealed storage
+Advanced note: `--derive-seed` deterministically derives extra seed bytes from the pack root and receipt inputs.
+Most first runs can ignore it.
+If `receipt.json` is public, treat derived seed material as reproducible, not secret.
 
-Derived seed material is reproducible from the pack root and receipt derivation inputs.
-If `receipt.json` is public, the derived seed material should be treated as reproducible by anyone with that receipt.
-Do not describe it as a secret unless you add a separate secret input outside the public pack contract.
-
-## Install / Run
-
-Run directly from a clone with system Python 3.11+:
-
-- TUI: `python3 -B bin/authored_pack.py`
-- TUI noisy mode: `python3 -B bin/authored_pack.py --noisy`
-- Module entrypoint: `python3 -m authored_pack --help`
-
-Primary public create verb: `assemble`
-- compatibility alias kept for now: `stamp`
-
-Primary subtractive bin verb: `consume-bin`
-- compatibility alias kept for now: `stamp-bin`
+Compatibility aliases `stamp` and `stamp-bin` still work, but `assemble` and `consume-bin` are the public verbs.
 
 Platform support target:
 - macOS terminals
 - Linux terminals
 - TUI audio cues are best-effort and may stay silent if no supported local WAV player is available
-
-## Canonical Commands
-
-Assemble a directory:
-
-```bash
-python3 -m authored_pack assemble \
-  --input /ABS/PATH/TO/ARTIFACTS_DIR \
-  --out ./out \
-  --zip \
-  --evidence-bundle
-```
-
-Verify the resulting pack:
-
-```bash
-python3 -m authored_pack verify --pack ./out/<pack_root_sha256>
-python3 -m authored_pack verify --pack ./out/<pack_root_sha256>/authored_pack.zip
-```
-
-Inspect the resulting pack:
-
-```bash
-python3 -m authored_pack inspect --pack ./out/<pack_root_sha256>
-```
-
-Today, export is the optional `authored_pack.zip` written during `assemble --zip`.
 
 Run tests:
 
@@ -153,7 +96,7 @@ pytest -q
 ## Consume Bin
 
 `consume-bin` is the subtractive machine path for a disposable source bin.
-`stamp-bin` remains as a compatibility alias.
+Use it when an agent or script is draining a staging folder one pack at a time.
 
 ```bash
 python3 -m authored_pack consume-bin \
@@ -190,16 +133,6 @@ For `inspect`, the `result` object includes pack roots, schema summary, verifica
 ## Public Release Boundary
 
 Current release: `v0.2.1`.
-Sealed mode is not implemented in the current public release.
-
-Current public release is the deterministic pack/verify core:
-- `assemble`
-- `verify`
-- `inspect`
-- `consume-bin`
-- calm/noisy TUI flows
-- `pack_root_sha256` and `payload_root_sha256`
-- optional reproducible derived seed material
 
 Authored Pack is source-available under the Aaron Day license.
 It is not OSI open source.
