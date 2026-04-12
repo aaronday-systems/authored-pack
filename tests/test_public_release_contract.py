@@ -44,6 +44,10 @@ class TestPublicReleaseContract(unittest.TestCase):
         self.assertIn("source-available", readme)
         self.assertIn("not OSI open source", readme)
         self.assertIn("deterministic pack you can verify later", readme)
+        self.assertIn("## Why This Exists", readme)
+        self.assertIn("Entropy Pack Stamper", readme)
+        self.assertIn("agent's initial seed state is not meaningfully distinct", readme)
+        self.assertIn("deterministic assembly of a small, deliberate artifact set", readme)
         self.assertIn("## Good Uses", readme)
         self.assertIn("`Manual source bundle`", readme)
         self.assertIn("`Bug repro bundle`", readme)
@@ -62,7 +66,8 @@ class TestPublicReleaseContract(unittest.TestCase):
         self.assertNotIn("public v1 is", readme.lower())
         self.assertNotIn("It does not create entropy.", readme)
         self.assertNotIn("assembling, verifying, inspecting, and exporting", readme)
-        self.assertLess(readme.index("## Quick Start"), readme.index("## Trust Boundary"))
+        self.assertLess(readme.index("## Quick Start"), readme.index("## Why This Exists"))
+        self.assertLess(readme.index("## Why This Exists"), readme.index("## Trust Boundary"))
 
     def test_security_policy_uses_current_product_identity(self) -> None:
         text = (ROOT / "SECURITY.md").read_text(encoding="utf-8")

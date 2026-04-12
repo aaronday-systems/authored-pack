@@ -34,6 +34,12 @@ Use system Python 3.11+ from a clone.
 Most first-time users can start with `python3 -m authored_pack` and ignore the TUI.
 If you want the TUI, run `python3 -B bin/authored_pack.py`.
 
+## Why This Exists
+
+Authored Pack started from a technical question that surfaced with early agent tooling in 2022 and 2023: if an agent's initial seed state is not meaningfully distinct, what risks does that create later, especially in behavior and security? The first approach was to bring in deliberate traces from outside the machine, notes, taps, photos, and other small session artifacts, and assemble them into a bounded input set. That work originally ran under the name `Entropy Pack Stamper`.
+
+The project narrowed because the original name claimed too much. `Entropy` implies properties of randomness, secrecy, and security that this tool does not and should not claim. What survived that correction was the durable core: deterministic assembly of a small, deliberate artifact set into one reviewable pack with a stable root and a clear receipt. That is what Authored Pack is now. It is not an entropy source, not a proof system, and not an attestation engine. It is a deterministic pack-and-verify tool. The earlier history still matters because it explains why this repo includes manual staging, operator review, receipts, and bounded artifact sets rather than presenting itself as a generic archive utility.
+
 ## Good Uses
 
 - `Bug repro bundle`
