@@ -140,8 +140,8 @@ For `inspect`, the `result` object includes pack roots, schema summary, verifica
 
 Current release: `v0.2.1`.
 
-Authored Pack is source-available under the Aaron Day license.
-It is not OSI open source.
+Authored Pack is open source under Apache License 2.0.
+It is OSI open source.
 
 ## Docs
 
@@ -152,4 +152,4 @@ It is not OSI open source.
 
 ## License
 
-See `LICENSE`.
+Licensed under Apache License 2.0. See `LICENSE`.

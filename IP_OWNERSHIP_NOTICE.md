@@ -1,14 +1,14 @@
-# IP Ownership Notice (Interim)
+# IP Ownership Notice
 
-Effective date: 2026-02-17  
-Status: active until replaced by signed written instrument.
+This note clarifies ownership. It does not narrow or override the license grant in [LICENSE](/Users/aaronday/dev/authored-pack/LICENSE).
 
 ## Ownership baseline
 
-1. All code, documentation, schemas, prompts, scripts, build outputs, and other artifacts in this repository belong to Aaron Day unless explicitly reassigned by signed written instrument.
-2. No collaboration, operations support, naming discussion, testing, or deployment support creates implied co-ownership, assignment, or license rights.
-3. No transfer, assignment, or license grant is valid without signed written instrument.
+1. Copyright in this repository remains with Aaron Day except where a later written agreement states otherwise.
+2. Collaboration, review, testing, or operations support does not by itself create co-ownership or assignment.
+3. The repository is licensed to the public under Apache License 2.0 as stated in [LICENSE](/Users/aaronday/dev/authored-pack/LICENSE).
 
 ## Precedence
 
-- If a later signed written agreement conflicts with this notice, the signed agreement controls for its stated scope.
+- For use, modification, and distribution of the repository, [LICENSE](/Users/aaronday/dev/authored-pack/LICENSE) controls.
+- For questions of ownership or assignment outside that license grant, a later signed written agreement controls.

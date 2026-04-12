@@ -15,3 +15,16 @@ authored_pack.egg-info/SOURCES.txt
 authored_pack.egg-info/dependency_links.txt
 authored_pack.egg-info/entry_points.txt
 authored_pack.egg-info/top_level.txt
+tests/test_cli_binmode_guards.py
+tests/test_cli_contract.py
+tests/test_hkdf.py
+tests/test_pack_hardening.py
+tests/test_public_release_contract.py
+tests/test_safeio.py
+tests/test_stamp_bin.py
+tests/test_stamp_verify.py
+tests/test_tui_audit_quick_wins.py
+tests/test_tui_experience_contract.py
+tests/test_tui_header_contract.py
+tests/test_tui_lockdown_guards.py
+tests/test_tui_p1_regressions.py
