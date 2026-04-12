@@ -16,7 +16,7 @@ Security-sensitive areas include:
 The current supported public line is:
 - `v0.2.x`
 
-Older pre-`v0.2.1` states are historical development milestones and should not be treated as supported public contracts.
+Older pre-`v0.2.2` states are historical development milestones and should not be treated as supported public contracts.
 
 ## Reporting A Vulnerability
 

@@ -2,6 +2,16 @@
 
 All notable public-release changes to Authored Pack will be documented here.
 
+## [0.2.2] - 2026-04-12
+
+### Changed
+- adopted Apache License 2.0 and removed the earlier proprietary/source-available wording
+- kept the deterministic pack/verify contract stable while tightening the public release surface around the current open-source repo
+- clarified the first-run README, demo, and product-origin framing for first-time engineers and agents
+
+### Fixed
+- release hygiene now matches the actual current commit: version surfaces, release notes, and package metadata all point at `v0.2.2`
+
 ## [0.2.1] - 2026-04-10
 
 ### Added

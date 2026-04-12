@@ -1,7 +1,7 @@
 # Sealed Pack Architecture
 
 Date: 2026-03-22
-Status: future design only; not implemented in Authored Pack v0.2.1
+Status: future design only; not implemented in Authored Pack v0.2.2
 Scope: define the next object model for secret-preserving Authored Pack packs without changing current runtime behavior
 
 ## 1. Product Boundary

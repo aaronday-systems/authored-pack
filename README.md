@@ -138,7 +138,7 @@ For `inspect`, the `result` object includes pack roots, schema summary, verifica
 
 ## Public Release Boundary
 
-Current release: `v0.2.1`.
+Current release: `v0.2.2`.
 
 Authored Pack is open source under Apache License 2.0.
 It is OSI open source.
@@ -147,7 +147,7 @@ It is OSI open source.
 
 - canonical demo: `docs/CANONICAL_DEMO.md`
 - public copy assets: `docs/PUBLIC_COPY_ASSETS.md`
-- release notes: `docs/RELEASE_NOTES_v0.2.1.md`
+- release notes: `docs/RELEASE_NOTES_v0.2.2.md`
 - contribution and disclosure policy: `CONTRIBUTING.md`, `SECURITY.md`
 
 ## License
