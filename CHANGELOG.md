@@ -2,6 +2,18 @@
 
 All notable public-release changes to Authored Pack will be documented here.
 
+## [0.2.3] - 2026-04-14
+
+### Changed
+- surfaced the full operator verification policy in `verify` and `inspect` with `--max-manifest-mib`, `--max-artifact-mib`, and `--max-total-mib`
+- documented that `assemble` remains unconstrained while `verify` and `inspect` enforce operator limits
+- added the checked-in public voice brief and release-notes template used to keep future public surfaces consistent
+
+### Fixed
+- made reuse-time zip publication failure-atomic so a public receipt does not claim a zip before it exists
+- made evidence-bundle zip publication atomic at the public-file level
+- treat invalid verification-limit flags as usage errors instead of successful inspect output or bad-pack failures
+
 ## [0.2.2] - 2026-04-12
 
 ### Changed

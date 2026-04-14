@@ -4,4 +4,4 @@ __all__ = [
 ]
 
 __product_name__ = "Authored Pack"
-__version__ = "0.2.2"
+__version__ = "0.2.3"
