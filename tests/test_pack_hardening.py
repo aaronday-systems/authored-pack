@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from authored_pack import pack as pack_module
+from authored_pack.manifest import MANIFEST_SCHEMA_VERSION
 from authored_pack.pack import assemble_pack, verify_pack, write_evidence_bundle, _write_zip
 
 
@@ -150,6 +151,39 @@ class TestPackHardening(unittest.TestCase):
             receipt_after = json.loads(receipt_path.read_text(encoding="utf-8"))
             self.assertEqual(receipt_after.get("zip_path"), "authored_pack.zip")
 
+    def test_stamp_pack_reuse_leaves_receipt_unchanged_when_zip_materialization_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            first = assemble_pack(
+                input_dir=input_dir,
+                out_dir=out_dir,
+                zip_pack=False,
+                derive_seed=False,
+                evidence_bundle=False,
+            )
+            receipt_path = first.pack_dir / "receipt.json"
+            receipt_before = receipt_path.read_text(encoding="utf-8")
+            zip_path = first.pack_dir / "authored_pack.zip"
+
+            with patch("authored_pack.pack._write_zip_to_path", side_effect=OSError("boom")):
+                with self.assertRaises(OSError):
+                    assemble_pack(
+                        input_dir=input_dir,
+                        out_dir=out_dir,
+                        zip_pack=True,
+                        derive_seed=False,
+                        evidence_bundle=False,
+                    )
+
+            self.assertEqual(receipt_path.read_text(encoding="utf-8"), receipt_before)
+            self.assertFalse(zip_path.exists())
+            self.assertEqual(list(first.pack_dir.glob(".authored_pack.zip.*")), [])
+
     def test_stamp_pack_reuse_materializes_requested_evidence_bundle_on_existing_pack(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -181,13 +215,48 @@ class TestPackHardening(unittest.TestCase):
             self.assertTrue(expected_path.is_file())
             self.assertTrue(bool(second.evidence_bundle_sha256))
 
+    def test_stamp_pack_reuse_leaves_no_evidence_artifacts_when_materialization_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            first = assemble_pack(
+                input_dir=input_dir,
+                out_dir=out_dir,
+                zip_pack=False,
+                derive_seed=False,
+                evidence_bundle=False,
+            )
+            expected_path = first.pack_dir / f"authored_evidence_{first.root_sha256}.zip"
+            expected_sha_path = first.pack_dir / f"{expected_path.name}.sha256"
+
+            with patch("authored_pack.pack._write_evidence_bundle_to_path", side_effect=OSError("boom")):
+                with self.assertRaises(OSError):
+                    assemble_pack(
+                        input_dir=input_dir,
+                        out_dir=out_dir,
+                        zip_pack=False,
+                        derive_seed=False,
+                        evidence_bundle=True,
+                    )
+
+            self.assertFalse(expected_path.exists())
+            self.assertFalse(expected_sha_path.exists())
+            self.assertEqual(list(first.pack_dir.glob(f".{expected_path.name}.*")), [])
+
     def test_archive_helpers_reject_symlinks(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             pack_dir = tmp_path / "pack"
             payload = pack_dir / "payload"
             payload.mkdir(parents=True)
-            (pack_dir / "manifest.json").write_text('{"schema_version":"entropy.pack.v1","artifacts":[]}', encoding="utf-8")
+            (pack_dir / "manifest.json").write_text(
+                json.dumps({"schema_version": MANIFEST_SCHEMA_VERSION, "artifacts": []}),
+                encoding="utf-8",
+            )
             (payload / "real.txt").write_text("hello", encoding="utf-8")
             (payload / "link.txt").symlink_to(payload / "real.txt")
 

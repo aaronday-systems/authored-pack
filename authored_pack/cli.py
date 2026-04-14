@@ -8,7 +8,16 @@ from typing import Dict, List, Optional, Sequence, Tuple
 from . import __product_name__, __version__
 from .binmode import consume_from_source_bin
 from .manifest import DEFAULT_DERIVATION_VERSION, stable_dumps
-from .pack import AssembleResult, _output_would_self_ingest_input, inspect_pack, assemble_pack, verify_pack
+from .pack import (
+    DEFAULT_MAX_ARTIFACT_BYTES,
+    DEFAULT_MAX_MANIFEST_BYTES,
+    DEFAULT_MAX_TOTAL_BYTES,
+    AssembleResult,
+    _output_would_self_ingest_input,
+    inspect_pack,
+    assemble_pack,
+    verify_pack,
+)
 
 CLI_DESCRIPTION = (
     f"{__product_name__} assembles a folder into a deterministic pack you can verify or inspect later."
@@ -16,6 +25,10 @@ CLI_DESCRIPTION = (
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SOURCE_BIN = REPO_ROOT / "bins" / "source_bin"
 DEFAULT_AUTHORED_OUT = REPO_ROOT / "bins" / "authored_out"
+MIB = 1024 * 1024
+DEFAULT_MAX_MANIFEST_MIB = DEFAULT_MAX_MANIFEST_BYTES // MIB
+DEFAULT_MAX_ARTIFACT_MIB = DEFAULT_MAX_ARTIFACT_BYTES // MIB
+DEFAULT_MAX_TOTAL_MIB = DEFAULT_MAX_TOTAL_BYTES // MIB
 
 CLI_EPILOG = """\
 Start here:
@@ -169,6 +182,34 @@ def _ensure_repo_clone_consume_bin_defaults(source_bin: Path, out_dir: Path) -> 
     )
 
 
+def _verification_limits_mib(args: argparse.Namespace) -> Dict[str, int]:
+    return {
+        "max_manifest_mib": int(args.max_manifest_mib),
+        "max_artifact_mib": int(args.max_artifact_mib),
+        "max_total_mib": int(args.max_total_mib),
+    }
+
+
+def _verification_limits_bytes(args: argparse.Namespace) -> Tuple[int, int, int]:
+    limits = _verification_limits_mib(args)
+    return (
+        limits["max_manifest_mib"] * MIB,
+        limits["max_artifact_mib"] * MIB,
+        limits["max_total_mib"] * MIB,
+    )
+
+
+def _validated_verification_limits(args: argparse.Namespace) -> Tuple[Dict[str, int], Tuple[int, int, int]]:
+    limits = _verification_limits_mib(args)
+    invalid = {name: value for name, value in limits.items() if int(value) <= 0}
+    if invalid:
+        raise _value_error(
+            "verification limits must be positive integers",
+            details={"reason": "invalid verify limits", "limits": limits, "invalid_limits": invalid},
+        )
+    return limits, _verification_limits_bytes(args)
+
+
 def _assemble(args: argparse.Namespace) -> int:
     dice = None
     if args.dice:
@@ -234,9 +275,14 @@ def _assemble(args: argparse.Namespace) -> int:
 
 
 def _verify(args: argparse.Namespace) -> int:
-    max_manifest_bytes = int(args.max_manifest_mib) * 1024 * 1024
+    limits, (max_manifest_bytes, max_artifact_bytes, max_total_bytes) = _validated_verification_limits(args)
     pack_path = _resolve_supported_pack_path(args.pack)
-    res = verify_pack(pack_path, max_manifest_bytes=max_manifest_bytes)
+    res = verify_pack(
+        pack_path,
+        max_manifest_bytes=max_manifest_bytes,
+        max_artifact_bytes=max_artifact_bytes,
+        max_total_bytes=max_total_bytes,
+    )
     if not res.ok:
         msg = res.errors[0] if res.errors else "verification failed"
         raise CliCommandError(
@@ -245,7 +291,7 @@ def _verify(args: argparse.Namespace) -> int:
             details={
                 "pack": str(pack_path),
                 "errors": list(res.errors),
-                "limits": {"max_manifest_mib": int(args.max_manifest_mib)},
+                "limits": limits,
             },
             exit_code=1,
         )
@@ -257,7 +303,7 @@ def _verify(args: argparse.Namespace) -> int:
             "artifact_count_verified": res.file_count,
             "artifact_bytes_verified": res.total_bytes,
             "errors": list(res.errors),
-            "limits": {"max_manifest_mib": int(args.max_manifest_mib)},
+            "limits": limits,
         }
         print(_json_success("verify", payload))
     else:
@@ -271,13 +317,16 @@ def _verify(args: argparse.Namespace) -> int:
 
 
 def _inspect(args: argparse.Namespace) -> int:
-    max_manifest_bytes = int(args.max_manifest_mib) * 1024 * 1024
+    limits, (max_manifest_bytes, max_artifact_bytes, max_total_bytes) = _validated_verification_limits(args)
     pack_path = _resolve_supported_pack_path(args.pack)
     summary = inspect_pack(
         pack_path,
         max_manifest_bytes=max_manifest_bytes,
+        max_artifact_bytes=max_artifact_bytes,
+        max_total_bytes=max_total_bytes,
         artifact_preview_limit=int(args.artifact_preview),
     )
+    summary["limits"] = limits
 
     if args.json:
         print(_json_success("inspect", summary))
@@ -464,15 +513,57 @@ def build_parser(*, prog: str = "authored-pack") -> argparse.ArgumentParser:
     assemble.add_argument("--json", action="store_true", help="Emit JSON envelope to stdout")
     assemble.set_defaults(func=_assemble)
 
-    verify = sub.add_parser("verify", help="Strict check: verify a pack directory or zip")
+    verify = sub.add_parser(
+        "verify",
+        help="Strict check: verify a pack directory or zip",
+        description="Strict check: verify a pack directory or zip. Verification limits are operator policy; assemble remains unconstrained.",
+    )
     verify.add_argument("--pack", required=True, help="Path to pack dir or authored_pack.zip")
-    verify.add_argument("--max-manifest-mib", type=int, default=4, help="Maximum manifest.json size to accept (default: 4)")
+    verify.add_argument(
+        "--max-manifest-mib",
+        type=int,
+        default=DEFAULT_MAX_MANIFEST_MIB,
+        help=f"Maximum manifest.json size to accept while verifying (default: {DEFAULT_MAX_MANIFEST_MIB})",
+    )
+    verify.add_argument(
+        "--max-artifact-mib",
+        type=int,
+        default=DEFAULT_MAX_ARTIFACT_MIB,
+        help=f"Maximum single artifact size to accept while verifying (default: {DEFAULT_MAX_ARTIFACT_MIB})",
+    )
+    verify.add_argument(
+        "--max-total-mib",
+        type=int,
+        default=DEFAULT_MAX_TOTAL_MIB,
+        help=f"Maximum total artifact bytes to accept while verifying (default: {DEFAULT_MAX_TOTAL_MIB})",
+    )
     verify.add_argument("--json", action="store_true", help="Emit JSON envelope to stdout")
     verify.set_defaults(func=_verify)
 
-    inspect = sub.add_parser("inspect", help="Preview: show pack contents and summary")
+    inspect = sub.add_parser(
+        "inspect",
+        help="Preview: show pack contents and summary",
+        description="Preview: inspect a pack with the same operator verification limits used by verify. Assemble remains unconstrained.",
+    )
     inspect.add_argument("--pack", required=True, help="Path to pack dir or authored_pack.zip")
-    inspect.add_argument("--max-manifest-mib", type=int, default=4, help="Maximum manifest.json size to accept while inspecting (default: 4)")
+    inspect.add_argument(
+        "--max-manifest-mib",
+        type=int,
+        default=DEFAULT_MAX_MANIFEST_MIB,
+        help=f"Maximum manifest.json size to accept while inspecting (default: {DEFAULT_MAX_MANIFEST_MIB})",
+    )
+    inspect.add_argument(
+        "--max-artifact-mib",
+        type=int,
+        default=DEFAULT_MAX_ARTIFACT_MIB,
+        help=f"Maximum single artifact size to accept while inspecting (default: {DEFAULT_MAX_ARTIFACT_MIB})",
+    )
+    inspect.add_argument(
+        "--max-total-mib",
+        type=int,
+        default=DEFAULT_MAX_TOTAL_MIB,
+        help=f"Maximum total artifact bytes to accept while inspecting (default: {DEFAULT_MAX_TOTAL_MIB})",
+    )
     inspect.add_argument("--artifact-preview", type=int, default=20, help="How many artifact entries to include in the summary preview (default: 20)")
     inspect.add_argument("--json", action="store_true", help="Emit JSON envelope to stdout")
     inspect.set_defaults(func=_inspect)

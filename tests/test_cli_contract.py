@@ -208,6 +208,10 @@ class TestCliContract(unittest.TestCase):
             self.assertGreaterEqual(len(errors), 2)
             self.assertIn("pack_root_sha256.txt does not match manifest root", errors)
             self.assertTrue(any("unexpected payload files present" in err for err in errors))
+            self.assertEqual(
+                payload["error"]["details"]["limits"],
+                {"max_manifest_mib": 4, "max_artifact_mib": 512, "max_total_mib": 2048},
+            )
 
     def test_stamp_json_usage_error_emits_failure_envelope(self) -> None:
         rc, stdout, stderr = self._run_cli(["stamp", "--json"])
@@ -323,6 +327,50 @@ class TestCliContract(unittest.TestCase):
         self.assertEqual(payload["command"], "verify")
         self.assertEqual(payload["error"]["type"], "CliUsageError")
         self.assertIn("invalid int value", payload["error"]["message"])
+
+    def test_verify_json_rejects_non_positive_limit_as_usage_error(self) -> None:
+        rc, stdout, stderr = self._run_cli(
+            [
+                "verify",
+                "--pack",
+                "/tmp/example.pack",
+                "--max-total-mib",
+                "0",
+                "--json",
+            ]
+        )
+
+        self.assertEqual(rc, 2)
+        self.assertEqual(stderr, "")
+        payload = json.loads(stdout)
+        self.assertEqual(payload["ok"], False)
+        self.assertEqual(payload["command"], "verify")
+        self.assertEqual(payload["error"]["type"], "ValueError")
+        self.assertIn("verification limits must be positive integers", payload["error"]["message"])
+        self.assertEqual(payload["error"]["details"]["reason"], "invalid verify limits")
+        self.assertEqual(payload["error"]["details"]["invalid_limits"], {"max_total_mib": 0})
+
+    def test_inspect_json_rejects_non_positive_limit_as_usage_error(self) -> None:
+        rc, stdout, stderr = self._run_cli(
+            [
+                "inspect",
+                "--pack",
+                "/tmp/example.pack",
+                "--max-artifact-mib",
+                "0",
+                "--json",
+            ]
+        )
+
+        self.assertEqual(rc, 2)
+        self.assertEqual(stderr, "")
+        payload = json.loads(stdout)
+        self.assertEqual(payload["ok"], False)
+        self.assertEqual(payload["command"], "inspect")
+        self.assertEqual(payload["error"]["type"], "ValueError")
+        self.assertIn("verification limits must be positive integers", payload["error"]["message"])
+        self.assertEqual(payload["error"]["details"]["reason"], "invalid verify limits")
+        self.assertEqual(payload["error"]["details"]["invalid_limits"], {"max_artifact_mib": 0})
 
     def test_stamp_bin_json_emits_success_envelope(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -531,6 +579,71 @@ class TestCliContract(unittest.TestCase):
             payload = json.loads(stdout)
             self.assertEqual(payload["ok"], True)
             self.assertNotIn("entropy_root_sha256", payload["result"])
+            self.assertEqual(
+                payload["result"]["limits"],
+                {"max_manifest_mib": 4, "max_artifact_mib": 512, "max_total_mib": 2048},
+            )
+
+    def test_inspect_json_exposes_full_verification_limits(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            stamped = assemble_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=False, derive_seed=False)
+            rc, stdout, stderr = self._run_cli(
+                [
+                    "inspect",
+                    "--pack",
+                    str(stamped.pack_dir),
+                    "--max-manifest-mib",
+                    "5",
+                    "--max-artifact-mib",
+                    "6",
+                    "--max-total-mib",
+                    "7",
+                    "--json",
+                ]
+            )
+
+            self.assertEqual(rc, 0)
+            self.assertEqual(stderr, "")
+            payload = json.loads(stdout)
+            self.assertEqual(payload["ok"], True)
+            self.assertEqual(
+                payload["result"]["limits"],
+                {"max_manifest_mib": 5, "max_artifact_mib": 6, "max_total_mib": 7},
+            )
+
+    def test_verify_help_exposes_full_verification_policy_flags(self) -> None:
+        proc = subprocess.run(
+            [sys.executable, "-m", "authored_pack", "verify", "--help"],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+        self.assertIn("--max-manifest-mib", proc.stdout)
+        self.assertIn("--max-artifact-mib", proc.stdout)
+        self.assertIn("--max-total-mib", proc.stdout)
+
+    def test_inspect_help_exposes_full_verification_policy_flags(self) -> None:
+        proc = subprocess.run(
+            [sys.executable, "-m", "authored_pack", "inspect", "--help"],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+        self.assertIn("--max-manifest-mib", proc.stdout)
+        self.assertIn("--max-artifact-mib", proc.stdout)
+        self.assertIn("--max-total-mib", proc.stdout)
 
     def test_human_stamp_output_includes_zip_and_evidence_paths_when_present(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

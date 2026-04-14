@@ -176,6 +176,7 @@ def _output_would_self_ingest_input(input_dir: Path, out_dir: Path) -> bool:
 def _write_root_alias_files(pack_dir: Path, root_sha: str) -> None:
     _safe_write_text(pack_dir / PACK_ROOT_ALIAS_FILENAME, root_sha + "\n")
 
+
 def _evidence_bundle_path_for_root(pack_dir: Path, root_sha: str) -> Path:
     return pack_dir / f"authored_evidence_{root_sha}.zip"
 
@@ -224,22 +225,35 @@ def _materialize_requested_reuse_artifacts(
     evidence_bundle: bool,
 ) -> Tuple[Optional[Path], Optional[Path], Optional[str], Dict[str, object]]:
     updated_receipt = dict(receipt)
+    receipt_path = pack_dir / "receipt.json"
 
     zip_path = pack_dir / "authored_pack.zip"
-    if zip_path.exists() and zip_path.is_symlink():
-        raise ValueError("existing authored_pack.zip is a symlink")
-    if not zip_path.is_file():
+    if zip_path.is_symlink():
+        if zip_pack:
+            raise ValueError("existing authored_pack.zip is a symlink")
         zip_path = None
+    elif not zip_path.is_file():
+        zip_path = None
+    wrote_new_zip = False
     if zip_pack:
         if zip_path is None:
             zip_path = pack_dir / "authored_pack.zip"
         if updated_receipt.get("zip_path") != "authored_pack.zip":
             updated_receipt["zip_path"] = "authored_pack.zip"
-            _safe_write_json(pack_dir / "receipt.json", updated_receipt)
-        if zip_path.exists() and zip_path.is_symlink():
-            raise ValueError("existing authored_pack.zip is a symlink")
         if not zip_path.is_file():
-            _write_zip(pack_dir, zip_path)
+            _write_zip(pack_dir, zip_path, receipt_override=_canonical_json_text(updated_receipt))
+            wrote_new_zip = True
+
+    if updated_receipt != receipt:
+        try:
+            _safe_write_json(receipt_path, updated_receipt)
+        except Exception:
+            if wrote_new_zip and zip_path is not None:
+                try:
+                    zip_path.unlink()
+                except OSError:
+                    pass
+            raise
 
     root_sha = str(updated_receipt.get("pack_root_sha256", "") or "")
     evidence_path = _existing_evidence_bundle_path(pack_dir, root_sha) if root_sha else None
@@ -249,8 +263,6 @@ def _materialize_requested_reuse_artifacts(
             evidence_path, evidence_sha = write_evidence_bundle(pack_dir)
         else:
             evidence_sha, _ = trusted_sha256_hex(evidence_path)
-    elif evidence_path is not None:
-        evidence_sha, _ = trusted_sha256_hex(evidence_path)
 
     return zip_path, evidence_path, evidence_sha, updated_receipt
 
@@ -300,6 +312,8 @@ def inspect_pack(
     pack_path: Path,
     *,
     max_manifest_bytes: int = DEFAULT_MAX_MANIFEST_BYTES,
+    max_artifact_bytes: int = DEFAULT_MAX_ARTIFACT_BYTES,
+    max_total_bytes: int = DEFAULT_MAX_TOTAL_BYTES,
     artifact_preview_limit: int = 20,
 ) -> Dict[str, object]:
     pack_path = Path(pack_path).resolve()
@@ -332,7 +346,12 @@ def inspect_pack(
         if preview_item:
             artifact_preview.append(preview_item)
 
-    verify_result = verify_pack(pack_path, max_manifest_bytes=int(max_manifest_bytes))
+    verify_result = verify_pack(
+        pack_path,
+        max_manifest_bytes=int(max_manifest_bytes),
+        max_artifact_bytes=int(max_artifact_bytes),
+        max_total_bytes=int(max_total_bytes),
+    )
 
     has_zip = False
     has_evidence_bundle = False
@@ -544,9 +563,12 @@ def _safe_write_private_text(path: Path, content: str) -> None:
     _atomic_write_text(path, content, mode=0o600)
 
 
+def _canonical_json_text(obj: Dict[str, object]) -> str:
+    return json.dumps(obj, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False) + "\n"
+
+
 def _safe_write_json(path: Path, obj: Dict[str, object]) -> None:
-    payload = json.dumps(obj, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False) + "\n"
-    _atomic_write_text(path, payload, mode=_default_public_file_mode(path))
+    _atomic_write_text(path, _canonical_json_text(obj), mode=_default_public_file_mode(path))
 
 
 def _copy_payload_files(
@@ -1015,12 +1037,13 @@ def _print_seed_material(seed_master: bytes) -> None:
     print("derived_seed.b64:", seed_b64)
 
 
-def _write_zip(pack_dir: Path, zip_path: Path) -> None:
+def _write_zip_to_path(pack_dir: Path, zip_path: Path, *, receipt_override: Optional[str] = None) -> None:
     # Public zip is the finalized public projection of the pack: rooted metadata + payload only.
     include_relpaths = {"manifest.json", PACK_ROOT_ALIAS_FILENAME, "receipt.json"}
     exclude = {
         "seed_master.hex",
         "seed_master.b64",
+        "authored_pack.zip",
         zip_path.name,
     }
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -1034,38 +1057,34 @@ def _write_zip(pack_dir: Path, zip_path: Path) -> None:
                 zi = zipfile.ZipInfo(filename=rel)
                 zi.compress_type = zipfile.ZIP_DEFLATED
                 zi.external_attr = (0o644 & 0xFFFF) << 16
-                with trusted_binary_reader(path) as reader, zf.open(zi, "w") as writer:
-                    while True:
-                        chunk = reader.read(1024 * 1024)
-                        if not chunk:
-                            break
-                        writer.write(chunk)
+                with zf.open(zi, "w") as writer:
+                    if rel == "receipt.json" and receipt_override is not None:
+                        writer.write(receipt_override.encode("utf-8"))
+                        continue
+                    with trusted_binary_reader(path) as reader:
+                        while True:
+                            chunk = reader.read(1024 * 1024)
+                            if not chunk:
+                                break
+                            writer.write(chunk)
 
 
-def write_evidence_bundle(pack_dir: Path) -> Tuple[Path, Optional[str]]:
-    """
-    Write a tamper-*evident* evidence bundle zip into the pack directory.
-
-    Notes:
-    - This is not cryptographically "untamperable" without an external signature.
-    - The bundle is still useful as an audit artifact: it contains exact bytes + a hash manifest.
-    """
-    # Name includes the pack root for human ergonomics.
-    root = ""
-    for name in (PACK_ROOT_ALIAS_FILENAME, LEGACY_ROOT_ALIAS_FILENAME):
+def _write_zip(pack_dir: Path, zip_path: Path, *, receipt_override: Optional[str] = None) -> None:
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{zip_path.name}.", dir=str(zip_path.parent))
+    os.close(fd)
+    tmp_path = Path(tmp_name)
+    try:
+        _write_zip_to_path(pack_dir, tmp_path, receipt_override=receipt_override)
+        os.replace(tmp_path, zip_path)
+    finally:
         try:
-            root = _read_file_bytes_limited(pack_dir / name, max_bytes=256).decode("utf-8").strip()
-        except Exception:
-            root = ""
-        if root:
-            break
-    if not (isinstance(root, str) and len(root) == 64 and all(c in "0123456789abcdef" for c in root.lower())):
-        # Fall back to pack dir name.
-        root = pack_dir.name
+            tmp_path.unlink()
+        except OSError:
+            pass
 
-    zip_name = f"authored_evidence_{root}.zip"
-    zip_path = pack_dir / zip_name
 
+def _write_evidence_bundle_to_path(pack_dir: Path, zip_path: Path, *, root: str) -> None:
+    zip_name = zip_path.name
     exclude_names = {
         "seed_master.hex",
         "seed_master.b64",
@@ -1073,10 +1092,8 @@ def write_evidence_bundle(pack_dir: Path) -> Tuple[Path, Optional[str]]:
         zip_name,
     }
 
-    # Collect files to include (deterministic order).
     include = _iter_pack_archive_files(pack_dir, exclude_names=exclude_names, skip_nested_zips=True)
 
-    # Stream files into zip with fixed timestamps to keep bundles stable across runs.
     fixed_dt = (1980, 1, 1, 0, 0, 0)
     entries: List[Dict[str, object]] = []
 
@@ -1120,6 +1137,42 @@ def write_evidence_bundle(pack_dir: Path) -> Tuple[Path, Optional[str]]:
         hzi.compress_type = zipfile.ZIP_DEFLATED
         hzi.external_attr = (0o644 & 0xFFFF) << 16
         zf.writestr(hzi, (mh + "\n").encode("utf-8"))
+
+
+def write_evidence_bundle(pack_dir: Path) -> Tuple[Path, Optional[str]]:
+    """
+    Write a tamper-*evident* evidence bundle zip into the pack directory.
+
+    Notes:
+    - This is not cryptographically "untamperable" without an external signature.
+    - The bundle is still useful as an audit artifact: it contains exact bytes + a hash manifest.
+    """
+    # Name includes the pack root for human ergonomics.
+    root = ""
+    for name in (PACK_ROOT_ALIAS_FILENAME, LEGACY_ROOT_ALIAS_FILENAME):
+        try:
+            root = _read_file_bytes_limited(pack_dir / name, max_bytes=256).decode("utf-8").strip()
+        except Exception:
+            root = ""
+        if root:
+            break
+    if not (isinstance(root, str) and len(root) == 64 and all(c in "0123456789abcdef" for c in root.lower())):
+        # Fall back to pack dir name.
+        root = pack_dir.name
+
+    zip_name = f"authored_evidence_{root}.zip"
+    zip_path = pack_dir / zip_name
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{zip_name}.", dir=str(pack_dir))
+    os.close(fd)
+    tmp_path = Path(tmp_name)
+    try:
+        _write_evidence_bundle_to_path(pack_dir, tmp_path, root=root)
+        os.replace(tmp_path, zip_path)
+    finally:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
 
     # Store a sidecar hash for the zip bytes (useful when publishing the bundle).
     zip_sha: Optional[str] = None

@@ -5,8 +5,8 @@ Authored Pack turns a folder of files into a deterministic pack you can verify l
 It writes:
 - `manifest.json`
 - `receipt.json`
-- `pack_root_sha256`
-- `payload_root_sha256`
+- `pack_root_sha256.txt`
+- `payload_root_sha256` in manifest and receipt
 - optional `authored_pack.zip`
 - optional evidence bundle
 
@@ -32,13 +32,20 @@ python3 -m authored_pack inspect --pack ./out/<pack_root_sha256>/authored_pack.z
 
 Use system Python 3.11+ from a clone.
 Most first-time users can start with `python3 -m authored_pack` and ignore the TUI.
-If you want the TUI, run `python3 -B bin/authored_pack.py`.
+Use the TUI when you want to stage notes, photos, or other manual sources before assembling a pack.
+Run it with `python3 -B bin/authored_pack.py`.
 
 ## Why This Exists
 
-Authored Pack started from a technical question that surfaced with early agent tooling in 2022 and 2023: if an agent's initial seed state is not meaningfully distinct, what risks does that create later, especially in behavior and security? The first approach was to bring in deliberate traces from outside the machine, notes, taps, photos, and other small session artifacts, and assemble them into a bounded input set. That work originally ran under the name `Entropy Pack Stamper`.
+Authored Pack came out of earlier work on agent seed state.
 
-The project narrowed because the original name claimed too much. `Entropy` implies properties of randomness, secrecy, and security that this tool does not and should not claim. What survived that correction was the durable core: deterministic assembly of a small, deliberate artifact set into one reviewable pack with a stable root and a clear receipt. That is what Authored Pack is now. It is not an entropy source, not a proof system, and not an attestation engine. It is a deterministic pack-and-verify tool. The earlier history still matters because it explains why this repo includes manual staging, operator review, receipts, and bounded artifact sets rather than presenting itself as a generic archive utility.
+The original question was whether indistinct initialization causes downstream failures in behavior, security, or drift. The first practical response was to gather deliberate traces from outside the machine, notes, taps, photos, and other small session artifacts, and assemble them into one bounded input set. That work originally used the name `Entropy Pack Stamper`.
+
+The name was wrong. It implied randomness, secrecy, and security properties the tool did not have. Once that was stripped away, the durable core was obvious: deterministic assembly of a small artifact set into one reviewable pack with a stable root and a clear receipt.
+
+That is Authored Pack now: a deterministic pack-and-verify tool. Not an entropy source. Not a proof system. Not an attestation engine.
+
+The earlier history still explains the shape of the repo: manual staging, operator review, receipts, and bounded artifact sets instead of a generic archive tool.
 
 ## Good Uses
 
@@ -48,6 +55,19 @@ The project narrowed because the original name claimed too much. `Entropy` impli
   Freeze a debugging, design, or research session by packaging screenshots, notes, exports, and small fixture files into one deterministic pack.
 - `Manual source bundle`
   Use the TUI to stage short notes, photos, or other simple manual inputs, then assemble one reviewed pack from them.
+
+## Use It When
+
+- you want to hand off a bounded folder to another engineer or agent
+- you want a deterministic pack with a stable root and receipt
+- you want someone else to verify the same bytes later
+
+## Don't Use It When
+
+- you need secrecy
+- you need randomness
+- you need signed provenance or attestation
+- you just want a generic backup or archive tool
 
 ## What You Get
 
@@ -76,6 +96,9 @@ python3 -m authored_pack inspect --pack /path/to/pack_dir --json
 
 Verification checks self-consistency of the presented pack against its manifest.
 It does not establish authorship, timestamp truth, secrecy, or signed provenance.
+By default, `verify` and `inspect` enforce operator caps for manifest size, single-artifact size, and total artifact bytes.
+Use `--max-manifest-mib`, `--max-artifact-mib`, and `--max-total-mib` to tune that operator policy.
+`assemble` remains unconstrained; the size-policy boundary lives on `verify` and `inspect`.
 
 ## Trust Boundary
 
@@ -98,6 +121,12 @@ Run tests:
 ```bash
 pytest -q
 ```
+
+## For Automation and Agents
+
+`verify` and `inspect` are the operator-policy surface for verification limits.
+If you need to accept larger packs, raise `--max-manifest-mib`, `--max-artifact-mib`, or `--max-total-mib` explicitly.
+`assemble` does not apply those limits by default.
 
 ## Consume Bin
 

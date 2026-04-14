@@ -9,6 +9,10 @@ Read these first before making changes:
 - `docs/repo_architect_handoff_2026-03-30.md`
 - `docs/dev_architect_handoff_2026-04-09.md`
 
+For public-surface wording or release notes, also read:
+- `docs/briefs/public-voice.md`
+- `docs/RELEASE_NOTES_TEMPLATE.md`
+
 ## Core Invariants
 
 - Keep Authored Pack positioned as a deterministic assemble/verify tool, not an attestation engine, proof product, RNG, secrecy mechanism, or signed-provenance system.
@@ -81,3 +85,4 @@ If checks are not run, say exactly which were skipped and why.
 - Prefer encoding recurring judgment into tests, scripts, prompts, or repo conventions.
 - Prefer one canonical release-check script over manual command chains.
 - Prefer updating repo-local instructions over re-pasting the same handover into session titles.
+- Dev Architect owns the public voice contract in `docs/briefs/public-voice.md`.
