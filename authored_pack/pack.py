@@ -216,6 +216,45 @@ def _load_existing_receipt(pack_dir: Path) -> Dict[str, object]:
     return data
 
 
+def _materialize_requested_reuse_artifacts(
+    pack_dir: Path,
+    *,
+    receipt: Dict[str, object],
+    zip_pack: bool,
+    evidence_bundle: bool,
+) -> Tuple[Optional[Path], Optional[Path], Optional[str], Dict[str, object]]:
+    updated_receipt = dict(receipt)
+
+    zip_path = pack_dir / "authored_pack.zip"
+    if zip_path.exists() and zip_path.is_symlink():
+        raise ValueError("existing authored_pack.zip is a symlink")
+    if not zip_path.is_file():
+        zip_path = None
+    if zip_pack:
+        if zip_path is None:
+            zip_path = pack_dir / "authored_pack.zip"
+        if updated_receipt.get("zip_path") != "authored_pack.zip":
+            updated_receipt["zip_path"] = "authored_pack.zip"
+            _safe_write_json(pack_dir / "receipt.json", updated_receipt)
+        if zip_path.exists() and zip_path.is_symlink():
+            raise ValueError("existing authored_pack.zip is a symlink")
+        if not zip_path.is_file():
+            _write_zip(pack_dir, zip_path)
+
+    root_sha = str(updated_receipt.get("pack_root_sha256", "") or "")
+    evidence_path = _existing_evidence_bundle_path(pack_dir, root_sha) if root_sha else None
+    evidence_sha: Optional[str] = None
+    if evidence_bundle:
+        if evidence_path is None:
+            evidence_path, evidence_sha = write_evidence_bundle(pack_dir)
+        else:
+            evidence_sha, _ = trusted_sha256_hex(evidence_path)
+    elif evidence_path is not None:
+        evidence_sha, _ = trusted_sha256_hex(evidence_path)
+
+    return zip_path, evidence_path, evidence_sha, updated_receipt
+
+
 def _read_manifest_and_receipt(
     pack_path: Path,
     *,
@@ -831,23 +870,20 @@ def assemble_pack(
                             "existing pack failed verification: "
                             + (strict.errors[0] if strict.errors else "unknown error")
                         )
-                    zip_path = pack_dir / "authored_pack.zip"
-                    existing_zip_path: Optional[Path] = None
-                    if zip_path.is_file():
-                        if zip_path.is_symlink():
-                            raise ValueError("existing authored_pack.zip is a symlink")
-                        zip_res = verify_pack(zip_path)
+                    receipt = _load_existing_receipt(pack_dir)
+                    existing_zip_path, ev_path, ev_sha, receipt = _materialize_requested_reuse_artifacts(
+                        pack_dir,
+                        receipt=receipt,
+                        zip_pack=bool(zip_pack),
+                        evidence_bundle=bool(evidence_bundle),
+                    )
+                    if existing_zip_path is not None and existing_zip_path.is_file():
+                        zip_res = verify_pack(existing_zip_path)
                         if not zip_res.ok:
                             raise ValueError(
                                 "existing authored_pack.zip failed verification: "
                                 + (zip_res.errors[0] if zip_res.errors else "unknown error")
                             )
-                        existing_zip_path = zip_path
-                    receipt = _load_existing_receipt(pack_dir)
-                    ev_path = _existing_evidence_bundle_path(pack_dir, root_sha)
-                    ev_sha: Optional[str] = None
-                    if ev_path is not None:
-                        ev_sha, _ = trusted_sha256_hex(ev_path)
                     if print_seed and seed_master is not None:
                         _print_seed_material(seed_master)
                     try:

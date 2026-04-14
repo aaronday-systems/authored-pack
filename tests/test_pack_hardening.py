@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 import tempfile
 import time
@@ -112,6 +113,73 @@ class TestPackHardening(unittest.TestCase):
             self.assertEqual(receipt_path.stat().st_mtime_ns, receipt_mtime)
             self.assertEqual(zip_path.stat().st_mtime_ns, zip_mtime)
             self.assertEqual(evidence_path.stat().st_mtime_ns, evidence_mtime)
+
+    def test_stamp_pack_reuse_materializes_requested_zip_on_existing_pack(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            first = assemble_pack(
+                input_dir=input_dir,
+                out_dir=out_dir,
+                zip_pack=False,
+                derive_seed=False,
+                evidence_bundle=False,
+            )
+            receipt_path = first.pack_dir / "receipt.json"
+            receipt_before = json.loads(receipt_path.read_text(encoding="utf-8"))
+            self.assertNotIn("zip_path", receipt_before)
+            self.assertFalse((first.pack_dir / "authored_pack.zip").exists())
+
+            second = assemble_pack(
+                input_dir=input_dir,
+                out_dir=out_dir,
+                zip_pack=True,
+                derive_seed=False,
+                evidence_bundle=False,
+            )
+
+            zip_path = first.pack_dir / "authored_pack.zip"
+            self.assertEqual(second.pack_dir, first.pack_dir)
+            self.assertEqual(second.zip_path, zip_path)
+            self.assertTrue(zip_path.is_file())
+            self.assertTrue(verify_pack(zip_path).ok)
+            receipt_after = json.loads(receipt_path.read_text(encoding="utf-8"))
+            self.assertEqual(receipt_after.get("zip_path"), "authored_pack.zip")
+
+    def test_stamp_pack_reuse_materializes_requested_evidence_bundle_on_existing_pack(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            first = assemble_pack(
+                input_dir=input_dir,
+                out_dir=out_dir,
+                zip_pack=False,
+                derive_seed=False,
+                evidence_bundle=False,
+            )
+            expected_path = first.pack_dir / f"authored_evidence_{first.root_sha256}.zip"
+            self.assertFalse(expected_path.exists())
+
+            second = assemble_pack(
+                input_dir=input_dir,
+                out_dir=out_dir,
+                zip_pack=False,
+                derive_seed=False,
+                evidence_bundle=True,
+            )
+
+            self.assertEqual(second.pack_dir, first.pack_dir)
+            self.assertEqual(second.evidence_bundle_path, expected_path)
+            self.assertTrue(expected_path.is_file())
+            self.assertTrue(bool(second.evidence_bundle_sha256))
 
     def test_archive_helpers_reject_symlinks(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
