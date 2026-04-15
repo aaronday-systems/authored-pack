@@ -1,6 +1,6 @@
 # Canonical Demo
 
-This is the one short honest demo for Authored Pack `v0.2.3`.
+This is the one short honest demo for Authored Pack `v0.2.4`.
 
 Run this from repo root:
 

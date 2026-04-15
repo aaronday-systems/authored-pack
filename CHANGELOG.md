@@ -2,6 +2,14 @@
 
 All notable public-release changes to Authored Pack will be documented here.
 
+## [0.2.4] - 2026-04-15
+
+### Changed
+- rewrote the README front door around a clearer packet mental model instead of leading with examples
+- moved concrete use cases to a dedicated `Suggested Use Cases` section later in the README
+- added a worked explanation of `pack_root_sha256` versus `payload_root_sha256`
+- clarified the three public surfaces: local pack directory, public zip projection, and local audit bundle
+
 ## [0.2.3] - 2026-04-14
 
 ### Changed

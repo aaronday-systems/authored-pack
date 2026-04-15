@@ -19,8 +19,8 @@ class TestPublicReleaseContract(unittest.TestCase):
         self.assertEqual(data["project"]["license"], "Apache-2.0")
         pkg_info = (ROOT / "authored_pack.egg-info" / "PKG-INFO").read_text(encoding="utf-8")
         self.assertIn(f"Version: {__version__}", pkg_info)
-        self.assertIn("Current release: `v0.2.3`", pkg_info)
-        self.assertIn("docs/RELEASE_NOTES_v0.2.3.md", pkg_info)
+        self.assertIn("Current release: `v0.2.4`", pkg_info)
+        self.assertIn("docs/RELEASE_NOTES_v0.2.4.md", pkg_info)
         self.assertIn("License-Expression: Apache-2.0", pkg_info)
         self.assertNotIn("proprietary code", pkg_info)
         self.assertNotIn("Current release: `v1.0.0`", pkg_info)
@@ -39,7 +39,7 @@ class TestPublicReleaseContract(unittest.TestCase):
 
     def test_readme_states_current_public_release_boundary(self) -> None:
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
-        self.assertIn("Current release: `v0.2.3`", readme)
+        self.assertIn("Current release: `v0.2.4`", readme)
         self.assertIn("git clone https://github.com/aaronday-systems/authored-pack.git", readme)
         self.assertIn("bash scripts/demo_v1.sh", readme)
         self.assertIn("python3 -m authored_pack assemble --input ./my_case --out ./out --zip", readme)
@@ -53,14 +53,21 @@ class TestPublicReleaseContract(unittest.TestCase):
         self.assertIn("came out of earlier work on agent seed state", readme)
         self.assertIn("The name was wrong.", readme)
         self.assertIn("Not an entropy source. Not a proof system. Not an attestation engine.", readme)
-        self.assertIn("## Good Uses", readme)
+        self.assertIn("## Suggested Use Cases", readme)
         self.assertIn("`Manual source bundle`", readme)
         self.assertIn("`Bug repro bundle`", readme)
         self.assertIn("`Session handoff bundle`", readme)
+        self.assertIn("`Design review packet`", readme)
+        self.assertIn("`Field capture packet`", readme)
+        self.assertIn("`Verified human-to-agent handoff`", readme)
         self.assertIn("## Use It When", readme)
         self.assertIn("you want to hand off a bounded folder to another engineer or agent", readme)
         self.assertIn("## Don't Use It When", readme)
         self.assertIn("you need signed provenance or attestation", readme)
+        self.assertIn("## Core Mental Model", readme)
+        self.assertIn("Think packet, not archive:", readme)
+        self.assertIn("## Pack Roots", readme)
+        self.assertIn("## Share Surfaces", readme)
         self.assertIn("## For Automation and Agents", readme)
         self.assertIn("`verify` and `inspect` enforce operator caps", readme)
         self.assertIn("`--max-manifest-mib`, `--max-artifact-mib`, and `--max-total-mib`", readme)
@@ -83,16 +90,21 @@ class TestPublicReleaseContract(unittest.TestCase):
         self.assertNotIn("It does not create entropy.", readme)
         self.assertNotIn("assembling, verifying, inspecting, and exporting", readme)
         self.assertLess(readme.index("## Quick Start"), readme.index("## Why This Exists"))
+        self.assertLess(readme.index("## Quick Start"), readme.index("## Core Mental Model"))
+        self.assertLess(readme.index("## Core Mental Model"), readme.index("## Why This Exists"))
         self.assertLess(readme.index("## Why This Exists"), readme.index("## Trust Boundary"))
-        self.assertLess(readme.index("## Good Uses"), readme.index("## Use It When"))
         self.assertLess(readme.index("## Use It When"), readme.index("## What You Get"))
+        self.assertLess(readme.index("## Pack Roots"), readme.index("## Verify"))
+        self.assertLess(readme.index("## Share Surfaces"), readme.index("## Verify"))
         self.assertLess(readme.index("## For Automation and Agents"), readme.index("## Consume Bin"))
+        self.assertLess(readme.index("## JSON Contract"), readme.index("## Suggested Use Cases"))
+        self.assertLess(readme.index("## Suggested Use Cases"), readme.index("## Public Release Boundary"))
 
     def test_security_policy_uses_current_product_identity(self) -> None:
         text = (ROOT / "SECURITY.md").read_text(encoding="utf-8")
         self.assertIn("Authored Pack is a deterministic packaging and verification tool.", text)
         self.assertIn("The current supported public line is:\n- `v0.2.x`", text)
-        self.assertIn("Older pre-`v0.2.3` states are historical development milestones", text)
+        self.assertIn("Older pre-`v0.2.4` states are historical development milestones", text)
         self.assertIn("## What Authored Pack Does And Does Not Promise", text)
         self.assertNotIn("EPS is a deterministic packaging and verification tool.", text)
         self.assertNotIn("## What EPS Does And Does Not Promise", text)
@@ -100,16 +112,16 @@ class TestPublicReleaseContract(unittest.TestCase):
     def test_changelog_reflects_current_authored_pack_release(self) -> None:
         text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
         self.assertIn("All notable public-release changes to Authored Pack will be documented here.", text)
-        self.assertIn("## [0.2.3] - 2026-04-14", text)
-        self.assertIn("verification-limit flags as usage errors", text)
-        self.assertLess(text.index("## [0.2.3] - 2026-04-14"), text.index("## [0.2.2] - 2026-04-12"))
+        self.assertIn("## [0.2.4] - 2026-04-15", text)
+        self.assertIn("packet mental model", text)
+        self.assertLess(text.index("## [0.2.4] - 2026-04-15"), text.index("## [0.2.3] - 2026-04-14"))
         self.assertNotIn("pending public release", text)
         self.assertNotIn("changes to EPS", text)
 
     def test_sealed_architecture_doc_is_marked_future_only(self) -> None:
         text = (ROOT / "docs" / "SEALED_PACK_ARCHITECTURE.md").read_text(encoding="utf-8")
         self.assertIn("future design only", text)
-        self.assertIn("not implemented in Authored Pack v0.2.3", text)
+        self.assertIn("not implemented in Authored Pack v0.2.4", text)
         self.assertIn("future-design one-line description for sealed mode only, not the current public pitch", text)
 
     def test_ci_workflow_calls_canonical_release_check(self) -> None:
@@ -145,7 +157,7 @@ class TestPublicReleaseContract(unittest.TestCase):
         for rel in (
             "docs/CANONICAL_DEMO.md",
             "docs/PUBLIC_COPY_ASSETS.md",
-            "docs/RELEASE_NOTES_v0.2.3.md",
+            "docs/RELEASE_NOTES_v0.2.4.md",
             "scripts/demo_v1.sh",
             "scripts/release_check.sh",
             "scripts/smoke_tui_pty.py",
@@ -230,12 +242,12 @@ class TestPublicReleaseContract(unittest.TestCase):
         self.assertIn("Let `assemble` finish", copy_assets)
 
     def test_release_notes_do_not_reintroduce_operator_input_positioning(self) -> None:
-        text = (ROOT / "docs" / "RELEASE_NOTES_v0.2.3.md").read_text(encoding="utf-8")
+        text = (ROOT / "docs" / "RELEASE_NOTES_v0.2.4.md").read_text(encoding="utf-8")
         self.assertNotIn("operator-supplied inputs", text)
 
     def test_release_notes_match_current_public_surface(self) -> None:
-        text = (ROOT / "docs" / "RELEASE_NOTES_v0.2.3.md").read_text(encoding="utf-8")
-        self.assertIn("Date: 2026-04-14", text)
+        text = (ROOT / "docs" / "RELEASE_NOTES_v0.2.4.md").read_text(encoding="utf-8")
+        self.assertIn("Date: 2026-04-15", text)
         self.assertIn("Status: released", text)
         self.assertIn("- `assemble`", text)
         self.assertIn("- `inspect`", text)
@@ -243,11 +255,11 @@ class TestPublicReleaseContract(unittest.TestCase):
         self.assertIn("Apache License 2.0", text)
         self.assertIn("JSON CLI envelopes for `assemble`, `verify`, `inspect`, and `consume-bin`", text)
         self.assertIn("compatibility aliases remain available for `stamp` and `stamp-bin`", text)
-        self.assertIn("Release verification used for `v0.2.3`", text)
+        self.assertIn("Release verification used for `v0.2.4`", text)
         self.assertIn("clean tracked worktree", text)
         self.assertIn("bash scripts/release_check.sh", text)
         self.assertNotIn("Status: public release target", text)
-        self.assertNotIn("Before tagging `v0.2.3`, confirm:", text)
+        self.assertNotIn("Before tagging `v0.2.4`, confirm:", text)
         self.assertNotIn("- `stamp`\n- `verify`\n- `stamp-bin`", text)
 
     def test_historical_release_notes_are_fenced_as_legacy(self) -> None:

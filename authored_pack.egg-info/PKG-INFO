@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: authored-pack
-Version: 0.2.3
+Version: 0.2.4
 Summary: Authored Pack is a deterministic pack/verify tool for humans and agents.
 Author: Aaron Day
 License-Expression: Apache-2.0
@@ -46,6 +46,19 @@ Most first-time users can start with `python3 -m authored_pack` and ignore the T
 Use the TUI when you want to stage notes, photos, or other manual sources before assembling a pack.
 Run it with `python3 -B bin/authored_pack.py`.
 
+## Core Mental Model
+
+Think packet, not archive:
+
+- reviewed folder in, deterministic packet out
+- `assemble` produces the packet
+- `verify` and `inspect` are the receiver-side admission surface
+- `pack_root_sha256` identifies the whole packet
+- `payload_root_sha256` identifies the payload bytes only
+
+The local pack directory is the working object.
+`authored_pack.zip` is the public projection you hand to another person, job, or agent.
+
 ## Why This Exists
 
 Authored Pack came out of earlier work on agent seed state.
@@ -57,15 +70,6 @@ The name was wrong. It implied randomness, secrecy, and security properties the 
 That is Authored Pack now: a deterministic pack-and-verify tool. Not an entropy source. Not a proof system. Not an attestation engine.
 
 The earlier history still explains the shape of the repo: manual staging, operator review, receipts, and bounded artifact sets instead of a generic archive tool.
-
-## Good Uses
-
-- `Bug repro bundle`
-  Put a failing fixture, a short note, and any logs into one folder, then hand the pack or zip to another developer or agent.
-- `Session handoff bundle`
-  Freeze a debugging, design, or research session by packaging screenshots, notes, exports, and small fixture files into one deterministic pack.
-- `Manual source bundle`
-  Use the TUI to stage short notes, photos, or other simple manual inputs, then assemble one reviewed pack from them.
 
 ## Use It When
 
@@ -96,6 +100,33 @@ An assembled pack under `--out/<pack_root_sha256>/` containing:
 Concrete example:
 - change `--notes` and the pack root changes
 - keep the payload files the same and the payload root stays the same
+
+## Pack Roots
+
+Use `pack_root_sha256` when the whole packet contract matters.
+Use `payload_root_sha256` when you care only about the payload bytes.
+
+Worked example:
+
+```bash
+python3 -m authored_pack assemble --input ./case --out ./out_a --zip --notes "first review"
+python3 -m authored_pack assemble --input ./case --out ./out_b --zip --notes "second review"
+```
+
+Expected result:
+
+- the payload files are the same, so `payload_root_sha256` stays the same
+- the packet metadata changed, so `pack_root_sha256` changes
+
+That is the intended split between payload identity and packet identity.
+
+## Share Surfaces
+
+- pack directory: local working object with payload copy, manifest, receipt, and optional local artifacts
+- `authored_pack.zip`: public projection for transport and later verification
+- `authored_evidence_<root>.zip`: local audit adjunct, not signed provenance
+
+If you are handing the packet to someone else, the normal public object is `authored_pack.zip`.
 
 ## Verify
 
@@ -135,6 +166,7 @@ pytest -q
 
 ## For Automation and Agents
 
+Have the receiver `inspect` or `verify` before acting on a packet.
 `verify` and `inspect` are the operator-policy surface for verification limits.
 If you need to accept larger packs, raise `--max-manifest-mib`, `--max-artifact-mib`, or `--max-total-mib` explicitly.
 `assemble` does not apply those limits by default.
@@ -176,9 +208,32 @@ The compatibility alias `stamp-bin` emits the same shape with `command: "stamp-b
 For `verify`, the `result` object includes verification counts and verifier errors.
 For `inspect`, the `result` object includes pack roots, schema summary, verification status, and an artifact preview.
 
+## Suggested Use Cases
+
+- `Bug repro bundle`
+  Put a failing fixture, a short note, and any logs into one folder, then hand the pack or zip to another developer or agent.
+- `Debug session freeze`
+  Freeze a debugging session by packaging screenshots, shell output, notes, and small fixture files into one deterministic packet.
+- `External review packet`
+  Curate the exact files, screenshots, and notes you want a vendor, reviewer, or consultant to inspect.
+- `Design review packet`
+  Package the exports, screenshots, and short context note that define one design review slice.
+- `Lab run bundle`
+  Freeze one experiment or bench session with notes, small measurement exports, plots, and setup photos.
+- `Field capture packet`
+  Stage notes, photos, and other small manual observations into one reviewed packet after a site visit or field session.
+- `Session handoff bundle`
+  Freeze a debugging, design, or research session by packaging screenshots, notes, exports, and small fixture files into one deterministic pack.
+- `Manual source bundle`
+  Use the TUI to stage short notes, photos, or other simple manual inputs, then assemble one reviewed pack from them.
+- `Verified human-to-agent handoff`
+  Curate the exact files and notes an agent should consume, then require `inspect` or `verify` before use.
+- `Source-bin intake drain`
+  Use `consume-bin` when a disposable staging folder should be drained into one bounded packet at a time.
+
 ## Public Release Boundary
 
-Current release: `v0.2.3`.
+Current release: `v0.2.4`.
 
 Authored Pack is open source under Apache License 2.0.
 It is OSI open source.
@@ -187,7 +242,7 @@ It is OSI open source.
 
 - canonical demo: `docs/CANONICAL_DEMO.md`
 - public copy assets: `docs/PUBLIC_COPY_ASSETS.md`
-- release notes: `docs/RELEASE_NOTES_v0.2.3.md`
+- release notes: `docs/RELEASE_NOTES_v0.2.4.md`
 - contribution and disclosure policy: `CONTRIBUTING.md`, `SECURITY.md`
 
 ## License
