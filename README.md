@@ -199,18 +199,14 @@ For `inspect`, the `result` object includes pack roots, schema summary, verifica
 
 ## Suggested Use Cases
 
+Keep this list narrow. These are the strongest current fits.
+
 - `Bug repro bundle`
   Put a failing fixture, a short note, and any logs into one folder, then hand the pack or zip to another developer or agent.
 - `CI failure packet`
   Publish the exact failing artifacts from one job so a later human or agent can inspect or verify the same packet before triage.
-- `Debug session freeze`
-  Freeze a debugging session by packaging screenshots, shell output, notes, and small fixture files into one deterministic packet.
 - `External review packet`
   Curate the exact files, screenshots, and notes you want a vendor, reviewer, or consultant to inspect.
-- `Design review packet`
-  Package the exports, screenshots, and short context note that define one design review slice.
-- `Lab run bundle`
-  Freeze one experiment or bench session with notes, small measurement exports, plots, and setup photos.
 - `Field capture packet`
   Stage notes, photos, and other small manual observations into one reviewed packet after a site visit or field session.
 - `QA regression fixture pack`
