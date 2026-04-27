@@ -20,4 +20,6 @@ jobs:
       - name: Install test dependency
         run: python -m pip install pytest
       - name: Release check
+        env:
+          PYTHON_BIN: python
         run: bash scripts/release_check.sh

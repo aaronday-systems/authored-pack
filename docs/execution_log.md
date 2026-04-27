@@ -48,9 +48,11 @@ Status
 
 What changed
 - `.github/workflows/ci.yml` now installs `pytest` before running `scripts/release_check.sh` on Python 3.11 and 3.12.
+- The CI release-check step sets `PYTHON_BIN=python` so `scripts/release_check.sh` uses the matrix interpreter instead of auto-selecting another installed runner Python.
 
 Why it matters
 - The release gate was valid locally but under-specified in CI; remote public-build status could stay red without exercising the repo tests.
+- The Python 3.11 job can otherwise install dependencies into 3.11 and then accidentally run the release gate under 3.12.
 
 Verification
 - Pending: rerun `bash scripts/release_check.sh` on a clean committed tree, push, then confirm GitHub Actions is green for `origin/main`.
