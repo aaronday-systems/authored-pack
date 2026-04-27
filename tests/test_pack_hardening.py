@@ -287,6 +287,36 @@ class TestPackHardening(unittest.TestCase):
                 self.assertTrue(path.is_file())
                 self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
+    def test_reused_pack_materializes_requested_private_seed_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            first = assemble_pack(
+                input_dir=input_dir,
+                out_dir=out_dir,
+                zip_pack=True,
+                derive_seed=True,
+                write_seed_files=False,
+            )
+            second = assemble_pack(
+                input_dir=input_dir,
+                out_dir=out_dir,
+                zip_pack=True,
+                derive_seed=True,
+                write_seed_files=True,
+            )
+
+            self.assertEqual(second.pack_dir, first.pack_dir)
+            for name in ("seed_master.hex", "seed_master.b64"):
+                path = second.pack_dir / name
+                self.assertTrue(path.is_file())
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            self.assertTrue(verify_pack(second.zip_path).ok if second.zip_path is not None else False)
+
     def test_stamp_pack_fails_when_copied_payload_diverges(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

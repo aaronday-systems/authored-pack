@@ -73,6 +73,11 @@ _UI_SFX_CACHE: Dict[str, Path] = {}
 _UI_SFX_LAST_NS: Dict[str, int] = {}
 LOCKDOWN_MIN_TAP_EVENTS = 16
 DEFAULT_ENTROPY_MIN_SOURCES = 7
+SCREEN_HELP = "help"
+SCREEN_START = "start"
+SCREEN_SOURCES = "sources"
+SCREEN_ASSEMBLE = "assemble"
+SCREEN_VERIFY = "verify"
 
 
 def safe_addstr(stdscr, y: int, x: int, s: str, attr: int = 0) -> None:
@@ -650,6 +655,15 @@ class AppState:
             "Verify",
         ]
     )
+    menu_keys: List[str] = field(
+        default_factory=lambda: [
+            SCREEN_HELP,
+            SCREEN_START,
+            SCREEN_SOURCES,
+            SCREEN_ASSEMBLE,
+            SCREEN_VERIFY,
+        ]
+    )
     selected: int = 0
     status: str = "Help: start here."
     log_lines: List[str] = field(default_factory=list)
@@ -663,6 +677,24 @@ class AppState:
 
 def _set_current_lane(state: AppState, lane: str) -> None:
     state.current_lane = "authored" if str(lane).strip().lower() == "authored" else "folder"
+
+
+def _selected_screen(state: AppState) -> str:
+    idx = int(getattr(state, "selected", 0) or 0)
+    keys = list(getattr(state, "menu_keys", []) or [])
+    if 0 <= idx < len(keys):
+        return str(keys[idx])
+    return ""
+
+
+def _select_screen(state: AppState, screen: str) -> bool:
+    target = str(screen)
+    keys = list(getattr(state, "menu_keys", []) or [])
+    try:
+        state.selected = keys.index(target)
+    except ValueError:
+        return False
+    return True
 
 
 def _divider_for_width(cols: int) -> str:
@@ -1300,10 +1332,10 @@ def _drop_result_is_terminal(msgs: Sequence[str]) -> bool:
 
 
 def _current_drop_apply_mode(state: AppState) -> str:
-    label = state.menu[state.selected] if 0 <= state.selected < len(state.menu) else ""
-    if label == "Sources":
+    screen = _selected_screen(state)
+    if screen == SCREEN_SOURCES:
         return "sources"
-    if label == "Start" and state.current_lane == "authored":
+    if screen == SCREEN_START and state.current_lane == "authored":
         return "sources"
     return "folder"
 
@@ -2247,8 +2279,7 @@ def _selection_preview(state: AppState, label: str, *, width: int, height: int) 
 def _assemble_failure_alarm_active(state: AppState) -> bool:
     if not state.insane:
         return False
-    label = state.menu[state.selected] if 0 <= state.selected < len(state.menu) else ""
-    if label != "Assemble":
+    if _selected_screen(state) != SCREEN_ASSEMBLE:
         return False
     if state.status != "Failed.":
         return False
@@ -4414,9 +4445,7 @@ def _run_assemble_plan(
             if not state.authored_sources:
                 state.status = "Failed."
                 state.log_lines = ["Authored Sources selected, but none are staged yet.", "Go to Sources and add or import some first."]
-                try:
-                    state.selected = state.menu.index("Sources")
-                except ValueError:
+                if not _select_screen(state, SCREEN_SOURCES):
                     state.selected = 0
                 state.focus = "menu"
                 return
@@ -4455,9 +4484,7 @@ def _run_assemble_plan(
                     f"Need {need_more} more collected sources to use this option.",
                     f"Tap sources need >= {LOCKDOWN_MIN_TAP_EVENTS} key events.",
                 ]
-                try:
-                    state.selected = state.menu.index("Sources")
-                except ValueError:
+                if not _select_screen(state, SCREEN_SOURCES):
                     state.selected = 0
                 state.focus = "menu"
                 return
@@ -4469,9 +4496,7 @@ def _run_assemble_plan(
                 "Assemble blocked: staged sources were requested for the seed, but none are available.",
                 "Go to Sources and add or import some first.",
             ]
-            try:
-                state.selected = state.menu.index("Sources")
-            except ValueError:
+            if not _select_screen(state, SCREEN_SOURCES):
                 state.selected = 0
             state.focus = "menu"
             return
@@ -4932,9 +4957,9 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
             state.viewer.top = min(max(0, len(state.viewer.lines) - 1), state.viewer.top + 10)
         return True
 
-    label = state.menu[state.selected] if 0 <= state.selected < len(state.menu) else ""
+    screen = _selected_screen(state)
     if ch == 27:
-        if label == "Assemble" and state.assemble_panel_draft is not None:
+        if screen == SCREEN_ASSEMBLE and state.assemble_panel_draft is not None:
             _close_assemble_panel(state)
             state.status = "Assemble review closed."
             return True
@@ -4946,7 +4971,7 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
         return False
 
     if ch in (9, getattr(curses, "KEY_BTAB", -999)):
-        if label == "Sources":
+        if screen == SCREEN_SOURCES:
             if state.focus == "menu" and state.authored_sources:
                 state.focus = "entropy"
             else:
@@ -4959,16 +4984,16 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
         _toggle_experience_mode(state)
         return True
 
-    if label == "Start":
+    if screen == SCREEN_START:
         if ch in (ord("s"), ord("S")):
             _set_current_lane(state, "authored")
-            state.selected = state.menu.index("Sources")
+            _select_screen(state, SCREEN_SOURCES)
             _close_assemble_panel(state)
             state.focus = "menu"
             state.status = "Ready."
             return True
         if ch in (ord("v"), ord("V")):
-            state.selected = state.menu.index("Verify")
+            _select_screen(state, SCREEN_VERIFY)
             _close_assemble_panel(state)
             state.focus = "menu"
             state.status = "Ready."
@@ -4979,12 +5004,12 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
             _set_current_lane(state, "folder")
             state.assemble_config.input_mode = "folder"
             if _edit_assemble_input(state, stdscr, state.assemble_config, allow_sources=False):
-                state.selected = state.menu.index("Assemble")
+                _select_screen(state, SCREEN_ASSEMBLE)
                 state.focus = "menu"
                 state.status = "Folder chosen. Review and assemble when ready."
             return True
 
-    if label == "Sources":
+    if screen == SCREEN_SOURCES:
         _set_current_lane(state, "authored")
         if ch in (curses.KEY_UP, ord("k")) and state.focus == "entropy" and state.authored_sources:
             state.entropy_selected = max(0, state.entropy_selected - 1)
@@ -5016,14 +5041,14 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
             return True
         if ch in (curses.KEY_ENTER, 10, 13) and state.focus == "menu":
             if state.authored_sources:
-                state.selected = state.menu.index("Assemble")
+                _select_screen(state, SCREEN_ASSEMBLE)
                 state.focus = "menu"
                 state.status = "Authored Sources selected. Review and assemble when ready."
             else:
                 _action_sources_import_paths(state, stdscr)
             return True
 
-    if label == "Assemble":
+    if screen == SCREEN_ASSEMBLE:
         cfg = state.assemble_config
         if state.assemble_panel_draft is not None:
             rows = _assemble_panel_rows(state)
@@ -5094,7 +5119,7 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
             _open_assemble_panel(state)
             return True
 
-    if label == "Verify":
+    if screen == SCREEN_VERIFY:
         if ch in (ord("p"), ord("P")):
             _edit_verify_path(state, stdscr)
             return True
@@ -5109,7 +5134,7 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
             _run_verify_from_config(state, stdscr)
             return True
 
-    if label == "Help":
+    if screen == SCREEN_HELP:
         if ch in (ord("r"), ord("R")):
             _open_help_doc(state, "readme")
             return True
@@ -5124,7 +5149,7 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
         state.selected = max(0, state.selected - 1)
         if state.selected != old and state.insane:
             _start_ui_move_sfx_best_effort()
-        if state.menu[state.selected] != "Assemble":
+        if _selected_screen(state) != SCREEN_ASSEMBLE:
             _close_assemble_panel(state)
         state.focus = "menu"
         state.status = "Ready."
@@ -5135,7 +5160,7 @@ def handle_key(stdscr, state: AppState, ch: int) -> bool:
         state.selected = min(len(state.menu) - 1, state.selected + 1)
         if state.selected != old and state.insane:
             _start_ui_move_sfx_best_effort()
-        if state.menu[state.selected] != "Assemble":
+        if _selected_screen(state) != SCREEN_ASSEMBLE:
             _close_assemble_panel(state)
         state.focus = "menu"
         state.status = "Ready."

@@ -317,6 +317,11 @@ def _verify(args: argparse.Namespace) -> int:
 
 
 def _inspect(args: argparse.Namespace) -> int:
+    if args.roots_only and not args.json:
+        raise _value_error(
+            "--roots-only requires --json",
+            details={"flags": {"json": False, "roots_only": True}},
+        )
     limits, (max_manifest_bytes, max_artifact_bytes, max_total_bytes) = _validated_verification_limits(args)
     pack_path = _resolve_supported_pack_path(args.pack)
     summary = inspect_pack(
@@ -326,9 +331,24 @@ def _inspect(args: argparse.Namespace) -> int:
         max_total_bytes=max_total_bytes,
         artifact_preview_limit=int(args.artifact_preview),
     )
-    summary["limits"] = limits
 
     if args.json:
+        if args.roots_only:
+            print(
+                _json_success(
+                    "inspect",
+                    {
+                        "inspected_path": summary["inspected_path"],
+                        "pack_type": summary["pack_type"],
+                        "pack_root_sha256": summary["pack_root_sha256"],
+                        "payload_root_sha256": summary["payload_root_sha256"],
+                        "verification_ok": summary["verification_ok"],
+                        "verification_errors": summary["verification_errors"],
+                    },
+                )
+            )
+            return 0
+        summary["limits"] = limits
         print(_json_success("inspect", summary))
     else:
         print(f"inspected_path: {summary['inspected_path']}")
@@ -566,6 +586,11 @@ def build_parser(*, prog: str = "authored-pack") -> argparse.ArgumentParser:
     )
     inspect.add_argument("--artifact-preview", type=int, default=20, help="How many artifact entries to include in the summary preview (default: 20)")
     inspect.add_argument("--json", action="store_true", help="Emit JSON envelope to stdout")
+    inspect.add_argument(
+        "--roots-only",
+        action="store_true",
+        help="With --json, emit only pack roots and verification status for machine consumers.",
+    )
     inspect.set_defaults(func=_inspect)
 
     consume_bin = sub.add_parser("consume-bin", aliases=["stamp-bin"], help="Advanced: move files from a source bin into a new pack")

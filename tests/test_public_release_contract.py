@@ -75,6 +75,7 @@ class TestPublicReleaseContract(unittest.TestCase):
         self.assertIn("`verify` and `inspect` enforce operator caps", readme)
         self.assertIn("`--max-manifest-mib`, `--max-artifact-mib`, and `--max-total-mib`", readme)
         self.assertIn("`assemble` remains unconstrained", readme)
+        self.assertIn("inspect --json --roots-only", readme)
         self.assertIn("macOS terminals", readme)
         self.assertIn("Linux terminals", readme)
         self.assertIn("best-effort", readme)

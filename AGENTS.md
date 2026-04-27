@@ -1,5 +1,14 @@
 # Authored Pack Repo Contract
 
+
+## P0 Evaluation — Control Decisions
+
+Push this to the front of the stack for repo-by-repo evaluation before changing or extending control flow.
+
+- If the code is making a control decision, it should do that from a typed report or explicit mode, not from human prose, path history, UI labels, or device-name guesses.
+- Do not cargo-cult this blindly. Evaluate it against the repo's real contract and operator surface.
+- When the current behavior relies on prose parsing, hidden path state, labels, or name heuristics, prefer an imperative command, typed schema/report, or explicit mode switch when that improves safety, automation, or legibility.
+
 Authored Pack is a small deterministic pack/verify tool for bounded artifact sets.
 
 Read these first before making changes:
@@ -86,3 +95,13 @@ If checks are not run, say exactly which were skipped and why.
 - Prefer one canonical release-check script over manual command chains.
 - Prefer updating repo-local instructions over re-pasting the same handover into session titles.
 - Dev Architect owns the public voice contract in `docs/briefs/public-voice.md`.
+
+
+## Durable Decision Logging
+
+- Material work done through this application should leave a durable note that a later LLM can learn from without replaying the whole thread.
+- Default this on for code, config, schema, ops, security, runtime-policy, and workflow changes that alter behavior or intent.
+- Canonical historical log for this repo: `docs/execution_log.md`.
+- This log complements current truth surfaces; it does not replace canonical state files or present-state contracts.
+- Keep entries compact but decision-rich: date, what changed, why, key tradeoff, verification actually performed, and what remains uncertain.
+- Do not log noise. Tiny typo fixes or purely local scratch work do not need an entry unless they change behavior, contracts, operations, or future reasoning.

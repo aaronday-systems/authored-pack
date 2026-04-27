@@ -172,6 +172,66 @@ class TestCliContract(unittest.TestCase):
             self.assertFalse(result["has_evidence_bundle"])
             self.assertTrue(result["verification_ok"])
 
+    def test_inspect_json_roots_only_emits_machine_export_for_pack_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            stamped = assemble_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=True, derive_seed=False)
+
+            rc, stdout, stderr = self._run_cli(["inspect", "--pack", str(stamped.pack_dir), "--json", "--roots-only"])
+
+            self.assertEqual(rc, 0)
+            self.assertEqual(stderr, "")
+            payload = json.loads(stdout)
+            result = payload["result"]
+            self.assertEqual(
+                set(result),
+                {
+                    "inspected_path",
+                    "pack_type",
+                    "pack_root_sha256",
+                    "payload_root_sha256",
+                    "verification_ok",
+                    "verification_errors",
+                },
+            )
+            self.assertEqual(result["pack_type"], "directory")
+            self.assertEqual(result["pack_root_sha256"], stamped.pack_root_sha256)
+            self.assertEqual(result["payload_root_sha256"], stamped.payload_root_sha256)
+            self.assertTrue(result["verification_ok"])
+
+    def test_inspect_json_roots_only_emits_machine_export_for_pack_zip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            stamped = assemble_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=True, derive_seed=False)
+
+            rc, stdout, stderr = self._run_cli(["inspect", "--pack", str(stamped.zip_path), "--json", "--roots-only"])
+
+            self.assertEqual(rc, 0)
+            self.assertEqual(stderr, "")
+            payload = json.loads(stdout)
+            result = payload["result"]
+            self.assertEqual(result["pack_type"], "zip")
+            self.assertEqual(result["pack_root_sha256"], stamped.pack_root_sha256)
+            self.assertEqual(result["payload_root_sha256"], stamped.payload_root_sha256)
+            self.assertTrue(result["verification_ok"])
+
+    def test_inspect_roots_only_without_json_is_usage_error(self) -> None:
+        rc, stdout, stderr = self._run_cli(["inspect", "--pack", "/no/such/path", "--roots-only"])
+
+        self.assertEqual(rc, 2)
+        self.assertEqual(stdout, "")
+        self.assertIn("--roots-only requires --json", stderr)
+
     def test_inspect_json_missing_pack_emits_failure_envelope(self) -> None:
         rc, stdout, stderr = self._run_cli(["inspect", "--pack", "/no/such/path", "--json"])
 

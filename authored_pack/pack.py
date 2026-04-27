@@ -140,6 +140,18 @@ def _payload_relpaths_in_zip(zf: zipfile.ZipFile) -> List[str]:
     return out
 
 
+def _non_payload_member_names_in_zip(zf: zipfile.ZipFile) -> List[str]:
+    out: List[str] = []
+    for info in sorted(zf.infolist(), key=lambda x: x.filename):
+        name = str(info.filename)
+        if info.is_dir():
+            continue
+        if name == "payload" or name.startswith("payload/"):
+            continue
+        out.append(name)
+    return out
+
+
 def _iter_pack_archive_files(
     pack_dir: Path,
     *,
@@ -167,6 +179,20 @@ def _append_unexpected_payload_errors(errors: List[str], *, expected: Set[str], 
         preview = ", ".join(extra_payload_relpaths[:5])
         suffix = f" (+{len(extra_payload_relpaths) - 5} more)" if len(extra_payload_relpaths) > 5 else ""
         errors.append(f"unexpected payload files present: {preview}{suffix}")
+
+
+def _append_unexpected_zip_member_errors(errors: List[str], *, schema_version: object, actual: Sequence[str]) -> None:
+    if schema_version == MANIFEST_SCHEMA_VERSION:
+        allowed = {"manifest.json", PACK_ROOT_ALIAS_FILENAME, "receipt.json"}
+    elif schema_version == LEGACY_MANIFEST_SCHEMA_VERSION:
+        allowed = {"manifest.json", LEGACY_ROOT_ALIAS_FILENAME, PACK_ROOT_ALIAS_FILENAME, "receipt.json"}
+    else:
+        return
+    extra_members = sorted(set(actual) - allowed)
+    if extra_members:
+        preview = ", ".join(extra_members[:5])
+        suffix = f" (+{len(extra_members) - 5} more)" if len(extra_members) > 5 else ""
+        errors.append(f"unexpected zip members present: {preview}{suffix}")
 
 
 def _output_would_self_ingest_input(input_dir: Path, out_dir: Path) -> bool:
@@ -563,6 +589,13 @@ def _safe_write_private_text(path: Path, content: str) -> None:
     _atomic_write_text(path, content, mode=0o600)
 
 
+def _write_seed_files(pack_dir: Path, seed_master: bytes) -> None:
+    seed_hex = seed_master.hex()
+    seed_b64 = base64.b64encode(seed_master).decode("ascii")
+    _safe_write_private_text(pack_dir / "seed_master.hex", seed_hex + "\n")
+    _safe_write_private_text(pack_dir / "seed_master.b64", seed_b64 + "\n")
+
+
 def _canonical_json_text(obj: Dict[str, object]) -> str:
     return json.dumps(obj, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False) + "\n"
 
@@ -892,6 +925,8 @@ def assemble_pack(
                             "existing pack failed verification: "
                             + (strict.errors[0] if strict.errors else "unknown error")
                         )
+                    if write_seed_files and seed_master is not None:
+                        _write_seed_files(pack_dir, seed_master)
                     receipt = _load_existing_receipt(pack_dir)
                     existing_zip_path, ev_path, ev_sha, receipt = _materialize_requested_reuse_artifacts(
                         pack_dir,
@@ -929,10 +964,7 @@ def assemble_pack(
         _write_root_alias_files(tmp_dir, root_sha)
 
         if write_seed_files and seed_master is not None:
-            seed_hex = seed_master.hex()
-            seed_b64 = base64.b64encode(seed_master).decode("ascii")
-            _safe_write_private_text(tmp_dir / "seed_master.hex", seed_hex + "\n")
-            _safe_write_private_text(tmp_dir / "seed_master.b64", seed_b64 + "\n")
+            _write_seed_files(tmp_dir, seed_master)
 
         extra_receipt_fields: Optional[Dict[str, object]] = None
         if before_finalize is not None:
@@ -1330,10 +1362,16 @@ def verify_pack(
                 if "manifest.artifacts missing or empty" in artifact_errors:
                     return VerificationResult(ok=False, root_sha256=root_sha, file_count=0, total_bytes=0, errors=errors)
 
+                actual_payload_relpaths = _payload_relpaths_in_zip(zf)
                 _append_unexpected_payload_errors(
                     errors,
                     expected=expected_payload_relpaths,
-                    actual=_payload_relpaths_in_zip(zf),
+                    actual=actual_payload_relpaths,
+                )
+                _append_unexpected_zip_member_errors(
+                    errors,
+                    schema_version=schema_version,
+                    actual=_non_payload_member_names_in_zip(zf),
                 )
 
                 return VerificationResult(

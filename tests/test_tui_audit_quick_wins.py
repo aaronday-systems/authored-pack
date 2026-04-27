@@ -426,6 +426,24 @@ class TestTuiAuditQuickWins(unittest.TestCase):
         self.assertTrue(keep_running)
         import_paths.assert_called_once_with(state, mock.ANY)
 
+    def test_drop_apply_mode_uses_screen_key_not_visible_label(self) -> None:
+        m = self.m
+        state = self._state()
+        source_idx = state.menu_keys.index(m.SCREEN_SOURCES)
+        state.selected = source_idx
+        state.menu[source_idx] = "Collected Inputs"
+
+        self.assertEqual(m._current_drop_apply_mode(state), "sources")
+
+        start_idx = state.menu_keys.index(m.SCREEN_START)
+        state.selected = start_idx
+        state.menu[start_idx] = "Begin"
+        state.current_lane = "authored"
+        self.assertEqual(m._current_drop_apply_mode(state), "sources")
+
+        state.current_lane = "folder"
+        self.assertEqual(m._current_drop_apply_mode(state), "folder")
+
     def test_stamp_preview_ignores_stale_failure_logs_when_not_in_result_state(self) -> None:
         m = self.m
         state = self._state()

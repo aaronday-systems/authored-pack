@@ -196,6 +196,7 @@ For `consume-bin`, the `result` object also includes `consumed`, `warnings`, and
 The compatibility alias `stamp-bin` emits the same shape with `command: "stamp-bin"` when invoked that way.
 For `verify`, the `result` object includes verification counts and verifier errors.
 For `inspect`, the `result` object includes pack roots, schema summary, verification status, and an artifact preview.
+For machine-only root export, use `inspect --json --roots-only`; that `result` object contains only `inspected_path`, `pack_type`, `pack_root_sha256`, `payload_root_sha256`, `verification_ok`, and `verification_errors`.
 
 ## Suggested Use Cases
 

@@ -601,6 +601,55 @@ class TestAssembleVerify(unittest.TestCase):
             self.assertFalse(vr.ok, msg=f"errors: {vr.errors}")
             self.assertTrue(any("unexpected payload files present" in e for e in vr.errors), msg=f"errors: {vr.errors}")
 
+    def test_verify_rejects_extra_non_payload_file_in_current_zip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            res = assemble_pack(
+                input_dir=input_dir,
+                out_dir=out_dir,
+                zip_pack=True,
+                derive_seed=True,
+                write_seed_files=True,
+            )
+            zip_path = res.pack_dir / "authored_pack.zip"
+            with zipfile.ZipFile(zip_path, "a", compression=zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr("seed_master.hex", "not covered by manifest\n")
+
+            vr = verify_pack(zip_path)
+            self.assertFalse(vr.ok, msg=f"errors: {vr.errors}")
+            self.assertTrue(any("unexpected zip members present" in e and "seed_master.hex" in e for e in vr.errors), msg=f"errors: {vr.errors}")
+
+    def test_verify_rejects_extra_non_payload_file_in_legacy_zip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            zip_path = tmp_path / "v1_pack.zip"
+            data = b"hello"
+            manifest = {
+                "schema_version": "entropy.pack.v1",
+                "artifacts": [
+                    {
+                        "path": "payload/a.txt",
+                        "sha256": hashlib.sha256(data).hexdigest(),
+                        "size_bytes": len(data),
+                    }
+                ],
+            }
+            root = manifest_root_sha256(manifest)
+            with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr("manifest.json", stable_dumps(manifest))
+                zf.writestr("entropy_root_sha256.txt", root + "\n")
+                zf.writestr("payload/a.txt", data)
+                zf.writestr("seed_master.hex", "not covered by manifest\n")
+
+            vr = verify_pack(zip_path)
+            self.assertFalse(vr.ok, msg=f"errors: {vr.errors}")
+            self.assertTrue(any("unexpected zip members present" in e and "seed_master.hex" in e for e in vr.errors), msg=f"errors: {vr.errors}")
+
     def test_verify_dir_and_zip_emit_identical_errors_for_same_malformed_pack(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
