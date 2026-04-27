@@ -40,3 +40,17 @@ Verification
 - `python3 -m authored_pack --help`
 - `python3 -m authored_pack inspect --help`
 - `bash scripts/release_check.sh` is the clean-tree push gate and must run after committing this dirty worktree.
+
+## 2026-04-27 — CI installs test dependency before release gate
+
+Status
+- Fixed the public GitHub Actions build setup after the pushed release-fix commit failed before tests with `No module named pytest`.
+
+What changed
+- `.github/workflows/ci.yml` now installs `pytest` before running `scripts/release_check.sh` on Python 3.11 and 3.12.
+
+Why it matters
+- The release gate was valid locally but under-specified in CI; remote public-build status could stay red without exercising the repo tests.
+
+Verification
+- Pending: rerun `bash scripts/release_check.sh` on a clean committed tree, push, then confirm GitHub Actions is green for `origin/main`.
