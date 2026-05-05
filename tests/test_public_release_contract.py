@@ -138,6 +138,16 @@ class TestPublicReleaseContract(unittest.TestCase):
         self.assertIn("git diff --cached --quiet --ignore-submodules --", text)
         self.assertIn("tracked worktree must be clean", text)
 
+    def test_release_contract_helper_preserves_clean_tree_gate(self) -> None:
+        helper = (ROOT / "scripts" / "close_release_contract.py").read_text(encoding="utf-8")
+        self.assertIn('"git", "worktree", "add", "--detach"', helper)
+        self.assertIn('"bash", "scripts/release_check.sh"', helper)
+        self.assertIn("dev-architect.task_receipt.v1", helper)
+        self.assertIn("docs/task_receipts", helper)
+        self.assertIn("tracked_tree_is_clean", helper)
+        self.assertNotIn("git stash", helper)
+        self.assertNotIn("git reset", helper)
+
     def test_gitignore_ignores_local_claude_settings(self) -> None:
         text = (ROOT / ".gitignore").read_text(encoding="utf-8")
         self.assertIn(".claude/", text)
