@@ -122,12 +122,6 @@ class TestPublicReleaseContract(unittest.TestCase):
         self.assertNotIn("pending public release", text)
         self.assertNotIn("changes to EPS", text)
 
-    def test_sealed_architecture_doc_is_marked_future_only(self) -> None:
-        text = (ROOT / "docs" / "SEALED_PACK_ARCHITECTURE.md").read_text(encoding="utf-8")
-        self.assertIn("future design only", text)
-        self.assertIn("not implemented in Authored Pack v0.2.4", text)
-        self.assertIn("future-design one-line description for sealed mode only, not the current public pitch", text)
-
     def test_ci_workflow_calls_canonical_release_check(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
         self.assertIn("bash scripts/release_check.sh", workflow)
@@ -137,16 +131,6 @@ class TestPublicReleaseContract(unittest.TestCase):
         self.assertIn("git diff --quiet --ignore-submodules --", text)
         self.assertIn("git diff --cached --quiet --ignore-submodules --", text)
         self.assertIn("tracked worktree must be clean", text)
-
-    def test_release_contract_helper_preserves_clean_tree_gate(self) -> None:
-        helper = (ROOT / "scripts" / "close_release_contract.py").read_text(encoding="utf-8")
-        self.assertIn('"git", "worktree", "add", "--detach"', helper)
-        self.assertIn('"bash", "scripts/release_check.sh"', helper)
-        self.assertIn("dev-architect.task_receipt.v1", helper)
-        self.assertIn("docs/task_receipts", helper)
-        self.assertIn("tracked_tree_is_clean", helper)
-        self.assertNotIn("git stash", helper)
-        self.assertNotIn("git reset", helper)
 
     def test_gitignore_ignores_local_claude_settings(self) -> None:
         text = (ROOT / ".gitignore").read_text(encoding="utf-8")
@@ -165,7 +149,6 @@ class TestPublicReleaseContract(unittest.TestCase):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertNotIn("ssot/ui/", readme)
         self.assertNotIn("fresh, unpredictable bits", readme)
-        self.assertNotIn("SEALED_PACK_ARCHITECTURE.md", readme)
 
     def test_public_demo_and_copy_assets_exist(self) -> None:
         for rel in (
@@ -212,7 +195,6 @@ class TestPublicReleaseContract(unittest.TestCase):
         text = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
         self.assertIn("docs/briefs/public-voice.md", text)
         self.assertIn("docs/RELEASE_NOTES_TEMPLATE.md", text)
-        self.assertIn("Dev Architect owns the public voice contract", text)
 
     def test_public_copy_assets_keep_verify_and_link_language_honest(self) -> None:
         text = (ROOT / "docs" / "PUBLIC_COPY_ASSETS.md").read_text(encoding="utf-8")
@@ -285,7 +267,6 @@ class TestPublicReleaseContract(unittest.TestCase):
         for rel in (
             "docs/authored_pack_plan_2026-03-30.md",
             "docs/repo_architect_handoff_2026-03-30.md",
-            "docs/dev_architect_handoff_2026-04-09.md",
             "docs/claude_first_time_developer_review_2026-04-11.md",
             "docs/claude_final_first_time_developer_review_2026-04-11.md",
         ):

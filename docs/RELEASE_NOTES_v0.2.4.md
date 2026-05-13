@@ -16,7 +16,7 @@ Authored Pack `v0.2.4` remains the current public deterministic core:
 
 This release keeps the schemas and command surface stable. It does not add new runtime behavior. It sharpens the public explanation of the tool so first-time engineers and agents can understand the packet mental model, packet roots, and handoff surfaces faster.
 
-This release does **not** introduce sealed break-glass runtime behavior. That work remains future design only in `docs/SEALED_PACK_ARCHITECTURE.md`.
+This release does **not** introduce sealed break-glass runtime behavior.
 
 ## Product Boundary
 

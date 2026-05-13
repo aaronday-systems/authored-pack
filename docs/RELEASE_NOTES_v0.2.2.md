@@ -16,7 +16,7 @@ Authored Pack `v0.2.2` remains the current public deterministic core:
 
 This release keeps the schemas and public command surface stable. It adopts Apache License 2.0 and tightens the public release surface so the repo, package metadata, demo, and docs all describe the same current tool.
 
-This release does **not** introduce sealed break-glass runtime behavior. That work remains future design only in `docs/SEALED_PACK_ARCHITECTURE.md`.
+This release does **not** introduce sealed break-glass runtime behavior.
 
 ## Product Boundary
 

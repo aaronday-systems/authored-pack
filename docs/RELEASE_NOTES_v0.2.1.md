@@ -14,7 +14,7 @@ Authored Pack `v0.2.1` is the current public deterministic core:
 - `pack_root_sha256` and `payload_root_sha256`
 - optional reproducible derived seed material
 
-This release does **not** introduce sealed break-glass runtime behavior. That work remains future design only in `docs/SEALED_PACK_ARCHITECTURE.md`.
+This release does **not** introduce sealed break-glass runtime behavior.
 
 ## Product Boundary
 

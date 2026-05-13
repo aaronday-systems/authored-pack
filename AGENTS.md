@@ -1,22 +1,16 @@
 # Authored Pack Repo Contract
 
 
-## P0 Evaluation — Control Decisions
+## Control Decisions
 
-Push this to the front of the stack for repo-by-repo evaluation before changing or extending control flow.
-
-- If the code is making a control decision, it should do that from a typed report or explicit mode, not from human prose, path history, UI labels, or device-name guesses.
-- Do not cargo-cult this blindly. Evaluate it against the repo's real contract and operator surface.
-- When the current behavior relies on prose parsing, hidden path state, labels, or name heuristics, prefer an imperative command, typed schema/report, or explicit mode switch when that improves safety, automation, or legibility.
+Only add typed reports, schemas, modes, or control-plane adapters when the task explicitly requires them or the existing runtime contract already depends on them.
+For simplification tasks, prefer deletion, inlining, or direct product behavior over new control machinery.
 
 Authored Pack is a small deterministic pack/verify tool for bounded artifact sets.
 
 Read these first before making changes:
 - `README.md`
 - `CONTRIBUTING.md`
-- `docs/authored_pack_plan_2026-03-30.md`
-- `docs/repo_architect_handoff_2026-03-30.md`
-- `docs/dev_architect_handoff_2026-04-09.md`
 
 For public-surface wording or release notes, also read:
 - `docs/briefs/public-voice.md`
@@ -91,17 +85,5 @@ If checks are not run, say exactly which were skipped and why.
 
 ## Execution Style
 
-- Prefer encoding recurring judgment into tests, scripts, prompts, or repo conventions.
+- Prefer direct product changes over new process surfaces.
 - Prefer one canonical release-check script over manual command chains.
-- Prefer updating repo-local instructions over re-pasting the same handover into session titles.
-- Dev Architect owns the public voice contract in `docs/briefs/public-voice.md`.
-
-
-## Durable Decision Logging
-
-- Material work done through this application should leave a durable note that a later LLM can learn from without replaying the whole thread.
-- Default this on for code, config, schema, ops, security, runtime-policy, and workflow changes that alter behavior or intent.
-- Canonical historical log for this repo: `docs/execution_log.md`.
-- This log complements current truth surfaces; it does not replace canonical state files or present-state contracts.
-- Keep entries compact but decision-rich: date, what changed, why, key tradeoff, verification actually performed, and what remains uncertain.
-- Do not log noise. Tiny typo fixes or purely local scratch work do not need an entry unless they change behavior, contracts, operations, or future reasoning.

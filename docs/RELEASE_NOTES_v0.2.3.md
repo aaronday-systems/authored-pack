@@ -16,7 +16,7 @@ Authored Pack `v0.2.3` remains the current public deterministic core:
 
 This release keeps the schemas and public command surface stable. It hardens publication behavior in the core pack path, surfaces the full operator verification policy in the CLI, and makes the public docs and release scaffolding match that contract.
 
-This release does **not** introduce sealed break-glass runtime behavior. That work remains future design only in `docs/SEALED_PACK_ARCHITECTURE.md`.
+This release does **not** introduce sealed break-glass runtime behavior.
 
 ## Product Boundary
 
