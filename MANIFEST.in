@@ -1,0 +1,17 @@
+include LICENSE
+include README.md
+include pyproject.toml
+include setup.py
+recursive-include authored_pack *.py
+
+prune .github
+prune assets
+prune bin
+prune docs
+prune scripts
+prune tests
+prune authored_pack.egg-info
+global-exclude *.egg-info
+global-exclude *.py[cod]
+global-exclude __pycache__
+global-exclude .DS_Store

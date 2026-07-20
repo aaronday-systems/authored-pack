@@ -1,0 +1,828 @@
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+import tempfile
+import tomllib
+import unittest
+from pathlib import Path
+from unittest import mock
+
+from authored_pack import cli
+from authored_pack.pack import assemble_pack
+from tests.support import run_cli
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+class TestCliContract(unittest.TestCase):
+    _run_cli = staticmethod(run_cli)
+
+    def test_stamp_alias_json_emits_compatibility_envelope(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            rc, stdout, stderr = self._run_cli(
+                [
+                    "stamp",
+                    "--input",
+                    str(input_dir),
+                    "--out",
+                    str(out_dir),
+                    "--json",
+                ]
+            )
+
+            self.assertEqual(rc, 0)
+            self.assertEqual(stderr, "")
+            payload = json.loads(stdout)
+            self.assertEqual(payload["ok"], True)
+            self.assertEqual(payload["command"], "stamp")
+            self.assertIn("result", payload)
+            self.assertEqual(payload["result"]["pack_root_sha256"], payload["result"]["receipt"]["pack_root_sha256"])
+            self.assertNotIn("entropy_root_sha256", payload["result"])
+            self.assertNotIn("entropy_root_sha256", payload["result"]["receipt"])
+            self.assertTrue(payload["result"]["pack_dir"])
+
+    def test_assemble_json_emits_success_envelope(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            rc, stdout, stderr = self._run_cli(
+                [
+                    "assemble",
+                    "--input",
+                    str(input_dir),
+                    "--out",
+                    str(out_dir),
+                    "--json",
+                ]
+            )
+
+            self.assertEqual(rc, 0)
+            self.assertEqual(stderr, "")
+            payload = json.loads(stdout)
+            self.assertEqual(payload["ok"], True)
+            self.assertEqual(payload["command"], "assemble")
+            self.assertIn("result", payload)
+
+    def test_help_machine_path_uses_non_destructive_json_example(self) -> None:
+        proc = subprocess.run(
+            [sys.executable, "-m", "authored_pack", "--help"],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+        self.assertIn("Start here:", proc.stdout)
+        self.assertIn("python3 -m authored_pack assemble --input /ABS/PATH/TO/DIR --out ./out --zip", proc.stdout)
+        self.assertIn("python3 -m authored_pack verify --pack ./out/<pack_root_sha256>/authored_pack.zip", proc.stdout)
+        self.assertIn("python3 -m authored_pack inspect --pack ./out/<pack_root_sha256>/authored_pack.zip --json", proc.stdout)
+        self.assertNotIn("bin/authored_pack.py", proc.stdout)
+        self.assertIn("More:", proc.stdout)
+        self.assertIn("python3 -m authored_pack assemble --help", proc.stdout)
+        self.assertIn("python3 -m authored_pack consume-bin --help", proc.stdout)
+        self.assertNotIn("assemble (stamp)", proc.stdout)
+        self.assertNotIn("consume-bin (stamp-bin)", proc.stdout)
+        self.assertNotIn("Compatibility aliases:", proc.stdout)
+        self.assertNotIn("consume-bin is subtractive", proc.stdout)
+
+    def test_verify_json_emits_failure_envelope(self) -> None:
+        rc, stdout, stderr = self._run_cli(["verify", "--pack", "/no/such/path", "--json"])
+
+        self.assertEqual(rc, 2)
+        self.assertEqual(stderr, "")
+        payload = json.loads(stdout)
+        self.assertEqual(payload["ok"], False)
+        self.assertEqual(payload["command"], "verify")
+        self.assertEqual(payload["error"]["type"], "ValueError")
+        self.assertTrue(payload["error"]["message"])
+        self.assertEqual(payload["error"]["details"]["pack"], "/no/such/path")
+        self.assertEqual(payload["error"]["details"]["reason"], "unsupported pack path")
+        self.assertEqual(payload["error"]["details"]["supported_pack_types"], ["directory", "zip"])
+
+    def test_inspect_json_emits_summary_for_pack_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+            (input_dir / "b.txt").write_text("world", encoding="utf-8")
+
+            stamped = assemble_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=True, derive_seed=True)
+
+            rc, stdout, stderr = self._run_cli(["inspect", "--pack", str(stamped.pack_dir), "--json"])
+
+            self.assertEqual(rc, 0)
+            self.assertEqual(stderr, "")
+            payload = json.loads(stdout)
+            self.assertEqual(payload["ok"], True)
+            self.assertEqual(payload["command"], "inspect")
+            result = payload["result"]
+            self.assertEqual(result["pack_type"], "directory")
+            self.assertEqual(result["pack_root_sha256"], stamped.pack_root_sha256)
+            self.assertEqual(result["payload_root_sha256"], stamped.payload_root_sha256)
+            self.assertEqual(result["artifact_count"], 2)
+            self.assertTrue(result["has_receipt"])
+            self.assertTrue(result["has_zip"])
+            self.assertTrue(result["verification_ok"])
+            self.assertIn("receipt_summary", result)
+            self.assertIsInstance(result["artifact_preview"], list)
+
+    def test_inspect_json_emits_summary_for_pack_zip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            stamped = assemble_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=True, derive_seed=False)
+
+            rc, stdout, stderr = self._run_cli(["inspect", "--pack", str(stamped.zip_path), "--json"])
+
+            self.assertEqual(rc, 0)
+            self.assertEqual(stderr, "")
+            payload = json.loads(stdout)
+            self.assertEqual(payload["ok"], True)
+            self.assertEqual(payload["command"], "inspect")
+            result = payload["result"]
+            self.assertEqual(result["pack_type"], "zip")
+            self.assertTrue(result["has_zip"])
+            self.assertFalse(result["has_evidence_bundle"])
+            self.assertTrue(result["verification_ok"])
+
+    def test_inspect_json_roots_only_emits_machine_export_for_pack_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            stamped = assemble_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=True, derive_seed=False)
+
+            rc, stdout, stderr = self._run_cli(["inspect", "--pack", str(stamped.pack_dir), "--json", "--roots-only"])
+
+            self.assertEqual(rc, 0)
+            self.assertEqual(stderr, "")
+            payload = json.loads(stdout)
+            result = payload["result"]
+            self.assertEqual(
+                set(result),
+                {
+                    "inspected_path",
+                    "pack_type",
+                    "pack_root_sha256",
+                    "payload_root_sha256",
+                    "verification_ok",
+                    "verification_errors",
+                },
+            )
+            self.assertEqual(result["pack_type"], "directory")
+            self.assertEqual(result["pack_root_sha256"], stamped.pack_root_sha256)
+            self.assertEqual(result["payload_root_sha256"], stamped.payload_root_sha256)
+            self.assertTrue(result["verification_ok"])
+
+    def test_inspect_json_roots_only_emits_machine_export_for_pack_zip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            stamped = assemble_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=True, derive_seed=False)
+
+            rc, stdout, stderr = self._run_cli(["inspect", "--pack", str(stamped.zip_path), "--json", "--roots-only"])
+
+            self.assertEqual(rc, 0)
+            self.assertEqual(stderr, "")
+            payload = json.loads(stdout)
+            result = payload["result"]
+            self.assertEqual(result["pack_type"], "zip")
+            self.assertEqual(result["pack_root_sha256"], stamped.pack_root_sha256)
+            self.assertEqual(result["payload_root_sha256"], stamped.payload_root_sha256)
+            self.assertTrue(result["verification_ok"])
+
+    def test_inspect_roots_only_without_json_is_usage_error(self) -> None:
+        rc, stdout, stderr = self._run_cli(["inspect", "--pack", "/no/such/path", "--roots-only"])
+
+        self.assertEqual(rc, 2)
+        self.assertEqual(stdout, "")
+        self.assertIn("--roots-only requires --json", stderr)
+
+    def test_inspect_json_missing_pack_emits_failure_envelope(self) -> None:
+        rc, stdout, stderr = self._run_cli(["inspect", "--pack", "/no/such/path", "--json"])
+
+        self.assertEqual(rc, 2)
+        self.assertEqual(stderr, "")
+        payload = json.loads(stdout)
+        self.assertEqual(payload["ok"], False)
+        self.assertEqual(payload["command"], "inspect")
+        self.assertEqual(payload["error"]["type"], "ValueError")
+        self.assertIn("unsupported pack path", payload["error"]["message"])
+        self.assertEqual(payload["error"]["details"]["pack"], "/no/such/path")
+        self.assertEqual(payload["error"]["details"]["reason"], "unsupported pack path")
+
+    def test_verify_json_failure_preserves_all_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            stamped = assemble_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=False, derive_seed=False)
+            (stamped.pack_dir / "pack_root_sha256.txt").write_text(("0" * 64) + "\n", encoding="utf-8")
+            (stamped.pack_dir / "payload" / "extra.txt").write_text("extra", encoding="utf-8")
+
+            rc, stdout, stderr = self._run_cli(["verify", "--pack", str(stamped.pack_dir), "--json"])
+
+            self.assertEqual(rc, 1)
+            self.assertEqual(stderr, "")
+            payload = json.loads(stdout)
+            self.assertEqual(payload["ok"], False)
+            self.assertEqual(payload["command"], "verify")
+            errors = payload["error"]["details"]["errors"]
+            self.assertGreaterEqual(len(errors), 2)
+            self.assertIn("pack_root_sha256.txt does not match manifest root", errors)
+            self.assertTrue(any("unexpected payload files present" in err for err in errors))
+            self.assertEqual(
+                payload["error"]["details"]["limits"],
+                {"max_manifest_mib": 4, "max_artifact_mib": 512, "max_total_mib": 2048, "max_zip_members": 10000},
+            )
+
+    def test_inspect_json_fails_when_pack_verification_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            stamped = assemble_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=False, derive_seed=False)
+            (stamped.pack_dir / "payload" / "a.txt").write_text("HELLO", encoding="utf-8")
+
+            rc, stdout, stderr = self._run_cli(["inspect", "--pack", str(stamped.pack_dir), "--json", "--roots-only"])
+
+            self.assertEqual(rc, 1)
+            self.assertEqual(stderr, "")
+            payload = json.loads(stdout)
+            self.assertEqual(payload["ok"], False)
+            self.assertEqual(payload["command"], "inspect")
+            self.assertEqual(payload["error"]["type"], "VerificationError")
+            self.assertIn("sha256 mismatch: payload/a.txt", payload["error"]["details"]["errors"])
+
+    def test_verify_json_rejects_invalid_utf8_root_alias_without_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            stamped = assemble_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=False, derive_seed=False)
+            (stamped.pack_dir / "pack_root_sha256.txt").write_bytes(b"\xff\xfe")
+
+            rc, stdout, stderr = self._run_cli(["verify", "--pack", str(stamped.pack_dir), "--json"])
+
+            self.assertEqual(rc, 1)
+            self.assertEqual(stderr, "")
+            payload = json.loads(stdout)
+            self.assertEqual(payload["ok"], False)
+            self.assertEqual(payload["command"], "verify")
+            errors = payload["error"]["details"]["errors"]
+            self.assertIn("pack_root_sha256.txt is not valid UTF-8", errors)
+
+    def test_stamp_alias_json_usage_error_emits_failure_envelope(self) -> None:
+        rc, stdout, stderr = self._run_cli(["stamp", "--json"])
+
+        self.assertEqual(rc, 2)
+        self.assertEqual(stderr, "")
+        payload = json.loads(stdout)
+        self.assertEqual(payload["ok"], False)
+        self.assertEqual(payload["command"], "stamp")
+        self.assertEqual(payload["error"]["type"], "CliUsageError")
+        self.assertIn("required", payload["error"]["message"])
+
+    def test_stamp_alias_json_rejects_print_seed_with_failure_envelope(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            rc, stdout, stderr = self._run_cli(
+                [
+                    "stamp",
+                    "--input",
+                    str(input_dir),
+                    "--out",
+                    str(out_dir),
+                    "--derive-seed",
+                    "--print-seed",
+                    "--json",
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stderr, "")
+            payload = json.loads(stdout)
+        self.assertEqual(payload["ok"], False)
+        self.assertEqual(payload["command"], "stamp")
+        self.assertEqual(payload["error"]["type"], "ValueError")
+        self.assertIn("--json cannot be combined", payload["error"]["message"])
+        self.assertEqual(payload["error"]["details"]["flags"]["json"], True)
+        self.assertEqual(payload["error"]["details"]["flags"]["print_seed"], True)
+
+    def test_stamp_alias_json_rejects_write_seed_without_derive_seed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            rc, stdout, stderr = self._run_cli(
+                [
+                    "stamp",
+                    "--input",
+                    str(input_dir),
+                    "--out",
+                    str(out_dir),
+                    "--write-seed",
+                    "--json",
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stderr, "")
+            payload = json.loads(stdout)
+            self.assertEqual(payload["ok"], False)
+            self.assertEqual(payload["command"], "stamp")
+            self.assertEqual(payload["error"]["type"], "ValueError")
+            self.assertIn("--write-seed requires --derive-seed", payload["error"]["message"])
+            self.assertEqual(payload["error"]["details"]["flags"]["write_seed"], True)
+            self.assertEqual(payload["error"]["details"]["flags"]["derive_seed"], False)
+
+    def test_stamp_alias_print_seed_without_derive_seed_fails_fast(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            rc, stdout, stderr = self._run_cli(
+                [
+                    "stamp",
+                    "--input",
+                    str(input_dir),
+                    "--out",
+                    str(out_dir),
+                    "--print-seed",
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("--print-seed requires --derive-seed", stderr)
+
+    def test_verify_json_usage_error_emits_failure_envelope(self) -> None:
+        rc, stdout, stderr = self._run_cli(
+            [
+                "verify",
+                "--pack",
+                "/tmp/example.pack",
+                "--max-manifest-mib",
+                "not-an-int",
+                "--json",
+            ]
+        )
+
+        self.assertEqual(rc, 2)
+        self.assertEqual(stderr, "")
+        payload = json.loads(stdout)
+        self.assertEqual(payload["ok"], False)
+        self.assertEqual(payload["command"], "verify")
+        self.assertEqual(payload["error"]["type"], "CliUsageError")
+        self.assertIn("invalid int value", payload["error"]["message"])
+
+    def test_verify_json_rejects_non_positive_limit_as_usage_error(self) -> None:
+        rc, stdout, stderr = self._run_cli(
+            [
+                "verify",
+                "--pack",
+                "/tmp/example.pack",
+                "--max-total-mib",
+                "0",
+                "--json",
+            ]
+        )
+
+        self.assertEqual(rc, 2)
+        self.assertEqual(stderr, "")
+        payload = json.loads(stdout)
+        self.assertEqual(payload["ok"], False)
+        self.assertEqual(payload["command"], "verify")
+        self.assertEqual(payload["error"]["type"], "ValueError")
+        self.assertIn("verification limits must be positive integers", payload["error"]["message"])
+        self.assertEqual(payload["error"]["details"]["reason"], "invalid verify limits")
+        self.assertEqual(payload["error"]["details"]["invalid_limits"], {"max_total_mib": 0})
+
+    def test_inspect_json_rejects_non_positive_limit_as_usage_error(self) -> None:
+        rc, stdout, stderr = self._run_cli(
+            [
+                "inspect",
+                "--pack",
+                "/tmp/example.pack",
+                "--max-artifact-mib",
+                "0",
+                "--json",
+            ]
+        )
+
+        self.assertEqual(rc, 2)
+        self.assertEqual(stderr, "")
+        payload = json.loads(stdout)
+        self.assertEqual(payload["ok"], False)
+        self.assertEqual(payload["command"], "inspect")
+        self.assertEqual(payload["error"]["type"], "ValueError")
+        self.assertIn("verification limits must be positive integers", payload["error"]["message"])
+        self.assertEqual(payload["error"]["details"]["reason"], "invalid verify limits")
+        self.assertEqual(payload["error"]["details"]["invalid_limits"], {"max_artifact_mib": 0})
+
+    def test_stamp_bin_alias_consume_bin_json_emits_success_envelope(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            source_bin = tmp_path / "source_bin"
+            out_dir = tmp_path / "out"
+            source_bin.mkdir()
+            out_dir.mkdir()
+            (source_bin / "a.bin").write_bytes(b"entropy")
+
+            rc, stdout, stderr = self._run_cli(
+                [
+                    "stamp-bin",
+                    "--source-bin",
+                    str(source_bin),
+                    "--out",
+                    str(out_dir),
+                    "--count",
+                    "1",
+                    "--min-remaining",
+                    "0",
+                    "--allow-low-bin",
+                    "--json",
+                ]
+            )
+
+            self.assertEqual(rc, 0)
+            self.assertEqual(stderr, "")
+            payload = json.loads(stdout)
+            self.assertEqual(payload["ok"], True)
+            self.assertEqual(payload["command"], "stamp-bin")
+            self.assertEqual(payload["result"]["mode"], "source_bin")
+            self.assertNotIn("entropy_root_sha256", payload["result"])
+            self.assertNotIn("entropy_root_sha256", payload["result"]["receipt"])
+            self.assertEqual(payload["result"]["consumed_count"], 1)
+            self.assertEqual(payload["result"]["warnings"], [])
+            self.assertEqual(payload["result"]["policy"]["would_violate_low_watermark"], False)
+            self.assertEqual(len(payload["result"]["consumed"]), 1)
+            consumed = payload["result"]["consumed"][0]
+            self.assertEqual(consumed["src_relpath"], "a.bin")
+            self.assertTrue(consumed["src_path"].endswith("a.bin"))
+            self.assertTrue(consumed["staged_name"].endswith("__a.bin"))
+
+    def test_stamp_bin_alias_consume_bin_json_success_includes_low_watermark_warning_and_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            source_bin = tmp_path / "source_bin"
+            out_dir = tmp_path / "out"
+            source_bin.mkdir()
+            out_dir.mkdir()
+            (source_bin / "a.bin").write_bytes(b"entropy")
+            (source_bin / "b.bin").write_bytes(b"entropy-2")
+
+            rc, stdout, stderr = self._run_cli(
+                [
+                    "stamp-bin",
+                    "--source-bin",
+                    str(source_bin),
+                    "--out",
+                    str(out_dir),
+                    "--count",
+                    "1",
+                    "--min-remaining",
+                    "2",
+                    "--allow-low-bin",
+                    "--json",
+                ]
+            )
+
+            self.assertEqual(rc, 0)
+            self.assertEqual(stderr, "")
+            payload = json.loads(stdout)
+            self.assertEqual(payload["ok"], True)
+            self.assertEqual(payload["command"], "stamp-bin")
+            self.assertEqual(payload["result"]["policy"]["projected_remaining_after_count"], 1)
+            self.assertEqual(payload["result"]["policy"]["min_remaining"], 2)
+            self.assertEqual(payload["result"]["policy"]["allow_low_bin"], True)
+            self.assertEqual(payload["result"]["policy"]["would_violate_low_watermark"], True)
+            self.assertEqual(len(payload["result"]["warnings"]), 1)
+            self.assertIn("low-watermark", payload["result"]["warnings"][0])
+
+    def test_json_usage_failure_without_subcommand_reports_eps_command(self) -> None:
+        rc, stdout, stderr = self._run_cli(["--json"])
+
+        self.assertEqual(rc, 2)
+        self.assertEqual(stderr, "")
+        payload = json.loads(stdout)
+        self.assertEqual(payload["ok"], False)
+        self.assertEqual(payload["command"], "authored-pack")
+
+    def test_bare_cli_prints_help(self) -> None:
+        rc, stdout, stderr = self._run_cli([])
+
+        self.assertEqual(rc, 2)
+        self.assertEqual(stderr, "")
+        self.assertIn("usage: authored-pack", stdout)
+        self.assertIn("Start here:", stdout)
+        self.assertNotIn("bin/authored_pack.py", stdout)
+
+    def test_consume_bin_defaults_anchor_to_repo_root(self) -> None:
+        parser = cli.build_parser()
+        ns = parser.parse_args(["consume-bin", "--json"])
+
+        self.assertEqual(Path(ns.source_bin), cli.DEFAULT_SOURCE_BIN)
+        self.assertEqual(Path(ns.out), cli.DEFAULT_AUTHORED_OUT)
+
+    def test_consume_bin_help_marks_defaults_as_repo_clone_only(self) -> None:
+        proc = subprocess.run(
+            [sys.executable, "-m", "authored_pack", "consume-bin", "--help"],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+        self.assertIn("default in repo clone", proc.stdout)
+        self.assertIn("otherwise pass explicit path", proc.stdout)
+
+    def test_consume_bin_defaults_fail_fast_when_repo_clone_bins_are_unavailable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            missing_source = tmp_path / "missing_source_bin"
+            missing_out = tmp_path / "missing_authored_out"
+            with mock.patch.object(cli, "DEFAULT_SOURCE_BIN", missing_source), mock.patch.object(cli, "DEFAULT_AUTHORED_OUT", missing_out):
+                rc, stdout, stderr = self._run_cli(["consume-bin", "--json"])
+
+        self.assertEqual(rc, 2)
+        self.assertEqual(stderr, "")
+        payload = json.loads(stdout)
+        self.assertEqual(payload["ok"], False)
+        self.assertEqual(payload["command"], "consume-bin")
+        self.assertEqual(payload["error"]["type"], "ValueError")
+        self.assertIn("repo-local consume-bin defaults are unavailable here", payload["error"]["message"])
+        self.assertEqual(payload["error"]["details"]["reason"], "repo-local defaults unavailable")
+        self.assertTrue(payload["error"]["details"]["requires_explicit_paths"])
+
+    def test_stamp_bin_alias_human_consume_bin_output_includes_zip_and_evidence_paths_when_present(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            source_bin = tmp_path / "source_bin"
+            out_dir = tmp_path / "out"
+            source_bin.mkdir()
+            out_dir.mkdir()
+            (source_bin / "a.bin").write_bytes(b"entropy")
+
+            rc, stdout, stderr = self._run_cli(
+                [
+                    "stamp-bin",
+                    "--source-bin",
+                    str(source_bin),
+                    "--out",
+                    str(out_dir),
+                    "--count",
+                    "1",
+                    "--min-remaining",
+                    "0",
+                    "--allow-low-bin",
+                ]
+            )
+
+            self.assertEqual(rc, 0)
+            self.assertEqual(stderr, "")
+            self.assertIn("pack_dir:", stdout)
+            self.assertIn("zip_path:", stdout)
+            self.assertIn("evidence_bundle_path:", stdout)
+            self.assertIn(str(source_bin / "a.bin"), stdout)
+
+    def test_cli_version_flag_prints_runtime_version(self) -> None:
+        rc, stdout, stderr = self._run_cli(["--version"])
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(stderr, "")
+        self.assertEqual(stdout.strip(), f"authored-pack {cli.__version__}")
+
+    def test_python_module_help_smoke(self) -> None:
+        proc = subprocess.run(
+            [sys.executable, "-m", "authored_pack", "--help"],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+        self.assertIn("usage: authored-pack", proc.stdout)
+        self.assertIn("Authored Pack", proc.stdout)
+        self.assertNotIn("bin/authored_pack.py", proc.stdout)
+        self.assertIn("More:", proc.stdout)
+        self.assertIn("inspect", proc.stdout)
+        stamp_help = cli.build_parser()._subparsers._group_actions[0].choices["stamp"].format_help()
+        self.assertIn("Emit JSON envelope to stdout", stamp_help)
+
+    def test_verify_json_success_omits_legacy_root_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            stamped = assemble_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=False, derive_seed=False)
+            rc, stdout, stderr = self._run_cli(["verify", "--pack", str(stamped.pack_dir), "--json"])
+
+            self.assertEqual(rc, 0)
+            self.assertEqual(stderr, "")
+            payload = json.loads(stdout)
+            self.assertEqual(payload["ok"], True)
+            self.assertNotIn("entropy_root_sha256", payload["result"])
+            self.assertEqual(
+                payload["result"]["limits"],
+                {"max_manifest_mib": 4, "max_artifact_mib": 512, "max_total_mib": 2048, "max_zip_members": 10000},
+            )
+
+    def test_inspect_json_exposes_full_verification_limits(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            stamped = assemble_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=False, derive_seed=False)
+            rc, stdout, stderr = self._run_cli(
+                [
+                    "inspect",
+                    "--pack",
+                    str(stamped.pack_dir),
+                    "--max-manifest-mib",
+                    "5",
+                    "--max-artifact-mib",
+                    "6",
+                    "--max-total-mib",
+                    "7",
+                    "--max-zip-members",
+                    "8",
+                    "--json",
+                ]
+            )
+
+            self.assertEqual(rc, 0)
+            self.assertEqual(stderr, "")
+            payload = json.loads(stdout)
+            self.assertEqual(payload["ok"], True)
+            self.assertEqual(
+                payload["result"]["limits"],
+                {"max_manifest_mib": 5, "max_artifact_mib": 6, "max_total_mib": 7, "max_zip_members": 8},
+            )
+
+    def test_verify_help_exposes_full_verification_policy_flags(self) -> None:
+        proc = subprocess.run(
+            [sys.executable, "-m", "authored_pack", "verify", "--help"],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+        self.assertIn("--max-manifest-mib", proc.stdout)
+        self.assertIn("--max-artifact-mib", proc.stdout)
+        self.assertIn("--max-total-mib", proc.stdout)
+        self.assertIn("--max-zip-members", proc.stdout)
+
+    def test_inspect_help_exposes_full_verification_policy_flags(self) -> None:
+        proc = subprocess.run(
+            [sys.executable, "-m", "authored_pack", "inspect", "--help"],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+        self.assertIn("--max-manifest-mib", proc.stdout)
+        self.assertIn("--max-artifact-mib", proc.stdout)
+        self.assertIn("--max-total-mib", proc.stdout)
+        self.assertIn("--max-zip-members", proc.stdout)
+
+    def test_inspect_rejects_negative_artifact_preview_as_usage_error(self) -> None:
+        rc, stdout, stderr = self._run_cli(
+            ["inspect", "--pack", "/no/such/path", "--artifact-preview", "-1", "--json"]
+        )
+        self.assertEqual(rc, 2)
+        self.assertEqual(stderr, "")
+        payload = json.loads(stdout)
+        self.assertEqual(payload["ok"], False)
+        self.assertIn("--artifact-preview must be >= 0", payload["error"]["message"])
+
+    def test_human_inspect_failure_prints_detailed_verifier_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pack_dir = Path(tmp) / "pack"
+            pack_dir.mkdir()
+            (pack_dir / "manifest.json").write_text('{"schema_version":"authored.pack.v1","artifacts":[1]}')
+            rc, stdout, stderr = self._run_cli(["inspect", "--pack", str(pack_dir)])
+        self.assertEqual(rc, 1)
+        self.assertEqual(stdout, "")
+        self.assertIn("artifact[0] not an object", stderr)
+
+    def test_consume_bin_help_discloses_random_selection(self) -> None:
+        help_text = cli.build_parser()._subparsers._group_actions[0].choices["consume-bin"].format_help()
+        self.assertIn("Randomly select", help_text)
+
+    def test_consume_bin_repo_defaults_are_validated_independently(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            explicit_source = tmp_path / "source"
+            explicit_source.mkdir()
+            explicit_out = tmp_path / "explicit_out"
+            default_out = tmp_path / "default_out"
+            default_out.mkdir()
+            missing_default_source = tmp_path / "missing_source"
+            with mock.patch.object(cli, "DEFAULT_SOURCE_BIN", missing_default_source), mock.patch.object(
+                cli, "DEFAULT_AUTHORED_OUT", default_out
+            ):
+                cli._ensure_repo_clone_consume_bin_defaults(explicit_source.resolve(), default_out.resolve())
+
+            default_source = tmp_path / "default_source"
+            default_source.mkdir()
+            missing_default_out = tmp_path / "missing_out"
+            with mock.patch.object(cli, "DEFAULT_SOURCE_BIN", default_source), mock.patch.object(
+                cli, "DEFAULT_AUTHORED_OUT", missing_default_out
+            ):
+                cli._ensure_repo_clone_consume_bin_defaults(default_source.resolve(), explicit_out.resolve())
+
+    def test_human_assemble_output_includes_zip_and_evidence_paths_when_present(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            rc, stdout, stderr = self._run_cli(
+                [
+                    "stamp",
+                    "--input",
+                    str(input_dir),
+                    "--out",
+                    str(out_dir),
+                    "--zip",
+                    "--evidence-bundle",
+                ]
+            )
+
+            self.assertEqual(rc, 0)
+            self.assertEqual(stderr, "")
+            self.assertIn("pack_dir:", stdout)
+            self.assertIn("zip_path:", stdout)
+            self.assertIn("evidence_bundle_path:", stdout)
+
+    def test_console_script_metadata_present(self) -> None:
+        data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        scripts = data.get("project", {}).get("scripts", {})
+        self.assertEqual(scripts.get("authored-pack"), "authored_pack.cli:main")
+        self.assertEqual(len(scripts), 1)
+
+
+if __name__ == "__main__":
+    unittest.main()

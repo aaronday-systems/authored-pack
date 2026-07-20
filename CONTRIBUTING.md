@@ -1,0 +1,62 @@
+# Contributing
+
+Authored Pack is a small deterministic pack/verify tool for humans and agents.
+
+## Supported Python
+
+- Python 3.11
+- Python 3.12
+- Python 3.13
+
+## Canonical Test Command
+
+```bash
+pytest -q
+```
+
+Also run the module smoke check before opening a release-sensitive pull request:
+
+```bash
+python3 -m authored_pack --help
+```
+
+## Change Shape
+
+Keep changes small, explicit, and reversible.
+
+Preferred shape:
+- one focused concern per pull request
+- tests in the same change when behavior or contracts move
+- docs updated when CLI, manifest, receipt, zip, or TUI operator wording changes
+
+## Contract-Sensitive Areas
+
+If you change any of the following, you must add or update tests in the same pull request:
+- `manifest.json` schema or canonicalization
+- `receipt.json` schema or finalization order
+- `authored_pack.zip` contents or verification rules
+- CLI `--json` envelopes
+- TUI flows that affect receipt, audit, or derived-seed handling
+
+## Branching / PR Expectations
+
+- Use short-lived topic branches.
+- Keep diffs reviewable.
+- Describe trust-boundary changes plainly in the PR body.
+- Call out any compatibility impact on existing packs or downstream tooling.
+
+## Before You Open A PR
+
+Run the canonical release check:
+
+```bash
+bash scripts/release_check.sh
+```
+
+That contributor mode accepts an existing dirty patch and fails if the checks add tracked drift. For an actual tag or release candidate, enforce the fully clean-tree gate:
+
+```bash
+bash scripts/release_check.sh --release-clean
+```
+
+If the change touches release-facing docs, also verify the README commands still match the runtime behavior.

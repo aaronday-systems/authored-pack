@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=77.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "authored-pack"
+version = "0.2.5"
+description = "Authored Pack is a deterministic pack/verify tool for humans and agents."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Aaron Day" }]
+requires-python = ">=3.11"
+
+[project.scripts]
+authored-pack = "authored_pack.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["authored_pack*"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+norecursedirs = ["out", ".git", ".venv", "dist", "build"]

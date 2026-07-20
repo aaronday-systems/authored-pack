@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.DS_Store
+.pytest_cache/
+dist/
+build/
+*.egg-info/
+out/
+eps_drop/
+.claude/
+.control/
+.local_scratch/
+docs/goals/
+.idea/
+.vscode/

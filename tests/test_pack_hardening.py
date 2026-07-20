@@ -1,0 +1,539 @@
+from __future__ import annotations
+
+import json
+import shutil
+import tempfile
+import time
+import unittest
+import zipfile
+from pathlib import Path
+from unittest.mock import patch
+
+from authored_pack import pack as pack_module
+from authored_pack.manifest import MANIFEST_SCHEMA_VERSION
+from authored_pack.pack import assemble_pack, verify_pack, write_evidence_bundle, _write_zip
+
+
+class TestPackHardening(unittest.TestCase):
+    def test_safe_write_text_leaves_no_temp_files_on_success(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            target = tmp_path / "pack_root_sha256.txt"
+
+            pack_module._safe_write_text(target, "hello\n")
+
+            self.assertEqual(target.read_text(encoding="utf-8"), "hello\n")
+            self.assertEqual(list(tmp_path.glob(f".{target.name}.*")), [])
+
+    def test_safe_write_json_leaves_no_temp_files_on_replace_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            target = tmp_path / "receipt.json"
+
+            with patch("authored_pack.pack.os.replace", side_effect=OSError("boom")):
+                with self.assertRaises(OSError):
+                    pack_module._safe_write_json(target, {"ok": True})
+
+            self.assertFalse(target.exists())
+            self.assertEqual(list(tmp_path.glob(f".{target.name}.*")), [])
+
+    def test_assemble_pack_rejects_overlapping_input_and_out(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = input_dir / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            with self.assertRaises(ValueError):
+                assemble_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=False, derive_seed=False)
+
+    def test_source_record_receipt_fields_reject_reserved_keys_and_clean_temp_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            cases = [
+                {"pack_root_sha256": "0" * 64},
+                {"entropy_schema_version": "entropy.pack.v1"},
+                {"entropy_root_sha256": "a" * 64},
+                {"seed_fingerprint_sha256": "b" * 64},
+            ]
+            for extra_fields in cases:
+                with self.subTest(extra_fields=extra_fields):
+                    with self.assertRaisesRegex(ValueError, "reserved field"):
+                        assemble_pack(
+                            input_dir=input_dir,
+                            out_dir=out_dir,
+                            zip_pack=True,
+                            derive_seed=False,
+                            source_record_receipt_fields=extra_fields,
+                        )
+
+                    self.assertEqual(list(out_dir.iterdir()), [])
+
+            with self.assertRaisesRegex(ValueError, "source record receipt fields must be a dict or None"):
+                assemble_pack(
+                    input_dir=input_dir,
+                    out_dir=out_dir,
+                    zip_pack=False,
+                    derive_seed=False,
+                    source_record_receipt_fields="not a dict",  # type: ignore[arg-type]
+                )
+
+            self.assertEqual(list(out_dir.iterdir()), [])
+
+    def test_assemble_pack_rejects_input_nested_under_out(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            out_dir = tmp_path / "out"
+            input_dir = out_dir / "input"
+            out_dir.mkdir()
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            with self.assertRaises(ValueError):
+                assemble_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=False, derive_seed=False)
+
+    def test_assemble_pack_refuses_to_reuse_corrupted_existing_pack(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            first = assemble_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=True, derive_seed=False)
+            (first.pack_dir / "payload" / "a.txt").write_text("tampered", encoding="utf-8")
+
+            with self.assertRaises(ValueError):
+                assemble_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=True, derive_seed=False)
+
+    def test_assemble_pack_reuse_is_read_only_when_existing_pack_verifies(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            first = assemble_pack(
+                input_dir=input_dir,
+                out_dir=out_dir,
+                zip_pack=True,
+                derive_seed=True,
+                evidence_bundle=True,
+            )
+            receipt_path = first.pack_dir / "receipt.json"
+            zip_path = first.pack_dir / "authored_pack.zip"
+            evidence_path = first.evidence_bundle_path
+            self.assertIsNotNone(evidence_path)
+            assert evidence_path is not None
+
+            receipt_before = receipt_path.read_text(encoding="utf-8")
+            receipt_mtime = receipt_path.stat().st_mtime_ns
+            zip_mtime = zip_path.stat().st_mtime_ns
+            evidence_mtime = evidence_path.stat().st_mtime_ns
+
+            time.sleep(0.01)
+
+            second = assemble_pack(
+                input_dir=input_dir,
+                out_dir=out_dir,
+                zip_pack=False,
+                derive_seed=True,
+                evidence_bundle=False,
+            )
+
+            self.assertEqual(second.pack_dir, first.pack_dir)
+            self.assertEqual(receipt_path.read_text(encoding="utf-8"), receipt_before)
+            self.assertEqual(receipt_path.stat().st_mtime_ns, receipt_mtime)
+            self.assertEqual(zip_path.stat().st_mtime_ns, zip_mtime)
+            self.assertEqual(evidence_path.stat().st_mtime_ns, evidence_mtime)
+
+    def test_assemble_pack_reuse_materializes_requested_zip_on_existing_pack(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            first = assemble_pack(
+                input_dir=input_dir,
+                out_dir=out_dir,
+                zip_pack=False,
+                derive_seed=False,
+                evidence_bundle=False,
+            )
+            receipt_path = first.pack_dir / "receipt.json"
+            receipt_before = json.loads(receipt_path.read_text(encoding="utf-8"))
+            self.assertNotIn("zip_path", receipt_before)
+            self.assertFalse((first.pack_dir / "authored_pack.zip").exists())
+
+            second = assemble_pack(
+                input_dir=input_dir,
+                out_dir=out_dir,
+                zip_pack=True,
+                derive_seed=False,
+                evidence_bundle=False,
+            )
+
+            zip_path = first.pack_dir / "authored_pack.zip"
+            self.assertEqual(second.pack_dir, first.pack_dir)
+            self.assertEqual(second.zip_path, zip_path)
+            self.assertTrue(zip_path.is_file())
+            self.assertTrue(verify_pack(zip_path).ok)
+            receipt_after = json.loads(receipt_path.read_text(encoding="utf-8"))
+            self.assertEqual(receipt_after.get("zip_path"), "authored_pack.zip")
+
+    def test_assemble_pack_reuse_leaves_receipt_unchanged_when_zip_materialization_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            first = assemble_pack(
+                input_dir=input_dir,
+                out_dir=out_dir,
+                zip_pack=False,
+                derive_seed=False,
+                evidence_bundle=False,
+            )
+            receipt_path = first.pack_dir / "receipt.json"
+            receipt_before = receipt_path.read_text(encoding="utf-8")
+            zip_path = first.pack_dir / "authored_pack.zip"
+
+            with patch("authored_pack.pack._write_zip_to_path", side_effect=OSError("boom")):
+                with self.assertRaises(OSError):
+                    assemble_pack(
+                        input_dir=input_dir,
+                        out_dir=out_dir,
+                        zip_pack=True,
+                        derive_seed=False,
+                        evidence_bundle=False,
+                    )
+
+            self.assertEqual(receipt_path.read_text(encoding="utf-8"), receipt_before)
+            self.assertFalse(zip_path.exists())
+            self.assertEqual(list(first.pack_dir.glob(".authored_pack.zip.*")), [])
+
+    def test_assemble_pack_reuse_materializes_requested_evidence_bundle_on_existing_pack(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            first = assemble_pack(
+                input_dir=input_dir,
+                out_dir=out_dir,
+                zip_pack=False,
+                derive_seed=False,
+                evidence_bundle=False,
+            )
+            expected_path = first.pack_dir / f"authored_evidence_{first.root_sha256}.zip"
+            self.assertFalse(expected_path.exists())
+
+            second = assemble_pack(
+                input_dir=input_dir,
+                out_dir=out_dir,
+                zip_pack=False,
+                derive_seed=False,
+                evidence_bundle=True,
+            )
+
+            self.assertEqual(second.pack_dir, first.pack_dir)
+            self.assertEqual(second.evidence_bundle_path, expected_path)
+            self.assertTrue(expected_path.is_file())
+            self.assertTrue(bool(second.evidence_bundle_sha256))
+
+    def test_assemble_pack_reuse_leaves_no_evidence_artifacts_when_materialization_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            first = assemble_pack(
+                input_dir=input_dir,
+                out_dir=out_dir,
+                zip_pack=False,
+                derive_seed=False,
+                evidence_bundle=False,
+            )
+            expected_path = first.pack_dir / f"authored_evidence_{first.root_sha256}.zip"
+            expected_sha_path = first.pack_dir / f"{expected_path.name}.sha256"
+
+            with patch("authored_pack.pack._write_evidence_bundle_to_path", side_effect=OSError("boom")):
+                with self.assertRaises(OSError):
+                    assemble_pack(
+                        input_dir=input_dir,
+                        out_dir=out_dir,
+                        zip_pack=False,
+                        derive_seed=False,
+                        evidence_bundle=True,
+                    )
+
+            self.assertFalse(expected_path.exists())
+            self.assertFalse(expected_sha_path.exists())
+            self.assertEqual(list(first.pack_dir.glob(f".{expected_path.name}.*")), [])
+
+    def test_reuse_rolls_back_zip_and_receipt_when_later_evidence_publication_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            first = assemble_pack(input_dir=input_dir, out_dir=out_dir)
+            receipt_path = first.pack_dir / "receipt.json"
+            receipt_before = receipt_path.read_bytes()
+
+            with patch("authored_pack.pack._write_evidence_bundle_to_path", side_effect=OSError("boom")):
+                with self.assertRaisesRegex(OSError, "boom"):
+                    assemble_pack(
+                        input_dir=input_dir,
+                        out_dir=out_dir,
+                        zip_pack=True,
+                        evidence_bundle=True,
+                    )
+
+            self.assertEqual(receipt_path.read_bytes(), receipt_before)
+            self.assertFalse((first.pack_dir / "authored_pack.zip").exists())
+            self.assertEqual(list(first.pack_dir.glob("authored_evidence_*")), [])
+            self.assertEqual(list(out_dir.glob(".ap-reuse-artifacts-*")), [])
+
+    def test_archive_helpers_reject_symlinks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            pack_dir = tmp_path / "pack"
+            payload = pack_dir / "payload"
+            payload.mkdir(parents=True)
+            (pack_dir / "manifest.json").write_text(
+                json.dumps({"schema_version": MANIFEST_SCHEMA_VERSION, "artifacts": []}),
+                encoding="utf-8",
+            )
+            (payload / "real.txt").write_text("hello", encoding="utf-8")
+            (payload / "link.txt").symlink_to(payload / "real.txt")
+
+            with self.assertRaises(ValueError):
+                _write_zip(pack_dir, pack_dir / "authored_pack.zip")
+
+            with self.assertRaises(ValueError):
+                write_evidence_bundle(pack_dir)
+
+    def test_assemble_pack_writes_private_seed_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            res = assemble_pack(
+                input_dir=input_dir,
+                out_dir=out_dir,
+                zip_pack=False,
+                derive_seed=True,
+                write_seed_files=True,
+            )
+
+            for name in ("seed_master.hex", "seed_master.b64"):
+                path = res.pack_dir / name
+                self.assertTrue(path.is_file())
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
+    def test_reused_pack_materializes_requested_private_seed_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            first = assemble_pack(
+                input_dir=input_dir,
+                out_dir=out_dir,
+                zip_pack=True,
+                derive_seed=True,
+                write_seed_files=False,
+            )
+            second = assemble_pack(
+                input_dir=input_dir,
+                out_dir=out_dir,
+                zip_pack=True,
+                derive_seed=True,
+                write_seed_files=True,
+            )
+
+            self.assertEqual(second.pack_dir, first.pack_dir)
+            for name in ("seed_master.hex", "seed_master.b64"):
+                path = second.pack_dir / name
+                self.assertTrue(path.is_file())
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            self.assertTrue(verify_pack(second.zip_path).ok if second.zip_path is not None else False)
+
+    def test_assemble_pack_fails_when_copied_payload_diverges(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            def corrupting_copy(src, dst, *args, **kwargs):
+                Path(dst).parent.mkdir(parents=True, exist_ok=True)
+                Path(dst).write_text("tampered", encoding="utf-8")
+                return ("0" * 64, 8)
+
+            with patch("authored_pack.pack.trusted_copy_with_sha256", side_effect=corrupting_copy):
+                with self.assertRaises(ValueError):
+                    assemble_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=False, derive_seed=False)
+
+    def test_assemble_pack_rejects_symlink_source_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            target = input_dir / "target.txt"
+            target.write_text("hello", encoding="utf-8")
+            link = input_dir / "link.txt"
+            try:
+                link.symlink_to(target)
+            except OSError:
+                self.skipTest("symlinks not supported on this platform")
+
+            with self.assertRaises(ValueError):
+                assemble_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=False, derive_seed=False)
+
+    def test_verify_pack_uses_trusted_sha256_for_artifact_hashing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            res = assemble_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=False, derive_seed=False)
+
+            with patch("authored_pack.pack.trusted_sha256_hex", wraps=pack_module.trusted_sha256_hex) as mocked:
+                verified = verify_pack(res.pack_dir)
+
+            self.assertTrue(verified.ok, msg=verified.errors)
+            self.assertGreaterEqual(mocked.call_count, 1)
+
+    def test_write_zip_uses_trusted_binary_reader(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("hello", encoding="utf-8")
+
+            res = assemble_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=False, derive_seed=False)
+            zip_path = res.pack_dir / "authored_pack.zip"
+
+            with patch("authored_pack.pack.trusted_binary_reader", wraps=pack_module.trusted_binary_reader) as mocked:
+                _write_zip(res.pack_dir, zip_path)
+
+            self.assertTrue(zip_path.is_file())
+            self.assertGreaterEqual(mocked.call_count, 1)
+
+    def test_assemble_rejects_backslash_source_relpaths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "bad\\name.txt").write_text("hello", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "backslash"):
+                assemble_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=False, derive_seed=False)
+
+    def test_verify_rejects_payload_directory_as_artifact_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            pack_dir = tmp_path / "pack"
+            payload = pack_dir / "payload"
+            payload.mkdir(parents=True)
+            manifest = {
+                "schema_version": MANIFEST_SCHEMA_VERSION,
+                "artifacts": [{"path": "payload", "sha256": "0" * 64, "size_bytes": 0}],
+            }
+            root = pack_module.manifest_root_sha256(manifest)
+            (pack_dir / "manifest.json").write_text(pack_module._canonical_json_text(manifest), encoding="utf-8")
+            (pack_dir / "pack_root_sha256.txt").write_text(root + "\n", encoding="utf-8")
+
+            res = verify_pack(pack_dir)
+
+            self.assertFalse(res.ok)
+            self.assertIn("artifact[0].path invalid", res.errors)
+
+    def test_verify_total_cap_counts_failed_artifact_reads(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "input"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir()
+            (input_dir / "a.txt").write_text("aaaa", encoding="utf-8")
+            (input_dir / "b.txt").write_text("bbbb", encoding="utf-8")
+            res = assemble_pack(input_dir=input_dir, out_dir=out_dir, zip_pack=False, derive_seed=False)
+            (res.pack_dir / "payload" / "a.txt").write_text("cccc", encoding="utf-8")
+            (res.pack_dir / "payload" / "b.txt").write_text("dddd", encoding="utf-8")
+
+            verified = verify_pack(res.pack_dir, max_artifact_bytes=10, max_total_bytes=5)
+
+            self.assertFalse(verified.ok)
+            self.assertTrue(any("sha256 mismatch: payload/a.txt" in err for err in verified.errors))
+            self.assertTrue(any("pack too large" in err for err in verified.errors))
+
+    def test_verify_rejects_non_finite_manifest_json_without_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            pack_dir = tmp_path / "pack"
+            payload = pack_dir / "payload"
+            payload.mkdir(parents=True)
+            (payload / "a.txt").write_text("hello", encoding="utf-8")
+            bad_manifest = '{"schema_version":"authored.pack.v1","artifacts":[],"notes":NaN}'
+            (pack_dir / "manifest.json").write_text(bad_manifest, encoding="utf-8")
+
+            dir_result = verify_pack(pack_dir)
+
+            self.assertFalse(dir_result.ok)
+            self.assertTrue(any("non-finite JSON value" in err for err in dir_result.errors))
+
+            zip_path = tmp_path / "bad.zip"
+            with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr("manifest.json", bad_manifest)
+
+            zip_result = verify_pack(zip_path)
+
+            self.assertFalse(zip_result.ok)
+            self.assertTrue(any("non-finite JSON value" in err for err in zip_result.errors))
+
+    def test_verify_zip_member_count_cap_fails_before_member_scan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            zip_path = Path(tmp) / "many.zip"
+            with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr("manifest.json", "{}")
+                zf.writestr("payload/a.txt", "a")
+                zf.writestr("payload/b.txt", "b")
+
+            res = verify_pack(zip_path, max_zip_members=2)
+
+            self.assertFalse(res.ok)
+            self.assertEqual(res.errors, ["zip member count exceeds cap: count=3 cap=2"])
+
+
+if __name__ == "__main__":
+    unittest.main()
