@@ -37,82 +37,45 @@ class TestPublicReleaseContract(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
         self.assertEqual(proc.stdout.strip(), f"authored-pack {data['project']['version']}")
 
-    def test_readme_states_current_public_release_boundary(self) -> None:
+    def test_readme_keeps_durable_public_contract(self) -> None:
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
-        self.assertIn("Current release: `v0.2.5`", readme)
+        self.assertIn("Current release: [`v0.2.5`]", readme)
         self.assertIn("git clone https://github.com/aaronday-systems/authored-pack.git", readme)
         self.assertIn("bash scripts/demo_v1.sh", readme)
         self.assertIn("python3 -m authored_pack assemble --input ./my_case --out ./out --zip", readme)
-        self.assertIn("Most first-time users can start with `python3 -m authored_pack --help`", readme)
-        self.assertIn("Use the TUI when you want to stage notes, photos, or other manual sources", readme)
-        self.assertIn("open source under Apache License 2.0", readme)
-        self.assertIn("OSI open source", readme)
-        self.assertIn("deterministic pack you can verify later", readme)
-        self.assertIn("## Why This Exists", readme)
-        self.assertIn("Entropy Pack Stamper", readme)
-        self.assertIn("came out of earlier work on agent seed state", readme)
+        self.assertIn("deterministic pack that another person or process can verify later", readme)
+        for artifact in ("`payload/`", "`manifest.json`", "`receipt.json`", "`pack_root_sha256.txt`"):
+            self.assertIn(artifact, readme)
+        self.assertIn("`payload_root_sha256` identifies the payload bytes", readme)
+        self.assertIn("`pack_root_sha256` identifies the canonical manifest contract", readme)
+        self.assertIn("It does not directly hash `receipt.json`, ZIP-container bytes", readme)
+        self.assertIn("Verification checks the presented pack against its manifest", readme)
+        self.assertIn("It does not establish authorship, timestamp truth, secrecy, or signed provenance", readme)
+        self.assertIn("`assemble` does not apply these receiver-side limits", readme)
+        self.assertIn("inspect --json --roots-only", readme)
+        self.assertIn("It randomly selects files and moves them into the completed pack", readme)
+        self.assertIn("public verbs are `assemble` and `consume-bin`", readme)
         self.assertIn("The name was wrong.", readme)
         self.assertIn("Not an entropy source. Not a proof system. Not an attestation engine.", readme)
-        self.assertIn("## Suggested Use Cases", readme)
-        self.assertIn("Keep this list narrow. These are the strongest current fits.", readme)
-        self.assertIn("`Bug repro bundle`", readme)
-        self.assertIn("`CI failure packet`", readme)
-        self.assertIn("`QA regression fixture pack`", readme)
-        self.assertIn("`Field capture packet`", readme)
-        self.assertIn("`Verified human-to-agent handoff`", readme)
-        self.assertNotIn("`Debug session freeze`", readme)
-        self.assertNotIn("`Design review packet`", readme)
-        self.assertNotIn("`Lab run bundle`", readme)
-        self.assertIn("## Use It When", readme)
-        self.assertIn("you want to hand off a bounded folder to another engineer or agent", readme)
-        self.assertIn("## Don't Use It When", readme)
-        self.assertIn("you need signed provenance or attestation", readme)
-        self.assertIn("## Core Mental Model", readme)
-        self.assertIn("Think packet, not archive:", readme)
-        self.assertIn("## Pack Roots", readme)
-        boundary = (
-            "`pack_root_sha256` is the SHA-256 of the manifest object's canonical JSON serialization. "
-            "It commits to the artifact records and metadata inside that manifest, including "
-            "`payload_root_sha256`; it does not directly hash `receipt.json`, ZIP-container bytes, "
-            "evidence bundles, source records, or seed files."
-        )
-        self.assertIn(boundary, readme)
-        self.assertNotIn("`pack_root_sha256` identifies the whole packet", readme)
-        self.assertNotIn("`pack_root_sha256` is the identity of the whole pack.", readme)
-        self.assertNotIn("Use `pack_root_sha256` when the whole packet contract matters.", readme)
-        self.assertIn("## Share Surfaces", readme)
-        self.assertIn("## For Automation and Agents", readme)
-        self.assertIn("`verify` and `inspect` enforce operator caps", readme)
-        self.assertIn("`--max-manifest-mib`, `--max-artifact-mib`, and `--max-total-mib`", readme)
-        self.assertIn("`assemble` remains unconstrained", readme)
-        self.assertIn("inspect --json --roots-only", readme)
-        self.assertIn("macOS terminals", readme)
-        self.assertIn("Linux terminals", readme)
-        self.assertIn("best-effort", readme)
-        self.assertNotIn("source-available under the Aaron Day license", readme)
-        self.assertNotIn("not OSI open source", readme)
-        self.assertNotIn("Aaron Day license", readme)
-        self.assertNotIn("pipx", readme)
-        self.assertNotIn("uv tool", readme)
-        self.assertNotIn("authored-pack --help", readme)
-        self.assertNotIn("--insane", readme)
-        self.assertNotIn("entropy_root_sha256", readme)
-        self.assertNotIn("seed_fingerprint_sha256", readme)
-        self.assertNotIn("Use the canonical noun first", readme)
-        self.assertNotIn("entropy-pack-stamper idea", readme)
-        self.assertNotIn("public v1 is", readme.lower())
-        self.assertNotIn("It does not create entropy.", readme)
-        self.assertNotIn("assembling, verifying, inspecting, and exporting", readme)
-        self.assertLess(readme.index("## Quick Start"), readme.index("## Why This Exists"))
-        self.assertLess(readme.index("## Quick Start"), readme.index("## Core Mental Model"))
-        self.assertLess(readme.index("## Core Mental Model"), readme.index("## Why This Exists"))
-        self.assertLess(readme.index("## Why This Exists"), readme.index("## Trust Boundary"))
-        self.assertLess(readme.index("## Use It When"), readme.index("## What You Get"))
-        self.assertLess(readme.index("## Pack Roots"), readme.index("## Verify"))
-        self.assertLess(readme.index("## Share Surfaces"), readme.index("## Verify"))
-        self.assertLess(readme.index("## For Automation and Agents"), readme.index("## Consume Bin"))
-        self.assertLess(readme.index("## JSON Contract"), readme.index("## Suggested Use Cases"))
-        self.assertLess(readme.index("## Suggested Use Cases"), readme.index("## Public Release Boundary"))
+        self.assertIn("open source under the [Apache License 2.0](LICENSE)", readme)
+
+        for cruft in (
+            "Keep this list narrow",
+            "## Suggested Use Cases",
+            "Concrete example:",
+            "Expected result:",
+            "Advanced note:",
+            "`verification_errors`",
+        ):
+            self.assertNotIn(cruft, readme)
+
+        for false_claim in (
+            "`pack_root_sha256` identifies the whole packet",
+            "fresh, unpredictable bits",
+            "source-available under the Aaron Day license",
+            "signed provenance and attestation",
+        ):
+            self.assertNotIn(false_claim, readme)
 
     def test_security_policy_uses_current_product_identity(self) -> None:
         text = (ROOT / "SECURITY.md").read_text(encoding="utf-8")
