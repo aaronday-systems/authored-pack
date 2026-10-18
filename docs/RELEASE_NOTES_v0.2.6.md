@@ -15,6 +15,8 @@ This patch closes a temporary output file descriptor when opening the source for
 
 Regression tests now cover that failure path, HKDF output-length boundaries, bounded streaming reads, and source-bin defaults and filtering.
 
+The README now leads with a practical handoff example, clarifies how to use the emitted ZIP path, and explains when a trusted expected root is needed.
+
 ## Product Boundary
 
 Authored Pack provides deterministic packaging, canonical hashing, and verification. It does not provide randomness, automatic secrecy, signed provenance, or attestation.
