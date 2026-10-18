@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import io
 import os
 import tempfile
 import unittest
@@ -11,6 +13,30 @@ from authored_pack.pack import assemble_pack, verify_pack
 
 
 class TestContainmentAndBounds(unittest.TestCase):
+    def test_stream_hash_bounds_each_read_and_counts_multiple_chunks(self) -> None:
+        data = b"x" * (1024 * 1024 + 7)
+
+        class BoundedReader(io.BytesIO):
+            def __init__(self, content: bytes, largest_read: int):
+                super().__init__(content)
+                self.largest_read = largest_read
+
+            def read(self, size=-1):
+                if size is None or not 0 <= size <= self.largest_read:
+                    raise AssertionError(f"unbounded read requested: {size}")
+                return super().read(size)
+
+        for cap in (None, len(data)):
+            with self.subTest(cap=cap), BoundedReader(data, 1024 * 1024) as reader:
+                digest, size = pack_module._sha256_hex_stream(reader, max_bytes=cap)
+                self.assertEqual(size, len(data))
+                self.assertEqual(digest, hashlib.sha256(data).hexdigest())
+
+        with BoundedReader(data, 6) as reader:
+            with self.assertRaisesRegex(ValueError, "stream exceeded max_bytes"):
+                pack_module._sha256_hex_stream(reader, max_bytes=5)
+            self.assertEqual(reader.tell(), 6)
+
     def _input(self, root: Path) -> Path:
         input_dir = root / "input"
         input_dir.mkdir()

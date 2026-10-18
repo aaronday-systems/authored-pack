@@ -39,7 +39,7 @@ class TestPublicReleaseContract(unittest.TestCase):
 
     def test_readme_keeps_durable_public_contract(self) -> None:
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
-        self.assertIn("Current release: [`v0.2.5`]", readme)
+        self.assertIn("Current release: [`v0.2.6`]", readme)
         self.assertIn("git clone https://github.com/aaronday-systems/authored-pack.git", readme)
         self.assertIn("bash scripts/demo_v1.sh", readme)
         self.assertIn("python3 -m authored_pack assemble --input ./my_case --out ./out --zip", readme)
@@ -89,10 +89,10 @@ class TestPublicReleaseContract(unittest.TestCase):
     def test_changelog_reflects_current_authored_pack_release(self) -> None:
         text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
         self.assertIn("All notable public-release changes to Authored Pack will be documented here.", text)
-        self.assertIn("## [0.2.5] - 2026-07-20", text)
+        self.assertIn("## [0.2.6] - 2026-10-18", text)
         self.assertIn("## [0.2.4] - 2026-04-15", text)
         self.assertIn("packet mental model", text)
-        self.assertLess(text.index("## [0.2.5] - 2026-07-20"), text.index("## [0.2.4] - 2026-04-15"))
+        self.assertLess(text.index("## [0.2.6] - 2026-10-18"), text.index("## [0.2.4] - 2026-04-15"))
         self.assertLess(text.index("## [0.2.4] - 2026-04-15"), text.index("## [0.2.3] - 2026-04-14"))
         self.assertNotIn("pending public release", text)
         self.assertNotIn("changes to EPS", text)
@@ -141,7 +141,7 @@ class TestPublicReleaseContract(unittest.TestCase):
     def test_public_demo_and_release_assets_exist(self) -> None:
         for rel in (
             "docs/CANONICAL_DEMO.md",
-            "docs/RELEASE_NOTES_v0.2.5.md",
+            "docs/RELEASE_NOTES_v0.2.6.md",
             "scripts/demo_v1.sh",
             "scripts/release_check.sh",
             "scripts/smoke_tui_pty.py",
@@ -241,23 +241,23 @@ class TestPublicReleaseContract(unittest.TestCase):
         self.assertNotIn('find "$tmp/out" -mindepth 1 -maxdepth 1 -type d | head -n 1', demo_doc)
 
     def test_release_notes_do_not_reintroduce_operator_input_positioning(self) -> None:
-        text = (ROOT / "docs" / "RELEASE_NOTES_v0.2.5.md").read_text(encoding="utf-8")
+        text = (ROOT / "docs" / "RELEASE_NOTES_v0.2.6.md").read_text(encoding="utf-8")
         self.assertNotIn("operator-supplied inputs", text)
 
     def test_release_notes_match_current_public_surface(self) -> None:
-        text = (ROOT / "docs" / "RELEASE_NOTES_v0.2.5.md").read_text(encoding="utf-8")
-        self.assertIn("Date: 2026-07-20", text)
+        text = (ROOT / "docs" / "RELEASE_NOTES_v0.2.6.md").read_text(encoding="utf-8")
+        self.assertIn("Date: 2026-10-18", text)
         self.assertIn("Status: released", text)
         self.assertIn("- `assemble`", text)
         self.assertIn("- `inspect`", text)
         self.assertIn("- `consume-bin`", text)
         self.assertIn("Apache License 2.0", text)
         self.assertIn("compatibility aliases remain available for `stamp` and `stamp-bin`", text)
-        self.assertIn("Release verification used for `v0.2.5`", text)
+        self.assertIn("Release verification used for `v0.2.6`", text)
         self.assertIn("clean tracked worktree", text)
         self.assertIn("bash scripts/release_check.sh", text)
         self.assertNotIn("Status: public release target", text)
-        self.assertNotIn("Before tagging `v0.2.5`, confirm:", text)
+        self.assertNotIn("Before tagging `v0.2.6`, confirm:", text)
         self.assertNotIn("- `stamp`\n- `verify`\n- `stamp-bin`", text)
 
     def test_private_legacy_and_rights_unclear_material_is_absent(self) -> None:

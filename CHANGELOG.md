@@ -4,6 +4,14 @@ All notable public-release changes to Authored Pack will be documented here.
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-10-18
+
+### Fixed
+- close the temporary output file descriptor when opening a copy source fails, while preserving the existing destination and removing the temporary file
+
+### Tests
+- cover HKDF output-length boundaries, bounded streaming reads, and source-bin defaults, recursion, hidden files, and exclusions
+
 ## [0.2.5] - 2026-07-20
 
 ### Changed

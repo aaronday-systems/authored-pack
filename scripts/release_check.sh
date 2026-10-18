@@ -187,7 +187,7 @@ def validate_metadata(label, raw):
     metadata = BytesParser(policy=default).parsebytes(raw)
     expected = {
         "Name": "authored-pack",
-        "Version": "0.2.5",
+        "Version": "0.2.6",
         "Requires-Python": ">=3.11",
         "License-Expression": "Apache-2.0",
     }

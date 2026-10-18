@@ -63,10 +63,62 @@ class TestConsumeBin(unittest.TestCase):
                 consume_from_source_bin(
                     source_bin=source_bin,
                     out_dir=out_dir,
-                    count=7,
-                    min_remaining=50,
-                    allow_low_bin=False,
                 )
+
+    def test_default_consumption_accepts_exact_low_watermark(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            source.mkdir()
+            for index in range(57):
+                (source / f"{index}.txt").write_text(str(index), encoding="utf-8")
+
+            result = consume_from_source_bin(source_bin=source, out_dir=root / "out")
+
+            self.assertEqual(len(result.consumed), 7)
+            self.assertEqual(result.bin_files_before, 57)
+            self.assertEqual(result.bin_files_after, 50)
+            self.assertEqual(len(list(source.glob("*.txt"))), 50)
+            self.assertTrue(verify_pack(result.assembled.pack_dir).ok)
+
+    def test_consumption_respects_recursion_hidden_files_and_exclusions(self) -> None:
+        visible = {"top.txt", "nested/item.txt"}
+        hidden = {".hidden.txt", ".private/note.txt"}
+        excluded = {"__MACOSX/junk", "Thumbs.db", ".authored_pack_failed/recovery.txt"}
+        cases = (
+            (False, False, {"top.txt"}),
+            (True, False, visible),
+            (True, True, visible | hidden),
+        )
+        for recursive, include_hidden, expected in cases:
+            with self.subTest(recursive=recursive, include_hidden=include_hidden):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    source = (root / "source").resolve()
+                    for name in sorted(visible | hidden | excluded):
+                        path = source / name
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        path.write_text(name, encoding="utf-8")
+
+                    result = consume_from_source_bin(
+                        source_bin=source,
+                        out_dir=root / "out",
+                        count=len(expected),
+                        min_remaining=0,
+                        recursive=recursive,
+                        include_hidden=include_hidden,
+                        derive_seed=False,
+                        evidence_bundle=False,
+                    )
+
+                    self.assertEqual(result.bin_files_before, len(expected))
+                    self.assertEqual(result.bin_files_after, 0)
+                    self.assertEqual(
+                        {item.src_path.relative_to(source).as_posix() for item in result.consumed}, expected
+                    )
+                    for name in visible | hidden | excluded:
+                        self.assertEqual((source / name).exists(), name not in expected, msg=name)
+                    self.assertTrue(verify_pack(result.assembled.pack_dir).ok)
 
     def test_consume_from_source_bin_preserves_stage_dir_when_recovery_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -107,11 +107,11 @@ What remained was the useful part—deterministic assembly of a small artifact s
 
 ## Project
 
-Current release: [`v0.2.5`](https://github.com/aaronday-systems/authored-pack/releases/tag/v0.2.5).
+Current release: [`v0.2.6`](https://github.com/aaronday-systems/authored-pack/releases/tag/v0.2.6).
 
 Authored Pack is open source under the [Apache License 2.0](LICENSE).
 
 - [Contributing](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)
 - [Canonical demo](docs/CANONICAL_DEMO.md)
-- [Release notes](docs/RELEASE_NOTES_v0.2.5.md)
+- [Release notes](docs/RELEASE_NOTES_v0.2.6.md)
