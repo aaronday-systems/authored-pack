@@ -118,7 +118,7 @@ def trusted_copy_with_sha256(src: Path, dst: Path, *, max_bytes: Optional[int] =
             os.fchmod(fd, 0o644)
         except OSError:
             pass
-        with trusted_binary_reader(src) as handle, os.fdopen(fd, "wb") as out:
+        with os.fdopen(fd, "wb") as out, trusted_binary_reader(src) as handle:
             trusted_size = int(os.fstat(handle.fileno()).st_size)
             if max_bytes is not None and trusted_size > int(max_bytes):
                 raise ValueError(f"stream exceeded max_bytes ({trusted_size} > {max_bytes})")

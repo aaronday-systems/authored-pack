@@ -7,6 +7,16 @@ from authored_pack.pack import derive_seed_master
 
 
 class TestHkdf(unittest.TestCase):
+    def test_hkdf_output_length_boundaries(self) -> None:
+        for length in (0, -1, 255 * 32 + 1):
+            with self.subTest(length=length), self.assertRaises(ValueError):
+                hkdf_sha256(ikm=b"test input", length=length)
+
+        longest = hkdf_sha256(ikm=b"test input", length=255 * 32)
+        self.assertEqual(len(longest), 255 * 32)
+        self.assertEqual(hkdf_sha256(ikm=b"test input", length=1), longest[:1])
+        self.assertEqual(hkdf_sha256(ikm=b"test input", length=32), longest[:32])
+
     def test_hkdf_sha256_rfc5869_case_1(self) -> None:
         # RFC 5869 Appendix A.1 (SHA-256)
         ikm = bytes.fromhex("0b" * 22)
